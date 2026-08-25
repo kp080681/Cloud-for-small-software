@@ -53,6 +53,31 @@ export async function createRuntime({ name, repository, rootDirectory }) {
   });
 }
 
+export async function createAutomationBypass(projectId) {
+  const result = await request(`/v1/projects/${encodeURIComponent(projectId)}/protection-bypass${teamQuery()}`, {
+    method: "PATCH",
+    body: JSON.stringify({
+      generate: {
+        note: "Small Software Cloud Spike A health verifier",
+      },
+    }),
+  });
+
+  const bypass =
+    result?.protectionBypass?.secret ??
+    result?.protectionBypass?.value ??
+    result?.secret ??
+    result?.value;
+
+  if (!bypass) {
+    const error = new Error("Vercel protection bypass was created but no usable secret was returned");
+    error.body = { responseKeys: result && typeof result === "object" ? Object.keys(result) : [] };
+    throw error;
+  }
+
+  return bypass;
+}
+
 export async function setEnvironment({ projectId, key, value }) {
   const suffix = teamQuery();
   const joiner = suffix ? "&" : "?";
@@ -121,14 +146,17 @@ export function getCandidateUrl(deployment) {
   return deployment.url.startsWith("http") ? deployment.url : `https://${deployment.url}`;
 }
 
-export async function verifyHealth({ baseUrl, expectedMarker, timeoutMs = 10_000 }) {
+export async function verifyHealth({ baseUrl, expectedMarker, protectionBypass, timeoutMs = 10_000 }) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
+    const headers = { Accept: "application/json" };
+    if (protectionBypass) headers["x-vercel-protection-bypass"] = protectionBypass;
+
     const response = await fetch(`${baseUrl.replace(/\/$/, "")}/api/health`, {
       redirect: "error",
       signal: controller.signal,
-      headers: { Accept: "application/json" },
+      headers,
     });
     if (!response.ok) throw new Error(`Health endpoint returned ${response.status}`);
     const body = await response.json();
