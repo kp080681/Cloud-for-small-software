@@ -1,4 +1,5 @@
 import {
+  createAutomationBypass,
   createRuntime,
   deleteRuntime,
   getCandidateUrl,
@@ -21,6 +22,7 @@ if (!sha) throw new Error("SPIKE_GIT_SHA is required. Spike A must deploy a pinn
 
 const timings = {};
 let projectId;
+let protectionBypass;
 
 function begin(name) {
   timings[name] = { startedAt: Date.now() };
@@ -36,6 +38,10 @@ try {
   const project = await createRuntime({ name: projectName, repository, rootDirectory });
   projectId = project.id;
   end("runtimeProvisioning");
+
+  begin("protectionConfiguration");
+  protectionBypass = await createAutomationBypass(projectId);
+  end("protectionConfiguration");
 
   begin("configuration");
   await setEnvironment({ projectId, key: "APP_BUILD_MARKER", value: marker });
@@ -57,7 +63,11 @@ try {
   const baseUrl = getCandidateUrl(ready);
 
   begin("healthVerification");
-  const health = await verifyHealth({ baseUrl, expectedMarker: marker });
+  const health = await verifyHealth({
+    baseUrl,
+    expectedMarker: marker,
+    protectionBypass,
+  });
   end("healthVerification");
 
   console.log(JSON.stringify({
@@ -69,6 +79,7 @@ try {
     deploymentId: ready.id,
     url: baseUrl,
     health,
+    protection: "automation-bypass-enabled",
     timings,
   }, null, 2));
 } catch (error) {
@@ -81,6 +92,9 @@ try {
   }, null, 2));
   process.exitCode = 1;
 } finally {
+  // Never print the protection bypass secret.
+  protectionBypass = undefined;
+
   if (process.env.SPIKE_DELETE_AFTER_RUN === "true" && projectId) {
     const deletion = await deleteRuntime(projectId);
     console.log(JSON.stringify({ cleanup: deletion, projectId }, null, 2));
