@@ -34,10 +34,13 @@ async function request(path, options = {}) {
 }
 
 export async function createDatabase({ name, regionId = process.env.NEON_REGION_ID }) {
-  const project = { name, pg_version: 17 };
+  const orgId = required("NEON_ORG_ID");
+  const project = { name, pg_version: 17, org_id: orgId };
   if (regionId) project.region_id = regionId;
 
-  const orgId = required("NEON_ORG_ID");
+  // Current Neon docs require org_id for personal keys as query context,
+  // while the project schema also accepts org_id. Supplying both keeps the
+  // request explicit across key/account modes and avoids relying on inference.
   const result = await request(`/projects?org_id=${encodeURIComponent(orgId)}`, {
     method: "POST",
     body: JSON.stringify({ project }),
