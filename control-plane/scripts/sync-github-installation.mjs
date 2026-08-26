@@ -37,13 +37,47 @@ await db.connect();
 try {
   await db.query("BEGIN");
 
-  const workspaceResult = await db.query(
-    `INSERT INTO workspaces (name)
-     VALUES ($1)
-     RETURNING id, name`,
-    [process.env.CONTROL_PLANE_WORKSPACE_NAME || "Internal Alpha"],
+  const workspaceName = process.env.CONTROL_PLANE_WORKSPACE_NAME || "Internal Alpha";
+
+  // If the installation is already mapped, its workspace is canonical.
+  const existingInstallation = await db.query(
+    `SELECT workspace_id
+       FROM github_installations
+      WHERE github_installation_id = $1
+      FOR UPDATE`,
+    [installationId],
   );
-  const workspace = workspaceResult.rows[0];
+
+  let workspace;
+  if (existingInstallation.rowCount > 0) {
+    const workspaceResult = await db.query(
+      `SELECT id, name FROM workspaces WHERE id = $1`,
+      [existingInstallation.rows[0].workspace_id],
+    );
+    workspace = workspaceResult.rows[0];
+  } else {
+    // Internal bootstrap path: reuse the oldest workspace with this name before creating one.
+    const workspaceResult = await db.query(
+      `SELECT id, name
+         FROM workspaces
+        WHERE name = $1
+        ORDER BY created_at ASC
+        LIMIT 1`,
+      [workspaceName],
+    );
+
+    if (workspaceResult.rowCount > 0) {
+      workspace = workspaceResult.rows[0];
+    } else {
+      const created = await db.query(
+        `INSERT INTO workspaces (name)
+         VALUES ($1)
+         RETURNING id, name`,
+        [workspaceName],
+      );
+      workspace = created.rows[0];
+    }
+  }
 
   const account = installation.data.account;
   const installationResult = await db.query(
@@ -52,14 +86,17 @@ try {
      VALUES ($1, $2, $3, $4)
      ON CONFLICT (github_installation_id)
      DO UPDATE SET
-       workspace_id = EXCLUDED.workspace_id,
        account_login = EXCLUDED.account_login,
        account_type = EXCLUDED.account_type,
        updated_at = now()
-     RETURNING id`,
+     RETURNING id, workspace_id`,
     [workspace.id, installationId, account?.login ?? "unknown", account?.type ?? null],
   );
   const installationRowId = installationResult.rows[0].id;
+
+  if (installationResult.rows[0].workspace_id !== workspace.id) {
+    throw new Error("GitHub installation workspace mapping changed unexpectedly");
+  }
 
   const synced = [];
   for (const repository of repositories) {
@@ -69,14 +106,17 @@ try {
        VALUES ($1, $2, $3, $4, $5, $6)
        ON CONFLICT (github_installation_id, github_repository_id)
        DO UPDATE SET
-         workspace_id = EXCLUDED.workspace_id,
          full_name = EXCLUDED.full_name,
          default_branch = EXCLUDED.default_branch,
          private = EXCLUDED.private,
          updated_at = now()
-       RETURNING id, full_name, default_branch, private`,
+       RETURNING id, workspace_id, full_name, default_branch, private`,
       [workspace.id, installationRowId, repository.id, repository.full_name, repository.default_branch, repository.private],
     );
+
+    if (result.rows[0].workspace_id !== workspace.id) {
+      throw new Error(`Repository workspace mapping mismatch: ${repository.full_name}`);
+    }
     synced.push(result.rows[0]);
   }
 
@@ -94,6 +134,7 @@ try {
       defaultBranch: default_branch,
       private: isPrivate,
     })),
+    workspaceMappingStable: true,
     appJwtPrinted: false,
     installationTokenPrinted: false,
     privateKeyPrinted: false,
