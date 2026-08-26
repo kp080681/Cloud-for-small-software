@@ -1,0 +1,21 @@
+{
+  "name": "ssc-spike-d-durable-execution",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "setup": "node setup-spike-d.mjs",
+    "trigger": "node trigger-spike-d.mjs",
+    "monitor": "node monitor-spike-d.mjs",
+    "deploy:trigger": "trigger deploy"
+  },
+  "dependencies": {
+    "@neondatabase/serverless": "^1.0.1",
+    "@trigger.dev/sdk": "^4.3.1",
+    "dotenv": "^17.2.1"
+  },
+  "devDependencies": {
+    "@trigger.dev/build": "^4.3.1",
+    "trigger.dev": "^4.3.1",
+    "typescript": "^5.9.2"
+  }
+}
