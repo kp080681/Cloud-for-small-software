@@ -1,0 +1,43 @@
+import crypto from "node:crypto";
+import pg from "pg";
+import { encryptAppSecret } from "../src/secret-store.mjs";
+
+for (const name of ["DATABASE_URL", "AWS_REGION", "AWS_KMS_KEY_ID", "CONTROL_PLANE_APP_SLUG", "CONTROL_PLANE_SECRET_NAME", "CONTROL_PLANE_SECRET_VALUE"]) {
+  if (!process.env[name]) throw new Error(`Missing required environment variable: ${name}`);
+}
+
+const { Client } = pg;
+const db = new Client({ connectionString: process.env.DATABASE_URL });
+await db.connect();
+
+try {
+  const appResult = await db.query(
+    `SELECT id, workspace_id, name, slug FROM apps WHERE slug=$1 AND deleted_at IS NULL LIMIT 1`,
+    [process.env.CONTROL_PLANE_APP_SLUG],
+  );
+  if (appResult.rowCount === 0) throw new Error(`App not found: ${process.env.CONTROL_PLANE_APP_SLUG}`);
+  const app = appResult.rows[0];
+
+  const digest = crypto.createHash("sha256").update(process.env.CONTROL_PLANE_SECRET_VALUE).digest("hex");
+  const stored = await encryptAppSecret(db, {
+    workspaceId: app.workspace_id,
+    appId: app.id,
+    name: process.env.CONTROL_PLANE_SECRET_NAME,
+    plaintext: process.env.CONTROL_PLANE_SECRET_VALUE,
+  });
+
+  console.log(JSON.stringify({
+    result: "NODE_04_6_SECRET_STORED",
+    appId: app.id,
+    appSlug: app.slug,
+    secretId: stored.id,
+    secretName: stored.name,
+    digest,
+    plaintextPersisted: false,
+    plaintextPrinted: false,
+    ciphertextStored: true,
+    encryptedDataKeyStored: true,
+  }, null, 2));
+} finally {
+  await db.end();
+}
