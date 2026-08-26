@@ -4,11 +4,19 @@
   "type": "module",
   "scripts": {
     "test": "node --test test/*.test.mjs",
-    "sync:github": "node scripts/sync-github-installation.mjs"
+    "sync:github": "node scripts/sync-github-installation.mjs",
+    "queue:deployment": "node scripts/queue-deployment.mjs",
+    "deploy:trigger": "trigger deploy"
   },
   "dependencies": {
     "@octokit/auth-app": "^8.1.0",
     "@octokit/rest": "^22.0.0",
+    "@trigger.dev/sdk": "^4.3.1",
     "pg": "^8.16.3"
+  },
+  "devDependencies": {
+    "@trigger.dev/build": "^4.3.1",
+    "trigger.dev": "^4.3.1",
+    "typescript": "^5.9.2"
   }
 }
