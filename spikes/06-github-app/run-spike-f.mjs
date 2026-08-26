@@ -11,7 +11,8 @@ const privateKey = process.env.GITHUB_APP_PRIVATE_KEY.replace(/\\n/g, "\n");
 const installationId = Number(process.env.GITHUB_INSTALLATION_ID);
 if (!Number.isInteger(installationId) || installationId <= 0) throw new Error("GITHUB_INSTALLATION_ID must be a positive integer");
 
-const auth = createAppAuth({ appId, privateKey });
+// Allow for local clock skew when GitHub validates the short-lived App JWT.
+const auth = createAppAuth({ appId, privateKey, timeDifference: 60 });
 const installationAuth = await auth({ type: "installation", installationId });
 const octokit = new Octokit({ auth: installationAuth.token });
 
