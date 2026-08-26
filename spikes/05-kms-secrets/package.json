@@ -1,0 +1,21 @@
+{
+  "name": "ssc-spike-e-kms-secrets",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "setup": "node setup-spike-e.mjs",
+    "trigger": "node trigger-spike-e.mjs",
+    "monitor": "node monitor-spike-e.mjs",
+    "deploy:trigger": "trigger deploy"
+  },
+  "dependencies": {
+    "@aws-sdk/client-kms": "^3.879.0",
+    "@neondatabase/serverless": "^1.0.1",
+    "@trigger.dev/sdk": "^4.3.1",
+    "dotenv": "^17.2.1"
+  },
+  "devDependencies": {
+    "trigger.dev": "^4.3.1",
+    "typescript": "^5.9.2"
+  }
+}
