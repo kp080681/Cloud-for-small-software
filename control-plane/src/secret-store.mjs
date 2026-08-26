@@ -15,12 +15,24 @@ function encryptionContext({ workspaceId, appId, name }) {
   };
 }
 
+function stableContext(context) {
+  return {
+    namespace: context.namespace,
+    workspace: context.workspace,
+    app: context.app,
+    secret: context.secret,
+  };
+}
+
+function aadBytes(context) {
+  return Buffer.from(JSON.stringify(stableContext(context)), "utf8");
+}
+
 export async function encryptAppSecret(db, { workspaceId, appId, name, plaintext }) {
   if (!process.env.AWS_KMS_KEY_ID) throw new Error("Missing AWS_KMS_KEY_ID");
   if (!plaintext) throw new Error("Secret plaintext must not be empty");
 
-  const scope = { workspaceId, appId, name };
-  const context = encryptionContext(scope);
+  const context = encryptionContext({ workspaceId, appId, name });
   const generated = await kms().send(new GenerateDataKeyCommand({
     KeyId: process.env.AWS_KMS_KEY_ID,
     KeySpec: "AES_256",
@@ -33,7 +45,7 @@ export async function encryptAppSecret(db, { workspaceId, appId, name, plaintext
   try {
     const iv = crypto.randomBytes(12);
     const cipher = crypto.createCipheriv("aes-256-gcm", dataKey, iv);
-    cipher.setAAD(Buffer.from(JSON.stringify(context)));
+    cipher.setAAD(aadBytes(context));
     const ciphertext = Buffer.concat([cipher.update(plaintext, "utf8"), cipher.final()]);
     const authTag = cipher.getAuthTag();
 
@@ -66,8 +78,9 @@ export async function decryptAppSecret(db, { appId, name }) {
     [appId, name],
   );
   if (result.rowCount === 0) throw new Error(`Secret not found: ${name}`);
+
   const row = result.rows[0];
-  const context = row.encryption_context;
+  const context = stableContext(row.encryption_context);
 
   if (context.namespace !== "small-software-cloud" || context.workspace !== row.workspace_id ||
       context.app !== row.app_id || context.secret !== row.name) {
@@ -83,7 +96,7 @@ export async function decryptAppSecret(db, { appId, name }) {
 
   try {
     const decipher = crypto.createDecipheriv("aes-256-gcm", dataKey, row.iv);
-    decipher.setAAD(Buffer.from(JSON.stringify(context)));
+    decipher.setAAD(aadBytes(context));
     decipher.setAuthTag(row.auth_tag);
     return Buffer.concat([decipher.update(row.ciphertext), decipher.final()]).toString("utf8");
   } finally {
