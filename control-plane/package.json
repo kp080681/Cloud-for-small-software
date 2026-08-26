@@ -1,0 +1,14 @@
+{
+  "name": "small-software-cloud-control-plane",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --test test/*.test.mjs",
+    "sync:github": "node scripts/sync-github-installation.mjs"
+  },
+  "dependencies": {
+    "@octokit/auth-app": "^8.1.0",
+    "@octokit/rest": "^22.0.0",
+    "pg": "^8.16.3"
+  }
+}
