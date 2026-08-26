@@ -12,11 +12,19 @@ const installationId = Number(process.env.GITHUB_INSTALLATION_ID);
 if (!Number.isInteger(installationId) || installationId <= 0) throw new Error("GITHUB_INSTALLATION_ID must be a positive integer");
 
 const auth = createAppAuth({ appId, privateKey });
-const installationAuth = await auth({ type: "installation", installationId });
-const octokit = new Octokit({ auth: installationAuth.token });
 
-const installation = await octokit.apps.getInstallation({ installation_id: installationId });
-const repos = await octokit.paginate(octokit.apps.listReposAccessibleToInstallation, { per_page: 100 });
+// App-level endpoints require a GitHub App JWT.
+const appAuth = await auth({ type: "app" });
+const appOctokit = new Octokit({ auth: appAuth.token });
+const installation = await appOctokit.apps.getInstallation({ installation_id: installationId });
+
+// Repository access must use the installation-scoped token.
+const installationAuth = await auth({ type: "installation", installationId });
+const installationOctokit = new Octokit({ auth: installationAuth.token });
+const repos = await installationOctokit.paginate(
+  installationOctokit.apps.listReposAccessibleToInstallation,
+  { per_page: 100 },
+);
 
 if (repos.length === 0) throw new Error("GitHub App installation has no accessible repositories");
 
@@ -25,16 +33,16 @@ const target = repos.find((repo) => repo.full_name.toLowerCase() === targetFullN
 if (!target) throw new Error(`Target repository is not accessible to this installation: ${targetFullName}`);
 
 const [owner, repo] = target.full_name.split("/");
-const repoInfo = await octokit.repos.get({ owner, repo });
+const repoInfo = await installationOctokit.repos.get({ owner, repo });
 const branch = repoInfo.data.default_branch;
-const ref = await octokit.git.getRef({ owner, repo, ref: `heads/${branch}` });
-const root = await octokit.repos.getContent({ owner, repo, path: "", ref: branch });
+const ref = await installationOctokit.git.getRef({ owner, repo, ref: `heads/${branch}` });
+const root = await installationOctokit.repos.getContent({ owner, repo, path: "", ref: branch });
 if (!Array.isArray(root.data)) throw new Error("Expected repository root to be a directory listing");
 
 const packageJson = root.data.find((entry) => entry.type === "file" && entry.name === "package.json");
 let packageJsonReadable = false;
 if (packageJson) {
-  const pkg = await octokit.repos.getContent({ owner, repo, path: "package.json", ref: branch });
+  const pkg = await installationOctokit.repos.getContent({ owner, repo, path: "package.json", ref: branch });
   packageJsonReadable = !Array.isArray(pkg.data) && pkg.data.type === "file" && Boolean(pkg.data.content);
 }
 
@@ -53,5 +61,6 @@ console.log(JSON.stringify({
   packageJsonPresent: Boolean(packageJson),
   packageJsonReadable,
   installationTokenPrinted: false,
+  appJwtPrinted: false,
   privateKeyPrinted: false
 }, null, 2));
