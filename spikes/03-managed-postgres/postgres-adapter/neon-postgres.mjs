@@ -37,7 +37,8 @@ export async function createDatabase({ name, regionId = process.env.NEON_REGION_
   const project = { name, pg_version: 17 };
   if (regionId) project.region_id = regionId;
 
-  const result = await request("/projects", {
+  const orgId = required("NEON_ORG_ID");
+  const result = await request(`/projects?org_id=${encodeURIComponent(orgId)}`, {
     method: "POST",
     body: JSON.stringify({ project }),
   });
