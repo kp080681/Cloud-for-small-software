@@ -35,9 +35,32 @@ async function vercelRequest(path: string, options: RequestInit = {}) {
   if (text) { try { body = JSON.parse(text); } catch { body = null; } }
   if (!response.ok) {
     const safe = safeProviderErrorBody(body);
-    throw new Error(`Vercel API ${response.status} ${response.statusText}${safe ? `: ${JSON.stringify(safe)}` : ""}`);
+    const error: any = new Error(`Vercel API ${response.status} ${response.statusText}${safe ? `: ${JSON.stringify(safe)}` : ""}`);
+    error.status = response.status;
+    error.safeBody = safe;
+    throw error;
   }
   return body;
+}
+
+function classifyProviderError(error: any) {
+  const code = error?.safeBody?.error?.code ?? error?.safeBody?.code ?? null;
+  const message = error?.safeBody?.error?.message ?? error?.safeBody?.message ?? null;
+  if (error?.status === 402 && code === "payment_required" && /api-deployments-free-per-day/i.test(String(message))) {
+    return {
+      classification: "BLOCKED_EXTERNAL_QUOTA",
+      errorCode: "VERCEL_DAILY_DEPLOYMENT_QUOTA",
+      userMessage: "Deployment provider daily limit reached. Retry after the provider quota resets.",
+      retryableNow: false,
+    };
+  }
+  if (error?.status === 429) {
+    return { classification: "PROVIDER_RATE_LIMITED", errorCode: "VERCEL_RATE_LIMIT", userMessage: "Deployment provider is rate limiting requests. Retry later.", retryableNow: true };
+  }
+  if (error?.status === 401 || error?.status === 403) {
+    return { classification: "PROVIDER_AUTH_ERROR", errorCode: "VERCEL_AUTH", userMessage: "Deployment provider credentials or permissions need attention.", retryableNow: false };
+  }
+  return null;
 }
 
 export const executeBuild = task({
@@ -93,12 +116,7 @@ export const executeBuild = task({
       const body: any = {
         name: deployment.provider_project_name,
         project: deployment.provider_project_id,
-        gitSource: {
-          type: "github",
-          org,
-          repo,
-          ref: deployment.commit_sha,
-        },
+        gitSource: { type: "github", org, repo, ref: deployment.commit_sha },
         meta: {
           sscDeploymentId: payload.deploymentId,
           sscManifestSha256: deployment.manifest_sha256,
@@ -111,10 +129,39 @@ export const executeBuild = task({
         },
       };
 
-      const created = await vercelRequest(`/v13/deployments${teamQuery()}`, {
-        method: "POST",
-        body: JSON.stringify(body),
-      });
+      let created: any;
+      try {
+        created = await vercelRequest(`/v13/deployments${teamQuery()}`, { method: "POST", body: JSON.stringify(body) });
+      } catch (error: any) {
+        const classified = classifyProviderError(error);
+        if (!classified) throw error;
+
+        await db.query(
+          `UPDATE deployments SET error_code=$1, error_message=$2, updated_at=now() WHERE id=$3`,
+          [classified.errorCode, classified.userMessage, payload.deploymentId],
+        );
+        await db.query(
+          `INSERT INTO deployment_events
+             (deployment_id, from_status, to_status, event_type, message, metadata)
+           VALUES ($1,'BUILDING','BUILDING','BUILD_PROVIDER_BLOCKED',$2,$3::jsonb)`,
+          [payload.deploymentId, classified.userMessage, JSON.stringify({
+            provider: "vercel",
+            classification: classified.classification,
+            errorCode: classified.errorCode,
+            retryableNow: classified.retryableNow,
+          })],
+        );
+        return {
+          result: `NODE_04_10_${classified.classification}`,
+          deploymentId: payload.deploymentId,
+          provider: "vercel",
+          sourceCommitSha: deployment.commit_sha,
+          deploymentStatus: deployment.status,
+          errorCode: classified.errorCode,
+          message: classified.userMessage,
+          retryableNow: classified.retryableNow,
+        };
+      }
 
       const providerDeploymentId = created?.id;
       if (!providerDeploymentId) throw new Error("Vercel deployment creation returned no deployment id");
@@ -131,24 +178,15 @@ export const executeBuild = task({
         );
         await db.query(
           `UPDATE deployments
-              SET provider_deployment_id=$1,
-                  updated_at=now()
+              SET provider_deployment_id=$1, error_code=NULL, error_message=NULL, updated_at=now()
             WHERE id=$2 AND status='BUILDING'`,
           [providerDeploymentId, payload.deploymentId],
         );
         await db.query(
           `INSERT INTO deployment_events
              (deployment_id, from_status, to_status, event_type, message, metadata)
-           VALUES ($1,'BUILDING','BUILDING','BUILD_STARTED',
-                   'Immutable provider build started', $2::jsonb)`,
-          [payload.deploymentId, JSON.stringify({
-            provider: "vercel",
-            providerDeploymentId,
-            providerDeploymentUrl,
-            sourceCommitSha: deployment.commit_sha,
-            manifestSha256: deployment.manifest_sha256,
-            providerStatus,
-          })],
+           VALUES ($1,'BUILDING','BUILDING','BUILD_STARTED','Immutable provider build started',$2::jsonb)`,
+          [payload.deploymentId, JSON.stringify({ provider: "vercel", providerDeploymentId, providerDeploymentUrl, sourceCommitSha: deployment.commit_sha, manifestSha256: deployment.manifest_sha256, providerStatus })],
         );
         await db.query("COMMIT");
       } catch (error) {
