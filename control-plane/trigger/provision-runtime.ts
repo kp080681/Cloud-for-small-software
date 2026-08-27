@@ -29,6 +29,11 @@ function safeProviderErrorBody(body: any) {
   };
 }
 
+function normalizeVercelRootDirectory(rootDirectory: string) {
+  if (!rootDirectory || rootDirectory === "." || rootDirectory === "./") return undefined;
+  return rootDirectory.replace(/^\.\//, "");
+}
+
 async function request(path: string, options: RequestInit = {}) {
   const token = process.env.VERCEL_TOKEN;
   if (!token) throw new Error("Missing VERCEL_TOKEN");
@@ -62,13 +67,14 @@ async function getRuntime(name: string) {
 async function ensureRuntime({ name, repository, rootDirectory }: { name: string; repository: string; rootDirectory: string }) {
   const existing = await getRuntime(name);
   if (existing) return { resource: existing, created: false, reconciled: true };
+  const vercelRootDirectory = normalizeVercelRootDirectory(rootDirectory);
   try {
     const created = await request(`/v11/projects${teamQuery()}`, {
       method: "POST",
       body: JSON.stringify({
         name,
         framework: "nextjs",
-        rootDirectory,
+        ...(vercelRootDirectory ? { rootDirectory: vercelRootDirectory } : {}),
         gitRepository: { type: "github", repo: repository },
       }),
     });
