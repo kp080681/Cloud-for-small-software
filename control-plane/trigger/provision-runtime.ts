@@ -16,6 +16,19 @@ function teamQuery() {
   return teamId ? `?teamId=${encodeURIComponent(teamId)}` : "";
 }
 
+function safeProviderErrorBody(body: any) {
+  if (!body || typeof body !== "object") return body;
+  const error = body.error && typeof body.error === "object" ? body.error : null;
+  return {
+    error: error ? {
+      code: error.code ?? null,
+      message: error.message ?? null,
+    } : null,
+    code: body.code ?? null,
+    message: body.message ?? null,
+  };
+}
+
 async function request(path: string, options: RequestInit = {}) {
   const token = process.env.VERCEL_TOKEN;
   if (!token) throw new Error("Missing VERCEL_TOKEN");
@@ -31,9 +44,11 @@ async function request(path: string, options: RequestInit = {}) {
   let body: any = null;
   if (text) { try { body = JSON.parse(text); } catch { body = text; } }
   if (!response.ok) {
-    const error: any = new Error(`Vercel API ${response.status} ${response.statusText}`);
+    const safeBody = safeProviderErrorBody(body);
+    const details = safeBody ? `: ${JSON.stringify(safeBody)}` : "";
+    const error: any = new Error(`Vercel API ${response.status} ${response.statusText}${details}`);
     error.status = response.status;
-    error.body = body;
+    error.safeBody = safeBody;
     throw error;
   }
   return body;
