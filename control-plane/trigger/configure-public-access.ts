@@ -9,11 +9,22 @@ function teamQuery() {
   const teamId = process.env.VERCEL_TEAM_ID;
   return teamId ? `?teamId=${encodeURIComponent(teamId)}` : "";
 }
+function safeVercelError(body:any){
+  const error=body?.error ?? body;
+  return {
+    code: typeof error?.code === "string" ? error.code.slice(0,120) : null,
+    message: typeof error?.message === "string" ? error.message.slice(0,500) : null,
+  };
+}
 async function vercelRequest(path:string,options:RequestInit={}) {
   if(!process.env.VERCEL_TOKEN) throw new Error("Missing VERCEL_TOKEN");
   const response=await fetch(`${API}${path}`,{...options,headers:{Authorization:`Bearer ${process.env.VERCEL_TOKEN}`,"Content-Type":"application/json",...(options.headers??{})}});
   const text=await response.text(); let body:any=null; if(text){try{body=JSON.parse(text)}catch{body=null}}
-  if(!response.ok) throw new Error(`Vercel API ${response.status} ${response.statusText}`);
+  if(!response.ok){
+    const detail=safeVercelError(body);
+    const suffix=[detail.code,detail.message].filter(Boolean).join(": ");
+    throw new Error(`Vercel API ${response.status} ${response.statusText}${suffix?` - ${suffix}`:""}`);
+  }
   return body;
 }
 function isVercelAuthRedirect(location:string|null){if(!location)return false;try{const u=new URL(location);return u.hostname==="vercel.com"||u.hostname.endsWith(".vercel.com")}catch{return /vercel\.com/i.test(location)}}
@@ -29,11 +40,8 @@ export const configurePublicAccess=task({
    if(row.provider!=="vercel")throw new Error(`Unsupported runtime provider: ${row.provider}`);
    if(!["HEALTH_CHECKING","LIVE"].includes(row.status))throw new Error(`Production promotion requires HEALTH_CHECKING or LIVE; current status is ${row.status}`);
 
-   // Promote the exact build that passed readiness checks. Promotion does not rebuild it.
    await vercelRequest(`/v10/projects/${encodeURIComponent(row.provider_project_id)}/promote/${encodeURIComponent(row.provider_deployment_id)}${teamQuery()}`,{method:"POST"});
 
-   // Resolve the canonical production domain after promotion. Vercel project data exposes aliases/domains;
-   // the project-name .vercel.app domain is deterministic for SSC-created projects.
    const project=await vercelRequest(`/v9/projects/${encodeURIComponent(row.provider_project_id)}${teamQuery()}`);
    const productionHost=(Array.isArray(project?.alias)&&project.alias[0]) || (Array.isArray(project?.domains)&&project.domains.find((d:string)=>d===`${project.name}.vercel.app`)) || `${project.name}.vercel.app`;
    const checkUrl=`https://${productionHost}`;
