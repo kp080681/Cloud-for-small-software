@@ -86,6 +86,10 @@ export const applyRuntimeEnv = task({
       const missing = requiredKeys.filter((key) => !boundKeys.has(key));
       if (missing.length) throw new Error(`Required runtime variables are not configured: ${missing.join(", ")}`);
 
+      // SSC currently uses a preview-first deployment flow. Required runtime variables
+      // must therefore be available to both preview and production environments so that
+      // health/public verification exercises the same configuration users will later run.
+      const providerTargets = ["preview", "production"];
       const applied: Array<{ envKey: string; providerEnvId: string | null }> = [];
       for (const binding of bindingResult.rows) {
         const plaintext = await decryptAppSecret(db, {
@@ -103,7 +107,7 @@ export const applyRuntimeEnv = task({
                 key: binding.env_key,
                 value: plaintext,
                 type: "sensitive",
-                target: ["production"],
+                target: providerTargets,
                 comment: "Managed by Small Software Cloud",
               }),
             },
@@ -136,6 +140,7 @@ export const applyRuntimeEnv = task({
           providerProjectId: deployment.provider_project_id,
           appliedKeys: applied.map((item) => item.envKey),
           appliedCount: applied.length,
+          providerTargets,
           plaintextPrinted: false,
           plaintextPersisted: false,
         })],
@@ -148,6 +153,7 @@ export const applyRuntimeEnv = task({
         providerProjectId: deployment.provider_project_id,
         appliedCount: applied.length,
         appliedKeys: applied.map((item) => item.envKey),
+        providerTargets,
         providerEnvIdsPresent: applied.filter((item) => item.providerEnvId).length,
         deploymentStatus: deployment.status,
         plaintextPrinted: false,
