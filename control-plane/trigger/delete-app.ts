@@ -72,7 +72,9 @@ export const deleteApp = task({
 
       await db.query("BEGIN");
       try {
-        await db.query(`DELETE FROM runtime_secret_bindings WHERE app_id=$1`, [payload.appId]);
+        // deployment_secret_applications reference app_secret_bindings with ON DELETE CASCADE,
+        // so deleting the app-scoped bindings safely removes their application records too.
+        await db.query(`DELETE FROM app_secret_bindings WHERE app_id=$1`, [payload.appId]);
         await db.query(`DELETE FROM app_runtimes WHERE app_id=$1`, [payload.appId]);
         await db.query(`DELETE FROM encrypted_secrets WHERE app_id=$1`, [payload.appId]);
         await db.query(`UPDATE deployments SET status='DELETED', live_url=NULL, finished_at=COALESCE(finished_at,now()), updated_at=now() WHERE app_id=$1`, [payload.appId]);
