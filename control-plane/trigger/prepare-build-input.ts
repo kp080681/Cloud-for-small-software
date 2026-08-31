@@ -58,7 +58,7 @@ export const prepareBuildInput = task({
       );
       if (deploymentResult.rowCount === 0) throw new Error(`Deployment not found: ${payload.deploymentId}`);
       const deployment = deploymentResult.rows[0];
-      if (deployment.status !== "ANALYZING" && deployment.status !== "PROVISIONING") {
+      if (deployment.status !== "ANALYZING") {
         throw new Error(`Build input cannot be prepared from status ${deployment.status}`);
       }
 
@@ -129,20 +129,13 @@ export const prepareBuildInput = task({
            deployment.root_directory, commands.packageManager, commands.lockfile, commands.installCommand,
            buildCommand, startCommand, manifestSha256, JSON.stringify(manifest)],
         );
-        const advanced = await db.query(
-          `UPDATE deployments SET status = 'PROVISIONING', updated_at = now()
-            WHERE id = $1 AND status = 'ANALYZING' RETURNING id`,
-          [payload.deploymentId],
+        await db.query(
+          `INSERT INTO deployment_events
+             (deployment_id, from_status, to_status, event_type, message, metadata)
+           VALUES ($1, 'ANALYZING', 'ANALYZING', 'BUILD_INPUT_PREPARED',
+                   'Immutable source and build input prepared', $2::jsonb)`,
+          [payload.deploymentId, JSON.stringify({ commitSha: deployment.source_commit_sha, gitTreeSha, manifestSha256 })],
         );
-        if (advanced.rowCount === 1) {
-          await db.query(
-            `INSERT INTO deployment_events
-               (deployment_id, from_status, to_status, event_type, message, metadata)
-             VALUES ($1, 'ANALYZING', 'PROVISIONING', 'BUILD_INPUT_PREPARED',
-                     'Immutable source and build input prepared', $2::jsonb)`,
-            [payload.deploymentId, JSON.stringify({ commitSha: deployment.source_commit_sha, gitTreeSha, manifestSha256 })],
-          );
-        }
         await db.query("COMMIT");
       } catch (error) {
         await db.query("ROLLBACK");
@@ -152,7 +145,7 @@ export const prepareBuildInput = task({
       return {
         result: "NODE_04_7_BUILD_INPUT_PREPARED",
         deploymentId: payload.deploymentId,
-        status: "PROVISIONING",
+        status: "ANALYZING",
         repository: deployment.repository_full_name,
         commitSha: deployment.source_commit_sha,
         gitTreeSha,

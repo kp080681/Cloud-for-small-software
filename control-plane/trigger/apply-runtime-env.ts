@@ -86,9 +86,8 @@ export const applyRuntimeEnv = task({
       const missing = requiredKeys.filter((key) => !boundKeys.has(key));
       if (missing.length) throw new Error(`Required runtime variables are not configured: ${missing.join(", ")}`);
 
-      // SSC currently uses a preview-first deployment flow. Required runtime variables
-      // must therefore be available to both preview and production environments so that
-      // health/public verification exercises the same configuration users will later run.
+      // Runtime env application remains a BUILDING-stage backstop; Node 04.17
+      // verifies required configuration earlier while the deployment is ANALYZING.
       const providerTargets = ["preview", "production"];
       const applied: Array<{ envKey: string; providerEnvId: string | null }> = [];
       for (const binding of bindingResult.rows) {
