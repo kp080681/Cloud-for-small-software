@@ -8,6 +8,7 @@ import {
   isDetectableSourcePath,
   mergeEnvDetections,
 } from "../src/env-requirement-detection.mjs";
+import { sourceDetectedRequirement } from "../src/env-requirement-reconciliation.mjs";
 
 const { Client } = pg;
 
@@ -169,6 +170,7 @@ export const detectEnvRequirements = task({
         const snapshotId = snapshot.rows[0].id;
 
         for (const detection of detections) {
+          const requirement = sourceDetectedRequirement(detection);
           await db.query(
             `INSERT INTO deployment_env_requirement_detections
                (snapshot_id, deployment_id, workspace_id, app_id, env_key, reference_kind,
@@ -189,7 +191,7 @@ export const detectEnvRequirements = task({
           await db.query(
             `INSERT INTO app_env_requirements
                (workspace_id, app_id, env_key, source, required, public)
-             VALUES ($1,$2,$3,'source-detection',true,$4)
+             VALUES ($1,$2,$3,$4,$5,$6)
              ON CONFLICT (app_id, env_key) DO UPDATE SET
                public = app_env_requirements.public OR EXCLUDED.public,
                updated_at = CASE
@@ -197,7 +199,14 @@ export const detectEnvRequirements = task({
                  THEN now()
                  ELSE app_env_requirements.updated_at
                END`,
-            [deployment.workspace_id, deployment.app_id, detection.envKey, detection.public],
+            [
+              deployment.workspace_id,
+              deployment.app_id,
+              requirement.envKey,
+              requirement.source,
+              requirement.required,
+              requirement.public,
+            ],
           );
         }
 

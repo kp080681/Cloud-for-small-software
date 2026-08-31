@@ -1,5 +1,6 @@
 import { task } from "@trigger.dev/sdk";
 import pg from "pg";
+import { missingRequiredEnvKeys } from "../src/env-requirement-reconciliation.mjs";
 
 const { Client } = pg;
 
@@ -53,7 +54,7 @@ export const verifyEnvRequirements = task({
         configured: row.configured,
       }));
       const configuredCount = requirements.filter((item) => item.configured).length;
-      const missing = requirements.filter((item) => item.required && !item.configured).map((item) => item.envKey);
+      const missing = missingRequiredEnvKeys(requirements);
 
       await db.query("BEGIN");
       try {
