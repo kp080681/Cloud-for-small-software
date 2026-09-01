@@ -1,5 +1,6 @@
 import { task } from "@trigger.dev/sdk";
 import pg from "pg";
+import { publicAccessRecoveryAction } from "../src/deployment-recovery-rules.mjs";
 
 const { Client } = pg;
 const API = "https://api.vercel.com";
@@ -14,7 +15,7 @@ export const configurePublicAccess=task({id:"ssc-control-plane-configure-public-
  if(!process.env.DATABASE_URL)throw new Error("Missing DATABASE_URL");const db=new Client({connectionString:process.env.DATABASE_URL});await db.connect();
  try{
   const result=await db.query(`SELECT d.id,d.status,d.live_url,rt.provider,rt.provider_project_id,b.provider_deployment_id,b.provider_deployment_url FROM deployments d JOIN app_runtimes rt ON rt.app_id=d.app_id JOIN deployment_builds b ON b.deployment_id=d.id WHERE d.id=$1`,[payload.deploymentId]);
-  if(result.rowCount===0)throw new Error(`Deployment/runtime/build not found: ${payload.deploymentId}`);const row=result.rows[0];if(row.provider!=="vercel")throw new Error(`Unsupported runtime provider: ${row.provider}`);if(!["HEALTH_CHECKING","LIVE"].includes(row.status))throw new Error(`Production public verification requires HEALTH_CHECKING or LIVE; current status is ${row.status}`);
+  if(result.rowCount===0)throw new Error(`Deployment/runtime/build not found: ${payload.deploymentId}`);const row=result.rows[0];if(row.provider!=="vercel")throw new Error(`Unsupported runtime provider: ${row.provider}`);const action=publicAccessRecoveryAction(row.status);if(action.action==="terminal-noop")return{result:"NODE_04_18_TERMINAL_NOOP",deploymentId:payload.deploymentId,status:row.status,publiclyReachable:false,responseBodyStored:false,target:"production"};if(action.action==="live-replay-noop")return{result:"NODE_04_18_PUBLIC_ACCESS_REPLAY_NOOP",deploymentId:payload.deploymentId,providerProjectId:row.provider_project_id,providerDeploymentId:row.provider_deployment_id,checkUrl:row.live_url,publiclyReachable:true,status:"LIVE",responseBodyStored:false,target:"production"};if(action.action!=="verify-public-access")throw new Error(`Production public verification requires HEALTH_CHECKING or LIVE; current status is ${row.status}`);
   const providerDeployment=await vercelRequest(`/v13/deployments/${encodeURIComponent(row.provider_deployment_id)}${teamQuery()}`);
   if(providerDeployment?.target!=="production")throw new Error(`Provider deployment is not production-targeted; target is ${providerDeployment?.target??"null"}`);
   if((providerDeployment?.readyState??providerDeployment?.state)!=="READY")throw new Error(`Provider production deployment is not READY`);

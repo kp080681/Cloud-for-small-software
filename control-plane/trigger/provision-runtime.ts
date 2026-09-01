@@ -1,5 +1,7 @@
 import { task } from "@trigger.dev/sdk";
 import pg from "pg";
+import { disableGitAutoDeploymentsBody, gitAutoDeploymentsDisabled } from "../src/vercel-project-config.mjs";
+import { runtimeRecoveryAction } from "../src/vercel-runtime-recovery.mjs";
 
 const { Client } = pg;
 const API = "https://api.vercel.com";
@@ -15,7 +17,8 @@ function safeProviderErrorBody(body:any){ if(!body||typeof body!=="object")retur
 function normalizeVercelRootDirectory(rootDirectory:string){ if(!rootDirectory||rootDirectory==="."||rootDirectory==="./")return undefined; return rootDirectory.replace(/^\.\//,""); }
 async function request(path:string,options:RequestInit={}){ const token=process.env.VERCEL_TOKEN; if(!token)throw new Error("Missing VERCEL_TOKEN"); const response=await fetch(`${API}${path}`,{...options,headers:{Authorization:`Bearer ${token}`,"Content-Type":"application/json",...(options.headers??{})}}); const text=await response.text(); let body:any=null; if(text){try{body=JSON.parse(text)}catch{body=text}} if(!response.ok){const safeBody=safeProviderErrorBody(body);const details=safeBody?`: ${JSON.stringify(safeBody)}`:"";const error:any=new Error(`Vercel API ${response.status} ${response.statusText}${details}`);error.status=response.status;throw error;} return body; }
 async function getRuntime(name:string){try{return await request(`/v9/projects/${encodeURIComponent(name)}${teamQuery()}`)}catch(error:any){if(error.status===404)return null;throw error}}
-async function ensureRuntime({name,repository,rootDirectory}:{name:string;repository:string;rootDirectory:string}){const existing=await getRuntime(name);if(existing)return{resource:existing,created:false,reconciled:true};const vercelRootDirectory=normalizeVercelRootDirectory(rootDirectory);try{const created=await request(`/v11/projects${teamQuery()}`,{method:"POST",body:JSON.stringify({name,framework:"nextjs",...(vercelRootDirectory?{rootDirectory:vercelRootDirectory}:{}),gitRepository:{type:"github",repo:repository}})});return{resource:created,created:true,reconciled:false}}catch(error:any){if([400,409].includes(error.status)){const reconciled=await getRuntime(name);if(reconciled)return{resource:reconciled,created:false,reconciled:true}}throw error}}
+async function ensureRuntime({name,repository,rootDirectory}:{name:string;repository:string;rootDirectory:string}){const existing=await getRuntime(name);const action=runtimeRecoveryAction({localRuntime:null,remoteProject:existing});if(action.action==="reconcile-remote-project")return{resource:existing,created:false,reconciled:true};const vercelRootDirectory=normalizeVercelRootDirectory(rootDirectory);try{const created=await request(`/v11/projects${teamQuery()}`,{method:"POST",body:JSON.stringify({name,framework:"nextjs",...(vercelRootDirectory?{rootDirectory:vercelRootDirectory}:{}),gitRepository:{type:"github",repo:repository}})});return{resource:created,created:true,reconciled:false}}catch(error:any){if([400,409].includes(error.status)){const reconciled=await getRuntime(name);if(reconciled)return{resource:reconciled,created:false,reconciled:true}}throw error}}
+async function ensureGitAutoDeploymentsDisabled(projectId:string){await request(`/v9/projects/${encodeURIComponent(projectId)}${teamQuery()}`,{method:"PATCH",body:JSON.stringify(disableGitAutoDeploymentsBody())});const project=await getRuntime(projectId);if(!gitAutoDeploymentsDisabled(project))throw new Error("Vercel Git automatic deployments are not disabled for SSC-managed runtime");return project}
 
 export const provisionRuntime=task({
  id:"ssc-control-plane-provision-runtime", retry:{maxAttempts:3,minTimeoutInMs:2000,maxTimeoutInMs:10000,factor:2,randomize:false},
@@ -26,6 +29,7 @@ export const provisionRuntime=task({
   const existingRuntime=await db.query(`SELECT provider,provider_project_id,provider_project_name,reconciliation_key,status FROM app_runtimes WHERE app_id=$1`,[deployment.app_id]);
   if(existingRuntime.rowCount===1){
    const runtime=existingRuntime.rows[0];
+   await ensureGitAutoDeploymentsDisabled(runtime.provider_project_id);
    if(deployment.status==="PROVISIONING"){
     await db.query("BEGIN");try{
      const advanced=await db.query(`UPDATE deployments SET runtime_project_id=$1,status='BUILDING',updated_at=now() WHERE id=$2 AND status='PROVISIONING' RETURNING id`,[runtime.provider_project_id,payload.deploymentId]);
@@ -36,7 +40,7 @@ export const provisionRuntime=task({
    return{result:"NODE_04_8_RUNTIME_RECONCILED",deploymentId:payload.deploymentId,status:"BUILDING",provider:runtime.provider,providerProjectId:runtime.provider_project_id,providerProjectName:runtime.provider_project_name,reconciliationKey:runtime.reconciliation_key,runtimeStatus:runtime.status};
   }
   const projectName=`ssc-${deployment.slug}`.toLowerCase().replace(/[^a-z0-9-]/g,"-").slice(0,80);const reconciliationKey=`runtime:${deployment.workspace_id}:${deployment.app_id}`;
-  const provisioned=await ensureRuntime({name:projectName,repository:deployment.repository_full_name,rootDirectory:deployment.root_directory});const project=provisioned.resource;if(!project?.id)throw new Error("Vercel runtime creation returned no project id");
+  const provisioned=await ensureRuntime({name:projectName,repository:deployment.repository_full_name,rootDirectory:deployment.root_directory});let project=provisioned.resource;if(!project?.id)throw new Error("Vercel runtime creation returned no project id");project=await ensureGitAutoDeploymentsDisabled(project.id);
   await db.query("BEGIN");try{
    await db.query(`INSERT INTO app_runtimes (workspace_id,app_id,provider,provider_project_id,provider_project_name,reconciliation_key,status) VALUES ($1,$2,'vercel',$3,$4,$5,'READY')`,[deployment.workspace_id,deployment.app_id,project.id,project.name??projectName,reconciliationKey]);
    await db.query(`UPDATE deployments SET runtime_project_id=$1,status='BUILDING',updated_at=now() WHERE id=$2 AND status='PROVISIONING'`,[project.id,payload.deploymentId]);
