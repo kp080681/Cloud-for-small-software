@@ -12,7 +12,10 @@ import {
   sscBuildOperationKey,
   sscDeploymentMeta,
 } from "../src/vercel-deployment-recovery.mjs";
-import { sscManagedProjectGitSettings } from "../src/vercel-project-config.mjs";
+import {
+  disableGitAutoDeploymentsBody,
+  gitAutoDeploymentsDisabled,
+} from "../src/vercel-project-config.mjs";
 import { runtimeRecoveryAction } from "../src/vercel-runtime-recovery.mjs";
 
 test("provider deployment with SSC metadata is attached instead of duplicated", () => {
@@ -92,8 +95,14 @@ test("public verification replay and terminal statuses do not move backward", ()
   assert.equal(isRecoveryTerminalStatus("HEALTH_CHECKING"), false);
 });
 
-test("SSC-managed Vercel projects skip Git auto-link during project creation", () => {
-  assert.deepEqual(sscManagedProjectGitSettings(), {
-    skipGitConnectDuringLink: true,
+test("SSC-managed Vercel projects disable Git automatic deployments", () => {
+  assert.deepEqual(disableGitAutoDeploymentsBody(), {
+    git: {
+      deploymentEnabled: false,
+    },
   });
+  assert.equal(gitAutoDeploymentsDisabled({ git: null, link: null }), true);
+  assert.equal(gitAutoDeploymentsDisabled({}), true);
+  assert.equal(gitAutoDeploymentsDisabled({ git: { deploymentEnabled: false } }), true);
+  assert.equal(gitAutoDeploymentsDisabled({ git: { deploymentEnabled: true }, link: { type: "github" } }), false);
 });

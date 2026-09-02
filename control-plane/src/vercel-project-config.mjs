@@ -1,5 +1,12 @@
-export function sscManagedProjectGitSettings() {
+export function disableGitAutoDeploymentsBody() {
   return {
-    skipGitConnectDuringLink: true,
+    git: {
+      deploymentEnabled: false,
+    },
   };
+}
+
+export function gitAutoDeploymentsDisabled(project) {
+  const disconnected = !project?.git && !project?.link;
+  return disconnected || project?.git?.deploymentEnabled === false;
 }
