@@ -182,7 +182,6 @@ try {
     body: JSON.stringify({
       name: runtime.provider_project_name,
       project: runtime.provider_project_id,
-      target: "preview",
       gitSource: {
         type: "github",
         org,
@@ -205,7 +204,7 @@ try {
     providerProjectName: runtime.provider_project_name,
     providerDeploymentId: created?.id ?? created?.uid ?? null,
     providerDeploymentUrl: created?.url ? `https://${created.url}` : null,
-    target: "preview",
+    deploymentIntent: "preview",
     fixtureSscDeploymentId: fixtureDeploymentId,
     sourceCommitSha: buildInput.commit_sha,
     metadataKeys: Object.keys(meta).sort(),
