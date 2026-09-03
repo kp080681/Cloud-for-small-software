@@ -57,6 +57,36 @@ function publicAccessStillBlocked(context) {
   return !verified || eventAt(blocked) > eventAt(verified) ? blocked : null;
 }
 
+function envStillBlocked(context, errorCode) {
+  const blocked = latestEvent(context.events, "ENV_REQUIREMENTS_BLOCKED");
+  if (errorCode === "ENV_CONFIGURATION_REQUIRED") return blocked;
+  if (!blocked || context.deployment?.status !== "ANALYZING") return null;
+  const verified = latestEvent(context.events, "ENV_REQUIREMENTS_VERIFIED");
+  return !verified || eventAt(blocked) > eventAt(verified) ? blocked : null;
+}
+
+function latestProgressionEvent(context, eventTypes) {
+  return [...(context.events ?? [])]
+    .filter((event) => eventTypes.includes(event.eventType ?? event.event_type))
+    .sort((a, b) => eventAt(b) - eventAt(a))[0] ?? null;
+}
+
+function policyStillBlocked(context, errorCode) {
+  const blocked = latestEvent(context.events, "RESOURCE_POLICY_BLOCKED");
+  if (["ENV_VAR_LIMIT_EXCEEDED", "DEPLOYMENT_DAILY_LIMIT_EXCEEDED"].includes(errorCode)) return blocked;
+  if (!blocked || context.deployment?.status !== "BUILDING") return null;
+  if (context.deployment?.providerDeploymentId || context.build?.providerDeploymentId) return null;
+  const progressed = latestProgressionEvent(context, [
+    "BUILD_STARTED",
+    "BUILD_RECOVERY_ATTACHED",
+    "BUILD_SUCCEEDED",
+    "BUILD_FAILED",
+    "BUILD_TIMEOUT",
+    "BUILD_SOURCE_MISMATCH",
+  ]);
+  return !progressed || eventAt(blocked) > eventAt(progressed) ? blocked : null;
+}
+
 function envBlockedEvidence(context, event) {
   const metadata = eventMetadata(event);
   const missingKeys = context.missingEnvKeys ?? metadata.missingKeys ?? [];
@@ -168,8 +198,8 @@ function safeEvidence(value) {
 export function normalizeDeploymentDiagnostic(context) {
   const deployment = context.deployment ?? {};
   const errorCode = deployment.errorCode ?? null;
-  const envBlocked = latestEvent(context.events, "ENV_REQUIREMENTS_BLOCKED");
-  const policyBlocked = latestEvent(context.events, "RESOURCE_POLICY_BLOCKED");
+  const envBlocked = envStillBlocked(context, errorCode);
+  const policyBlocked = policyStillBlocked(context, errorCode);
   const publicAccessBlocked = publicAccessStillBlocked(context);
 
   if (errorCode === "ENV_CONFIGURATION_REQUIRED" || envBlocked) {
@@ -185,7 +215,7 @@ export function normalizeDeploymentDiagnostic(context) {
     });
   }
 
-  if (errorCode === "ENV_VAR_LIMIT_EXCEEDED" || errorCode === "DEPLOYMENT_DAILY_LIMIT_EXCEEDED" || policyBlocked) {
+  if (["ENV_VAR_LIMIT_EXCEEDED", "DEPLOYMENT_DAILY_LIMIT_EXCEEDED"].includes(errorCode) || policyBlocked) {
     return diagnostic({
       severity: DiagnosticSeverity.BLOCKED,
       stage: DiagnosticStage.POLICY,
