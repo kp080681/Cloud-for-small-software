@@ -1,7 +1,12 @@
+import {
+  assertSingleSourceFileSize,
+  assertTextSource,
+  normalizeRepositoryRelativePath,
+} from "./source-boundary.mjs";
+
 export const ENV_DETECTOR_VERSION = "node-04-17-static-process-env-v1";
 
 const ENV_KEY_PATTERN = /^[A-Za-z_][A-Za-z0-9_]*$/;
-const MAX_SOURCE_BYTES = 512 * 1024;
 const SOURCE_EXTENSIONS = new Set([
   ".js",
   ".jsx",
@@ -31,7 +36,7 @@ const IGNORED_SEGMENTS = new Set([
 ]);
 
 function normalizePath(path) {
-  return String(path || "").replaceAll("\\", "/").replace(/^\/+/, "");
+  return normalizeRepositoryRelativePath(path);
 }
 
 function extensionOf(path) {
@@ -72,9 +77,8 @@ function addReference(found, envKey, source) {
 }
 
 export function detectEnvReferencesInSource({ path, content }) {
-  if (Buffer.byteLength(content, "utf8") > MAX_SOURCE_BYTES) {
-    return { detections: [], skipped: true, reason: "SOURCE_FILE_TOO_LARGE" };
-  }
+  assertSingleSourceFileSize(Buffer.byteLength(content, "utf8"));
+  assertTextSource(content);
 
   const found = new Map();
   const dotPattern = /\bprocess\s*\.\s*env\s*\.\s*([A-Za-z_][A-Za-z0-9_]*)\b/g;

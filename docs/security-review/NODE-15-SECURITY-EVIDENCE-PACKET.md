@@ -245,9 +245,40 @@ Remaining gaps:
 
 Provider API calls use fixed Vercel/GitHub endpoints with encoded path parameters. Public verification builds its URL from Vercel project/deployment data and performs an anonymous HTTPS GET with manual redirects.
 
-Health verification requires HTTPS, uses `provider_deployment_url` from control-plane/provider state, and follows redirects. After 15.1 it does not include platform credentials, so redirects cannot forward platform credentials from the health request. Because the URL is expected to be a Vercel deployment URL, SSRF exposure is limited in current provider-owned flow, but host/redirect validation should still be tightened before external alpha.
+Health verification requires HTTPS and uses `provider_deployment_url` from control-plane/provider state. After 15.1 it does not include platform credentials, so redirects cannot forward platform credentials from the health request. After 15.4, redirects are followed manually only after target validation.
 
-SSRF classification: MEDIUM residual risk for health-check URL validation and redirect policy; original CRITICAL credential-disclosure risk from the health-check authorization header is resolved by 15.1.
+Original SSRF classification: MEDIUM residual risk for health-check URL validation and redirect policy; original CRITICAL credential-disclosure risk from the health-check authorization header was resolved by 15.1.
+
+15.4 update: workload health/public HTTP behavior now validates the initial workload URL and every followed redirect through `workload-http.mjs`. Current V1 workload URLs must use HTTPS, target the expected Vercel workload domain, and must not target localhost, loopback, private IPv4 ranges, link-local ranges, the `169.254.169.254` metadata endpoint, `metadata.google.internal`, or blocked IPv6 local/link-local patterns. Health checks now perform manual bounded redirect following instead of `fetch` automatic redirects. Public-access verification already used manual redirects; it now marks unsafe redirect targets as not publicly reachable rather than following them.
+
+Updated SSRF classification: `ALREADY_CONTROLLED` for localhost/private/link-local/metadata redirects in current Vercel-backed workload verification. Residual `ACCEPTABLE_V1_RISK`: hostname resolution is not independently DNS-resolved before fetch, so the current control relies on V1's expected `*.vercel.app` hostname boundary rather than a generic outbound network sandbox.
+
+## 8.1 Hostile Source / Path Boundary
+
+15.4 audit traced source ingestion:
+
+- GitHub archive extraction is not used by the active control-plane deployment path.
+- Customer repository files are not written to local disk by source inspection.
+- Customer code and package scripts are not executed locally.
+- `prepare-build-input.ts` reads repository root metadata and `package.json` through GitHub APIs at the immutable deployment commit.
+- `detect-env-requirements.ts` reads the immutable Git tree and selected blob contents through GitHub APIs.
+- Symlink entries, if represented by GitHub as blob content, are not followed through the local filesystem because SSC never resolves repository paths against a local checkout during analysis.
+
+`source-boundary.mjs` adds a canonical repository-relative path boundary for the active V1 source path. It rejects traversal segments, backslash traversal, absolute POSIX paths, Windows drive paths, UNC paths, malformed/encoded traversal, NUL bytes, excessive path length, and duplicate normalized paths. It normalizes accepted roots such as `.`, `apps/web`, and `packages/frontend` while rejecting roots that escape the repository.
+
+Current source-analysis limits:
+
+| Limit | Value | Enforcement |
+| --- | --- | --- |
+| Repository tree entries | 5000 | `assertUniqueRepositoryPaths` |
+| Detectable source files | 500 | `assertDetectableSourceFileCount` |
+| Total source bytes scanned | 5 MiB | `assertTotalSourceBytes` |
+| Single source file bytes | 512 KiB | `assertSingleSourceFileSize` |
+| Repository path length | 240 chars | `normalizeRepositoryRelativePath` |
+
+Oversized or unsafe source now fails deterministically with source-boundary error codes instead of partially continuing with ambiguous evidence. The environment detector still limits scanning to JS/TS/Next source filenames and ignores generated/dependency directories such as `node_modules`, `.next`, `.git`, `dist`, `build`, `coverage`, and `out`.
+
+15.4 tests cover traversal roots, absolute roots, Windows/UNC roots, encoded traversal, excessive files, excessive bytes, oversized files, long paths, duplicate normalized paths, binary-like content, localhost/private/metadata workload URLs, unsafe redirects, and redirect loops.
 
 ## 9. Resource / Abuse Controls
 
@@ -338,7 +369,9 @@ The current operator scripts should be treated as administrative tools, not publ
 | HARDENED | Cross-app secret binding through privileged bug | Malicious/buggy operator path | Binding created to another app's `secret_id` | Secret exposure to wrong app | 15.2 same-app/same-workspace joins and assertions prevent runtime injection from using the foreign secret; tests cover invalid binding and injection attempts | Residual DB-integrity risk | Add DB constraint/trigger later if external entrypoint or additional write paths require defense in depth |
 | HIGH | Source scan resource exhaustion | Malicious repo | Large many-file repo under GitHub tree limit | Worker cost/delay | Per-file 512 KiB limit and truncated-tree fail closed | Medium | Add cumulative file/byte/time caps |
 | HIGH | Provider build/runtime isolation insufficient for hostile code | Malicious repo | Vercel isolation not reviewed for arbitrary untrusted customers | Credential/network/resource abuse | Delegated provider isolation | Unknown | Specialist review of Vercel build/runtime isolation and env exposure |
-| MEDIUM | Health/public checker SSRF via provider URL/redirect behavior | Malicious/bad provider metadata | Control-plane stores or follows unsafe URL | Internal probing | HTTPS requirement; public check manual redirect | Medium | Validate host suffix/project binding; limit redirects consistently |
+| RESOLVED | Health/public checker SSRF via provider URL/redirect behavior | Malicious/bad provider metadata | Control-plane stores or follows unsafe URL | Internal probing | 15.4 validates Vercel workload host, blocks localhost/private/link-local/metadata targets, and follows health redirects manually with a bounded redirect count | Low V1 residual DNS-rebinding risk within trusted provider hostname boundary | Keep workload URL helper mandatory for every customer URL request |
+| RESOLVED | Malicious rootDirectory/path traversal escapes repository source boundary | Malicious customer app config | `root_directory` or Git tree path contains traversal/absolute path | Wrong source inspected or provider configured outside intended repo root | 15.4 canonical repository-relative path helper rejects traversal, absolute, UNC, drive, NUL, encoded traversal, long paths, and duplicate normalized paths | Low | Keep helper at every repository-relative input seam |
+| RESOLVED | Source scan resource exhaustion through many/small files or huge files | Malicious repository | Analyzer scans unbounded Git tree/blobs | Worker memory/time exhaustion or partial ambiguous scan | 15.4 file count, source file count, total byte, single-file byte, and path-length limits | Medium for provider build limits, delegated to Vercel | Add provider build-size policy later only if real workloads need it |
 | MEDIUM | No non-destructive suspension | Abusive customer workload | Abuse detected before deletion decision | Slow containment or destructive-only response | Delete and abandon exist | Medium | Add operator suspend/disable path before external alpha |
 | MEDIUM | Provider/API error text may expose sensitive data in operator surfaces | Provider/application failure | Error propagated to Trigger/local output | Info disclosure | Diagnostics redact and avoid raw provider bodies | Medium | Review/logging policy for all stored/printed error messages |
 | MEDIUM | Secret digest printed by set-app-secret | Insider/log collector | Operator uses script with sensitive value | Offline comparison for low-entropy secrets | Plaintext not printed | Medium | Stop printing digest |
@@ -396,8 +429,8 @@ ALREADY_CONTROLLED:
 ## Severity Counts
 
 - Critical findings: 0
-- High findings: 4
-- Medium findings: 6
+- High findings: 3
+- Medium findings: 5
 - Low findings: 3
 
 ## Conclusion

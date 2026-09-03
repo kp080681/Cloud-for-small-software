@@ -52,12 +52,12 @@ test("limits detection to source files outside generated and dependency director
   assert.equal(isDetectableSourcePath("README.md"), false);
 });
 
-test("skips oversized source files", () => {
-  const result = detectEnvReferencesInSource({
-    path: "app/large.ts",
-    content: `${"x".repeat(512 * 1024 + 1)}process.env.SHOULD_NOT_SCAN`,
-  });
-
-  assert.equal(result.skipped, true);
-  assert.equal(result.reason, "SOURCE_FILE_TOO_LARGE");
+test("rejects oversized source files deterministically", () => {
+  assert.throws(
+    () => detectEnvReferencesInSource({
+      path: "app/large.ts",
+      content: `${"x".repeat(512 * 1024 + 1)}process.env.SHOULD_NOT_SCAN`,
+    }),
+    (error) => error?.code === "SOURCE_FILE_TOO_LARGE",
+  );
 });

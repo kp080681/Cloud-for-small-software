@@ -9,6 +9,14 @@ import {
   mergeEnvDetections,
 } from "../src/env-requirement-detection.mjs";
 import { sourceDetectedRequirement } from "../src/env-requirement-reconciliation.mjs";
+import {
+  SOURCE_LIMITS,
+  assertDetectableSourceFileCount,
+  assertTotalSourceBytes,
+  assertUniqueRepositoryPaths,
+  normalizeRootDirectory,
+  relativePathUnderRoot,
+} from "../src/source-boundary.mjs";
 
 const { Client } = pg;
 
@@ -21,17 +29,6 @@ async function withDb<T>(fn: (db: pg.Client) => Promise<T>): Promise<T> {
   } finally {
     await db.end();
   }
-}
-
-function normalizeRoot(rootDirectory: string) {
-  if (!rootDirectory || rootDirectory === ".") return "";
-  return rootDirectory.replace(/^\.\//, "").replace(/\/+$/, "");
-}
-
-function underRoot(path: string, rootDirectory: string) {
-  const root = normalizeRoot(rootDirectory);
-  if (!root) return path;
-  return path === root ? "" : path.startsWith(`${root}/`) ? path.slice(root.length + 1) : null;
 }
 
 export const detectEnvRequirements = task({
@@ -102,15 +99,21 @@ export const detectEnvRequirements = task({
         recursive: "true",
       });
       if (tree.data.truncated) throw new Error("GitHub returned a truncated source tree; environment detection would be incomplete");
+      const normalizedPaths = assertUniqueRepositoryPaths(tree.data.tree.filter((entry) => entry.path).map((entry) => entry.path!));
+      const normalizedByOriginalPath = new Map<string, string>();
+      tree.data.tree.filter((entry) => entry.path).forEach((entry, index) => normalizedByOriginalPath.set(entry.path!, normalizedPaths[index]));
+      const rootDirectory = normalizeRootDirectory(deployment.root_directory);
 
       const sourceFiles = tree.data.tree
         .filter((entry) => entry.type === "blob" && entry.path && entry.sha)
-        .map((entry) => ({ path: entry.path!, sha: entry.sha!, rootRelativePath: underRoot(entry.path!, deployment.root_directory) }))
+        .map((entry) => ({ path: normalizedByOriginalPath.get(entry.path!)!, sha: entry.sha!, rootRelativePath: relativePathUnderRoot(entry.path!, rootDirectory) }))
         .filter((entry) => entry.rootRelativePath !== null && isDetectableSourcePath(entry.rootRelativePath));
+      assertDetectableSourceFileCount(sourceFiles.length);
 
       const fileDetections = [];
       let scannedFileCount = 0;
       let skippedFileCount = 0;
+      let totalSourceBytes = 0;
       const skippedFiles: Array<{ path: string; reason: string }> = [];
 
       for (const file of sourceFiles) {
@@ -120,7 +123,10 @@ export const detectEnvRequirements = task({
           skippedFiles.push({ path: file.rootRelativePath!, reason: "UNSUPPORTED_BLOB_ENCODING" });
           continue;
         }
-        const content = Buffer.from(blob.data.content, "base64").toString("utf8");
+        const raw = Buffer.from(blob.data.content, "base64");
+        totalSourceBytes += raw.byteLength;
+        assertTotalSourceBytes(totalSourceBytes);
+        const content = raw.toString("utf8");
         const detection = detectEnvReferencesInSource({ path: file.rootRelativePath!, content });
         if (detection.skipped) {
           skippedFileCount += 1;
@@ -137,7 +143,13 @@ export const detectEnvRequirements = task({
         repository: deployment.repository_full_name,
         commitSha: deployment.commit_sha,
         gitTreeSha: deployment.git_tree_sha,
-        rootDirectory: deployment.root_directory,
+        rootDirectory,
+        sourceLimits: {
+          maxDetectableSourceFiles: SOURCE_LIMITS.maxDetectableSourceFiles,
+          maxTotalSourceBytes: SOURCE_LIMITS.maxTotalSourceBytes,
+          maxSingleSourceFileBytes: SOURCE_LIMITS.maxSingleSourceFileBytes,
+          maxRepositoryPathLength: SOURCE_LIMITS.maxRepositoryPathLength,
+        },
         detectedKeys: detections.map((item) => item.envKey),
         scannedFileCount,
         skippedFileCount,
@@ -159,7 +171,7 @@ export const detectEnvRequirements = task({
             deployment.repository_full_name,
             deployment.commit_sha,
             deployment.git_tree_sha,
-            deployment.root_directory,
+            rootDirectory,
             ENV_DETECTOR_VERSION,
             detections.length,
             scannedFileCount,

@@ -3,6 +3,7 @@ import { createAppAuth } from "@octokit/auth-app";
 import { Octokit } from "@octokit/rest";
 import { task } from "@trigger.dev/sdk";
 import pg from "pg";
+import { normalizeRootDirectory } from "../src/source-boundary.mjs";
 
 const { Client } = pg;
 
@@ -84,7 +85,8 @@ export const prepareBuildInput = task({
 
       const commit = await octokit.git.getCommit({ owner, repo, commit_sha: deployment.source_commit_sha });
       const gitTreeSha = commit.data.tree.sha;
-      const rootPath = deployment.root_directory === "." ? "" : deployment.root_directory;
+      const rootDirectory = normalizeRootDirectory(deployment.root_directory);
+      const rootPath = rootDirectory === "." ? "" : rootDirectory;
       const root = await octokit.repos.getContent({ owner, repo, path: rootPath, ref: deployment.source_commit_sha });
       if (!Array.isArray(root.data)) throw new Error("Configured root directory is not a directory");
       const rootFiles = root.data.map((entry) => entry.name).sort();
@@ -104,7 +106,7 @@ export const prepareBuildInput = task({
         repository: deployment.repository_full_name,
         commitSha: deployment.source_commit_sha,
         gitTreeSha,
-        rootDirectory: deployment.root_directory,
+        rootDirectory,
         framework: deployment.framework,
         runtime: deployment.runtime,
         packageManager: commands.packageManager,
@@ -126,7 +128,7 @@ export const prepareBuildInput = task({
               manifest_sha256, manifest)
            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12::jsonb)`,
           [payload.deploymentId, deployment.repository_full_name, deployment.source_commit_sha, gitTreeSha,
-           deployment.root_directory, commands.packageManager, commands.lockfile, commands.installCommand,
+           rootDirectory, commands.packageManager, commands.lockfile, commands.installCommand,
            buildCommand, startCommand, manifestSha256, JSON.stringify(manifest)],
         );
         await db.query(
@@ -149,7 +151,7 @@ export const prepareBuildInput = task({
         repository: deployment.repository_full_name,
         commitSha: deployment.source_commit_sha,
         gitTreeSha,
-        rootDirectory: deployment.root_directory,
+        rootDirectory,
         packageManager: commands.packageManager,
         lockfile: commands.lockfile,
         installCommand: commands.installCommand,

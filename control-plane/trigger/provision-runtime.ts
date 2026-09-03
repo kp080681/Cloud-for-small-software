@@ -2,6 +2,7 @@ import { task } from "@trigger.dev/sdk";
 import pg from "pg";
 import { sscManagedProjectGitSettings } from "../src/vercel-project-config.mjs";
 import { runtimeRecoveryAction } from "../src/vercel-runtime-recovery.mjs";
+import { vercelRootDirectory } from "../src/source-boundary.mjs";
 
 const { Client } = pg;
 const API = "https://api.vercel.com";
@@ -14,10 +15,9 @@ async function withDb<T>(fn: (db: pg.Client) => Promise<T>): Promise<T> {
 }
 function teamQuery() { const teamId=process.env.VERCEL_TEAM_ID; return teamId?`?teamId=${encodeURIComponent(teamId)}`:""; }
 function safeProviderErrorBody(body:any){ if(!body||typeof body!=="object")return body; const error=body.error&&typeof body.error==="object"?body.error:null; return {error:error?{code:error.code??null,message:error.message??null}:null,code:body.code??null,message:body.message??null}; }
-function normalizeVercelRootDirectory(rootDirectory:string){ if(!rootDirectory||rootDirectory==="."||rootDirectory==="./")return undefined; return rootDirectory.replace(/^\.\//,""); }
 async function request(path:string,options:RequestInit={}){ const token=process.env.VERCEL_TOKEN; if(!token)throw new Error("Missing VERCEL_TOKEN"); const response=await fetch(`${API}${path}`,{...options,headers:{Authorization:`Bearer ${token}`,"Content-Type":"application/json",...(options.headers??{})}}); const text=await response.text(); let body:any=null; if(text){try{body=JSON.parse(text)}catch{body=text}} if(!response.ok){const safeBody=safeProviderErrorBody(body);const details=safeBody?`: ${JSON.stringify(safeBody)}`:"";const error:any=new Error(`Vercel API ${response.status} ${response.statusText}${details}`);error.status=response.status;throw error;} return body; }
 async function getRuntime(name:string){try{return await request(`/v9/projects/${encodeURIComponent(name)}${teamQuery()}`)}catch(error:any){if(error.status===404)return null;throw error}}
-async function ensureRuntime({name,repository,rootDirectory}:{name:string;repository:string;rootDirectory:string}){const existing=await getRuntime(name);const action=runtimeRecoveryAction({localRuntime:null,remoteProject:existing});if(action.action==="reconcile-remote-project")return{resource:existing,created:false,reconciled:true};const vercelRootDirectory=normalizeVercelRootDirectory(rootDirectory);try{const created=await request(`/v11/projects${teamQuery()}`,{method:"POST",body:JSON.stringify({name,framework:"nextjs",...(vercelRootDirectory?{rootDirectory:vercelRootDirectory}:{}),gitRepository:{type:"github",repo:repository},...sscManagedProjectGitSettings()})});return{resource:created,created:true,reconciled:false}}catch(error:any){if([400,409].includes(error.status)){const reconciled=await getRuntime(name);if(reconciled)return{resource:reconciled,created:false,reconciled:true}}throw error}}
+async function ensureRuntime({name,repository,rootDirectory}:{name:string;repository:string;rootDirectory:string}){const existing=await getRuntime(name);const action=runtimeRecoveryAction({localRuntime:null,remoteProject:existing});if(action.action==="reconcile-remote-project")return{resource:existing,created:false,reconciled:true};const normalizedRootDirectory=vercelRootDirectory(rootDirectory);try{const created=await request(`/v11/projects${teamQuery()}`,{method:"POST",body:JSON.stringify({name,framework:"nextjs",...(normalizedRootDirectory?{rootDirectory:normalizedRootDirectory}:{}),gitRepository:{type:"github",repo:repository},...sscManagedProjectGitSettings()})});return{resource:created,created:true,reconciled:false}}catch(error:any){if([400,409].includes(error.status)){const reconciled=await getRuntime(name);if(reconciled)return{resource:reconciled,created:false,reconciled:true}}throw error}}
 
 export const provisionRuntime=task({
  id:"ssc-control-plane-provision-runtime", retry:{maxAttempts:3,minTimeoutInMs:2000,maxTimeoutInMs:10000,factor:2,randomize:false},

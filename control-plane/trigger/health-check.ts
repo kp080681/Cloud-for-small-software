@@ -1,12 +1,13 @@
 import { task } from "@trigger.dev/sdk";
 import pg from "pg";
 import { healthAttemptAction } from "../src/deployment-recovery-rules.mjs";
-import { healthCheckRequestInit } from "../src/workload-http.mjs";
+import { fetchWorkloadUrl, healthCheckRequestInit } from "../src/workload-http.mjs";
 
 const { Client } = pg;
 const TIMEOUT_MS = 8000;
 
 function safeErrorCode(error: any) {
+  if (typeof error?.code === "string" && error.code.startsWith("WORKLOAD_")) return error.code;
   if (error?.name === "AbortError") return "HEALTH_CHECK_TIMEOUT";
   if (error instanceof TypeError) return "HEALTH_CHECK_NETWORK_ERROR";
   return "HEALTH_CHECK_ERROR";
@@ -36,7 +37,6 @@ export const healthCheck = task({
 
       const checkUrl = deployment.provider_deployment_url;
       if (!checkUrl) throw new Error("Provider deployment URL is unavailable");
-      if (new URL(checkUrl).protocol !== "https:") throw new Error("Health check URL must use HTTPS");
 
       if (deployment.status === "DEPLOYING") {
         await db.query("BEGIN");
@@ -69,7 +69,7 @@ export const healthCheck = task({
 
       const started=Date.now(); let httpStatus:number|null=null; let status="UNHEALTHY"; let errorCode:string|null=null;
       try {
-        const response=await fetch(checkUrl,healthCheckRequestInit({signal:AbortSignal.timeout(TIMEOUT_MS)}));
+        const { response }=await fetchWorkloadUrl(checkUrl,healthCheckRequestInit({signal:AbortSignal.timeout(TIMEOUT_MS)}));
         httpStatus=response.status; status=response.status>=200&&response.status<400?"HEALTHY":"UNHEALTHY"; if(status!=="HEALTHY")errorCode=`HTTP_${response.status}`; try{await response.body?.cancel()}catch{}
       } catch(error:any){errorCode=safeErrorCode(error)}
       const latencyMs=Date.now()-started;
