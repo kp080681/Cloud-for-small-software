@@ -2,6 +2,7 @@ import { task } from "@trigger.dev/sdk";
 import pg from "pg";
 import { loadDeploymentDiagnosticContext } from "../src/deployment-diagnostic-context.mjs";
 import { normalizeDeploymentDiagnostic } from "../src/deployment-diagnostics.mjs";
+import { normalizeDeploymentTimeline } from "../src/deployment-timeline.mjs";
 
 const { Client } = pg;
 
@@ -16,22 +17,24 @@ async function withDb<T>(fn: (db: pg.Client) => Promise<T>): Promise<T> {
   }
 }
 
-export const getDeploymentDiagnostic = task({
-  id: "ssc-control-plane-get-deployment-diagnostic",
+export const getDeploymentTimeline = task({
+  id: "ssc-control-plane-get-deployment-timeline",
   retry: { maxAttempts: 1 },
   run: async (payload: { deploymentId: string }) => {
     return await withDb(async (db) => {
-      const context = await loadDeploymentDiagnosticContext(db, payload.deploymentId);
+      const context = await loadDeploymentDiagnosticContext(db, payload.deploymentId, { eventLimit: null });
       const diagnostic = normalizeDeploymentDiagnostic(context);
+      const timeline = normalizeDeploymentTimeline(context, diagnostic);
 
       return {
-        result: "NODE_04_20_DEPLOYMENT_DIAGNOSTIC",
-        deploymentId: payload.deploymentId,
-        diagnostic,
+        result: "NODE_04_21_DEPLOYMENT_TIMELINE",
+        ...timeline,
         rawBuildLogsReturned: false,
         providerResponseBodiesReturned: false,
         tokensPrinted: false,
         secretsPrinted: false,
+        providerResourcesMutated: false,
+        destructiveOperationExecuted: false,
       };
     });
   },
