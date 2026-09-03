@@ -26,7 +26,10 @@ try {
   const bindings = await db.query(
     `SELECT b.env_key, b.target_environment, s.name AS secret_name
        FROM app_secret_bindings b
-       JOIN encrypted_secrets s ON s.id = b.secret_id
+       JOIN encrypted_secrets s
+         ON s.id = b.secret_id
+        AND s.workspace_id = b.workspace_id
+        AND s.app_id = b.app_id
       WHERE b.app_id = $1
       ORDER BY b.env_key`,
     [app.id],

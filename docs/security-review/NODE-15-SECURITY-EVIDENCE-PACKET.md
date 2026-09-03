@@ -60,12 +60,29 @@ Resolved 15.1 caveat: the original packet found that `health-check.ts` sent `Aut
 | Repositories | `github_repositories` scoped by `workspace_id`; `create-app-deployment.mjs` resolves repo then app by workspace | Good for operator flow | Public API must validate user membership before mapping/using repo |
 | Apps | `apps.workspace_id`; scripts often resolve by slug or id | Partially scoped | Slug-only scripts are operator-only and must not be exposed |
 | Deployments | `deployments.workspace_id`, `app_id`; workers commonly accept only `deploymentId` and derive app/workspace | Safe only behind trusted Trigger/operator boundary | Future user-triggered entrypoints must authorize deployment ownership before enqueue |
-| Secrets | `encrypted_secrets.workspace_id/app_id`; `app_secret_bindings.workspace_id/app_id` | App scoped, encrypted | No DB-level constraint proving `binding.secret_id` belongs to same app/workspace |
-| Runtimes | `app_runtimes.workspace_id/app_id`; deterministic runtime reconciliation | Scoped in data model | Public deletion/provision calls need caller authorization |
+| Secrets | `encrypted_secrets.workspace_id/app_id`; `app_secret_bindings.workspace_id/app_id`; 15.2 same-app/same-workspace joins and assertions in runtime injection | App scoped, encrypted, application-enforced on runtime injection | No DB-level composite constraint proving `binding.secret_id` belongs to same app/workspace |
+| Runtimes | `app_runtimes.workspace_id/app_id`; deterministic runtime reconciliation; 15.2 runtime/deployment assertion helper | Scoped in data model and application-enforced in runtime env path | Public deletion/provision calls need caller authorization |
 | Builds/logs/health | Deployment-scoped tables | Tied to deployment ownership indirectly | Read APIs must authorize deployment ownership |
 | Provider operations | `deployment_provider_operations.deployment_id` plus provider ids | Good for recovery traceability | Read/repair operations must remain operator-only until auth exists |
 
 Potential IDOR/cross-workspace risk: many Trigger tasks accept only `deploymentId`; `delete-app.ts` accepts `appId`, `workspaceId`, and deletion key; scripts like `set-app-secret.mjs` and diagnostic/timeline runners use app slug or deployment id. This is acceptable for current trusted local/Trigger operation, but these cannot be exposed to external users without an authenticated authorization layer.
+
+15.2 hardening added `control-plane/src/tenant-boundary.mjs` and `control-plane/test/tenant-boundary.test.mjs` to make tenant ownership assumptions executable. The tests model two synthetic workspaces with separate repositories, apps, deployments, secrets, runtimes, builds, and provider operations, and assert that cross-workspace combinations are rejected.
+
+## 3.1 DB Constraint Matrix
+
+| Boundary | DB Enforced | Application Enforced | Remaining Risk |
+| --- | --- | --- | --- |
+| Repository belongs to workspace | `github_repositories.workspace_id` and FK to installation | mapping scripts save repository under installation workspace | DB does not enforce installation workspace consistency with repository workspace beyond application logic |
+| App belongs to workspace | `apps.workspace_id`; slug unique per workspace | app creation resolves repository workspace first | `apps.repository_id` can reference a repository row from another workspace if directly inserted by privileged code |
+| Deployment belongs to app/workspace | `deployments.workspace_id`, `app_id` FKs | deployment creation uses app/repository workspace; workers derive app/workspace from deployment | DB does not enforce deployment workspace equals app workspace |
+| Secret belongs to app/workspace | `encrypted_secrets.workspace_id`, `app_id` FKs | KMS encryption context validates workspace/app/name on decrypt | DB does not enforce secret workspace equals app workspace |
+| Secret binding uses same app secret | binding and secret FKs exist separately | 15.2 runtime injection and inventory joins require `s.workspace_id=b.workspace_id` and `s.app_id=b.app_id`; assertions validate before decrypt/inject | DB can still store an invalid foreign binding row, but current runtime injection will not use it |
+| Runtime belongs to app/workspace | `app_runtimes.workspace_id`, `app_id` FKs | provisioning derives runtime from deployment app; 15.2 assertion validates runtime/deployment match in env injection | DB does not enforce runtime workspace equals app workspace |
+| Build belongs to deployment | `deployment_builds.deployment_id` FK and provider id unique | build creation/recovery uses deployment id and source commit; 15.2 assertions cover cross-deployment build misuse | DB does not duplicate workspace id for direct constraint |
+| Provider operation belongs to deployment | `deployment_provider_operations.deployment_id` FK and unique operation key | operation key includes deployment/source; recovery matches SSC metadata | DB does not independently encode workspace |
+
+Smallest future DB-hardening migration, if approved later: add composite uniqueness/FK patterns or constraint triggers so child rows carrying both `workspace_id` and parent ids must match the parent row workspace/app. This was not added in 15.2.
 
 ## 4. Secret Lifecycle
 
@@ -93,7 +110,7 @@ Gaps:
 - `set-app-secret.mjs` prints a SHA-256 digest of the plaintext secret. This is not plaintext, but it is unnecessary sensitive metadata and should be removed before broader use.
 - `import-env-file.mjs` attempts to clear `raw` with `raw.replace`, but strings are immutable; this is only best-effort and not a real memory wipe.
 - Secret values are applied to both `preview` and `production` provider targets. That may be acceptable for current V1 direct-production deployment, but should be reviewed against least-exposure goals.
-- No automated wrong-tenant secret-binding test or DB constraint currently proves a binding cannot reference a secret from another app if a buggy privileged path attempts it.
+- 15.2 tests now prove runtime injection rejects wrong-tenant secret bindings at the application layer, and the runtime/inventory queries only join secrets whose `workspace_id` and `app_id` match the binding. A DB-level constraint is still not present.
 
 ## 5. Credential Scope Matrix
 
@@ -233,9 +250,9 @@ The current operator scripts should be treated as administrative tools, not publ
 | Severity | Threat | Attacker | Precondition | Impact | Current Control | Residual Risk | Recommended Minimum Fix |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | RESOLVED | 15.0 health check leaked Vercel bearer token to hostile workload | Malicious customer repo | External workload deployed and health checked | Provider credential compromise | 15.1 removed `Authorization` from health workload requests; `workload-http.test.mjs` proves health/public workload requests omit credentials and reject credential-bearing workload headers | Residual risk reduced to regression risk | Keep regression tests required for health/public verification changes |
-| HIGH | Cross-tenant action by guessed deployment/app/secret id if internal task exposed | External user | Public entrypoint forwards ids without authz | Cross-tenant read/write/delete | Data model has workspace ids | High until API layer exists | Add authz facade before exposing scripts/tasks |
+| HIGH | Cross-tenant action by guessed deployment/app/secret id if internal task exposed | External user | Public entrypoint forwards ids without authz | Cross-tenant read/write/delete | Data model has workspace ids; 15.2 added ownership assertions and cross-workspace tests for core resource combinations | High until API layer exists | Add authz facade before exposing scripts/tasks |
 | HIGH | Over-scoped Vercel token mutates non-SSC projects | Attacker with token or code path bug | Token compromise or wrong project id | Broad provider damage | Deterministic runtime ids; delete identity checks | High | Verify/create least-privilege Vercel token/project scope |
-| HIGH | Cross-app secret binding through privileged bug | Malicious/buggy operator path | Binding created to another app's `secret_id` | Secret exposure to wrong app | App scoped tables | Medium-high | Add DB constraint/trigger or transactional validation and tests |
+| HARDENED | Cross-app secret binding through privileged bug | Malicious/buggy operator path | Binding created to another app's `secret_id` | Secret exposure to wrong app | 15.2 same-app/same-workspace joins and assertions prevent runtime injection from using the foreign secret; tests cover invalid binding and injection attempts | Residual DB-integrity risk | Add DB constraint/trigger later if external entrypoint or additional write paths require defense in depth |
 | HIGH | Source scan resource exhaustion | Malicious repo | Large many-file repo under GitHub tree limit | Worker cost/delay | Per-file 512 KiB limit and truncated-tree fail closed | Medium | Add cumulative file/byte/time caps |
 | HIGH | Provider build/runtime isolation insufficient for hostile code | Malicious repo | Vercel isolation not reviewed for arbitrary untrusted customers | Credential/network/resource abuse | Delegated provider isolation | Unknown | Specialist review of Vercel build/runtime isolation and env exposure |
 | MEDIUM | Health/public checker SSRF via provider URL/redirect behavior | Malicious/bad provider metadata | Control-plane stores or follows unsafe URL | Internal probing | HTTPS requirement; public check manual redirect | Medium | Validate host suffix/project binding; limit redirects consistently |
@@ -257,7 +274,7 @@ ALPHA_BLOCKER:
 
 HARDEN_BEFORE_BETA:
 
-- Add DB or transactional validation that secret bindings cannot cross app/workspace boundaries.
+- Add DB constraints or triggers so child-row workspace/app fields must match parent resources.
 - Add cumulative source-analysis limits and shared root-directory validation.
 - Add non-destructive suspension.
 - Remove secret digest output from `set-app-secret.mjs`.
@@ -276,6 +293,7 @@ ALREADY_CONTROLLED:
 - Build logs, diagnostics, and timeline avoid raw secret/provider-body exposure.
 - App deletion is idempotent and audited.
 - Orphan detection exists and is read-only.
+- 15.2 ownership assertions and tests cover cross-workspace app, repository, deployment, secret binding, runtime, build, and provider-operation combinations.
 
 ## 15. Specialist Review Questions
 
@@ -295,7 +313,7 @@ ALREADY_CONTROLLED:
 ## Severity Counts
 
 - Critical findings: 0
-- High findings: 5
+- High findings: 4
 - Medium findings: 6
 - Low findings: 3
 

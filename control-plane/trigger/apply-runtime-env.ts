@@ -1,6 +1,10 @@
 import { task } from "@trigger.dev/sdk";
 import pg from "pg";
 import { decryptAppSecret } from "../src/secret-store.mjs";
+import {
+  assertRuntimeMatchesDeployment,
+  assertSecretBindingBelongsToApp,
+} from "../src/tenant-boundary.mjs";
 
 const { Client } = pg;
 const API = "https://api.vercel.com";
@@ -65,12 +69,23 @@ export const applyRuntimeEnv = task({
       if (deployment.status !== "BUILDING") throw new Error(`Runtime env can only be applied from BUILDING; current status is ${deployment.status}`);
       if (deployment.provider !== "vercel") throw new Error(`Unsupported runtime provider: ${deployment.provider}`);
       if (deployment.runtime_project_id !== deployment.provider_project_id) throw new Error("Runtime project binding mismatch");
+      assertRuntimeMatchesDeployment({
+        app_id: deployment.app_id,
+        workspace_id: deployment.workspace_id,
+        provider_project_id: deployment.provider_project_id,
+      }, deployment);
 
       const bindingResult = await db.query(
-        `SELECT b.id AS binding_id, b.env_key, b.target_environment,
-                s.id AS secret_id, s.name AS secret_name, s.updated_at AS secret_updated_at
+        `SELECT b.id AS binding_id, b.workspace_id AS binding_workspace_id,
+                b.app_id AS binding_app_id, b.env_key, b.target_environment,
+                s.id AS secret_id, s.workspace_id AS secret_workspace_id,
+                s.app_id AS secret_app_id, s.name AS secret_name,
+                s.updated_at AS secret_updated_at
            FROM app_secret_bindings b
-           JOIN encrypted_secrets s ON s.id = b.secret_id
+           JOIN encrypted_secrets s
+             ON s.id = b.secret_id
+            AND s.workspace_id = b.workspace_id
+            AND s.app_id = b.app_id
           WHERE b.app_id = $1
             AND b.target_environment = 'production'
           ORDER BY b.env_key`,
@@ -91,6 +106,10 @@ export const applyRuntimeEnv = task({
       const providerTargets = ["preview", "production"];
       const applied: Array<{ envKey: string; providerEnvId: string | null }> = [];
       for (const binding of bindingResult.rows) {
+        assertSecretBindingBelongsToApp(binding, {
+          id: deployment.app_id,
+          workspace_id: deployment.workspace_id,
+        });
         const plaintext = await decryptAppSecret(db, {
           appId: deployment.app_id,
           name: binding.secret_name,
