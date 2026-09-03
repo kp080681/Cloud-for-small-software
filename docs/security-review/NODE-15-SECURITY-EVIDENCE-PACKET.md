@@ -221,7 +221,6 @@ Current controls:
 
 Remaining risks:
 
-- Root directory normalization is shallow. It strips leading `./` but does not enforce a strict no-absolute/no-`..` invariant everywhere.
 - Install/build command values originate from package manager/script names rather than arbitrary shell input, but provider build still runs arbitrary customer code in Vercel as intended.
 - Provider isolation model for hostile external repositories still needs specialist validation.
 
@@ -230,15 +229,13 @@ Remaining risks:
 Existing defenses:
 
 - Source comes from GitHub APIs at immutable commit/tree identity, not the local filesystem.
-- Environment detector skips known generated folders and files larger than 512 KiB.
+- Environment detector rejects source files larger than 512 KiB and enforces total scanned byte/file/path limits.
 - GitHub truncated recursive trees cause detection failure rather than incomplete silent success.
 - Detector scans only selected JS/TS/Next source file types and stores bounded source references.
+- 15.4 `source-boundary.mjs` validates repository-relative paths and root directories before source inspection or provider root configuration.
 
 Remaining gaps:
 
-- No repository-wide cumulative byte/file-count limit beyond GitHub tree truncation and per-file limits.
-- No explicit `rootDirectory` validation helper shared across source, provider, and script paths.
-- No documented handling for symlink/submodule/source-tree edge cases.
 - `apply-migration.mjs` reads an env-provided filesystem path and is an operator-only tool; it must never be externally exposed.
 
 ## 8. Network / SSRF
@@ -291,7 +288,8 @@ Oversized or unsafe source now fails deterministically with source-boundary erro
 | Build log volume | APPLICATION_POLICY | `max_log_events` schema plus `ingest-build-logs.ts` max 200 events |
 | Trigger retries | APPLICATION_POLICY | task retry settings on workers |
 | Runtime CPU/memory/storage | PROVIDER_ENFORCED | Delegated to Vercel; exact limits not verified in repo |
-| Source/build size | PARTIALLY_ENFORCED | Per-file env scan limit; provider build limits delegated |
+| Source analysis size | APPLICATION_POLICY | 15.4 source file count, total byte, per-file byte, and path-length limits |
+| Provider build size/runtime limits | PROVIDER_ENFORCED | Delegated to Vercel; exact limits not verified in repo |
 | Concurrent operations | NOT_ENFORCED | No explicit per-workspace concurrency limiter found |
 | Public API rate limits | NOT_ENFORCED | No external public API layer present yet |
 | Suspension | NOT_ENFORCED | Delete/abandon exist; non-destructive suspend does not |
@@ -376,7 +374,7 @@ The current operator scripts should be treated as administrative tools, not publ
 | MEDIUM | Provider/API error text may expose sensitive data in operator surfaces | Provider/application failure | Error propagated to Trigger/local output | Info disclosure | Diagnostics redact and avoid raw provider bodies | Medium | Review/logging policy for all stored/printed error messages |
 | MEDIUM | Secret digest printed by set-app-secret | Insider/log collector | Operator uses script with sensitive value | Offline comparison for low-entropy secrets | Plaintext not printed | Medium | Stop printing digest |
 | MEDIUM | No public API rate limiting yet | External user | Customer API added without limiter | Cost/abuse exposure | Resource policy in worker | Medium | Add rate limits before exposing customer actions |
-| MEDIUM | Root directory traversal/absolute path inconsistencies | Malicious configuration | Public config accepts root directory | Wrong source/provider path | GitHub API path usage; provider path normalized | Medium | Central strict root-directory validator |
+| RESOLVED | Root directory traversal/absolute path inconsistencies | Malicious configuration | Public config accepts root directory | Wrong source/provider path | 15.4 central strict repository-relative path and root-directory validator | Low | Keep source-boundary tests required for source/provider root changes |
 | LOW | Immutable string clearing is ineffective | Local process/memory attacker | Process memory inspected | Secret remnants in memory | Short-lived scripts/workers | Low | Avoid claims of memory wiping; keep lifetime short |
 | LOW | Orphan fixture script creates intentional unmanaged deployment if run | Operator error | Guarded script run against disposable project | Provider clutter/cost | Hard-coded disposable guard | Low | Keep script operator-only; document no cleanup in node |
 | LOW | Runtime logs not fully ingested | Operator/customer | Runtime failure after deploy | Reduced visibility | Health diagnostics and provider ids | Low | Define V1 provider-log access boundary |
@@ -385,13 +383,13 @@ The current operator scripts should be treated as administrative tools, not publ
 
 ALPHA_BLOCKER:
 
+- No remaining code-level alpha blocker was found in the current founder/operator deployment path after 15.1-15.4.
 - Public/customer entrypoints do not yet exist as hardened authenticated/authorized APIs; current scripts/tasks must not be exposed as-is.
-- Specialist review of provider build/runtime isolation and credential scopes is still required by the master graph/security model.
+- Specialist review of provider build/runtime isolation and credential scopes is still required by the master graph/security model before Node 15 can be complete.
 
 HARDEN_BEFORE_BETA:
 
 - Add DB constraints or triggers so child-row workspace/app fields must match parent resources.
-- Add cumulative source-analysis limits and shared root-directory validation.
 - Add non-destructive suspension.
 - Remove secret digest output from `set-app-secret.mjs`.
 - Document deletion/recovery boundaries and incident procedure.
@@ -410,21 +408,119 @@ ALREADY_CONTROLLED:
 - App deletion is idempotent and audited.
 - Orphan detection exists and is read-only.
 - 15.2 ownership assertions and tests cover cross-workspace app, repository, deployment, secret binding, runtime, build, and provider-operation combinations.
+- 15.4 hostile source/path/resource-exhaustion and workload SSRF/redirect tests pass.
+
+## 14.1 15.5 Finding Closure Matrix
+
+| Finding | Current Status | Evidence | Additional Work Before V1 |
+| --- | --- | --- | --- |
+| 15.0 health check leaked Vercel bearer token to workload | RESOLVED | 15.1 `workload-http.mjs`, `health-check.ts`, `configure-public-access.ts`, `workload-http.test.mjs` | Keep regression tests mandatory for workload HTTP changes |
+| Customer source could execute inside control plane | RESOLVED | Source inspection uses GitHub APIs and parses text/JSON only; no local install/build execution | Specialist review of Vercel provider isolation remains separate |
+| Cross-tenant action if internal task ids are exposed | MITIGATED | 15.2 `tenant-boundary.mjs` assertions and tests; current scripts/tasks are operator-only | Authenticated authorization facade before any public/customer entrypoint |
+| Cross-app secret binding through privileged bug | MITIGATED | 15.2 same-app/same-workspace joins and runtime assertions | Optional DB-level composite constraints before broader write surfaces |
+| Over-scoped Vercel token | VERIFY_PROVIDER_SETTING | 15.3 endpoint inventory defines minimum required provider authority | Verify/reduce Vercel token/team/project scope |
+| GitHub App over-permissioned repository access | VERIFY_PROVIDER_SETTING | 15.3 inventory shows no repository write API usage | Verify GitHub App read-only contents/metadata/webhook settings and installation scope |
+| KMS runtime/admin permission breadth | VERIFY_PROVIDER_SETTING | `secret-store.mjs` uses only GenerateDataKey and Decrypt | Verify IAM denies KMS admin actions and constrains key/context where feasible |
+| Trigger credential blast radius | VERIFY_PROVIDER_SETTING | Runner scripts use `TRIGGER_SECRET_KEY`; no workload exposure found | Verify environment/task invocation scope |
+| Control-plane DB role can perform schema-owner operations | VERIFY_PROVIDER_SETTING | Repo uses `DATABASE_URL` for workers and `apply-migration.mjs`; role split not provable from repo | Verify or separate runtime DML role from migration/schema owner if practical before alpha |
+| Source path traversal/root escape | RESOLVED | 15.4 `source-boundary.mjs`, source-boundary tests, build-input/env/provision-runtime wiring | Keep helper required at repository-relative input seams |
+| Symlink escape during source inspection | MITIGATED | No local archive extraction or filesystem path resolution; GitHub blobs are read by SHA | Specialist review can confirm GitHub symlink object handling is acceptable for V1 |
+| Source scan resource exhaustion | RESOLVED | 15.4 file count, source count, total bytes, per-file, path-length limits and tests | Provider build resource limits remain provider-side verification |
+| SSRF to localhost/private/metadata endpoint | RESOLVED | 15.4 workload URL/redirect validator and mocked redirect tests | Residual DNS rebinding concern is acceptable under V1 Vercel hostname boundary pending specialist review |
+| Provider/API error text leakage | MITIGATED | Diagnostics/timeline redaction avoids raw provider bodies and error_message exposure | Review Trigger/operator logs before public support surfaces |
+| Secret digest printed by `set-app-secret.mjs` | HARDEN_BEFORE_BETA | Digest is not plaintext but is unnecessary sensitive metadata | Remove digest output before broad operator/customer use |
+| No public API rate limiting | ACCEPTABLE_V1_RISK | No public customer API layer exists yet; worker resource policies exist | Add rate limits before exposing customer actions |
+| No non-destructive suspension | HARDEN_BEFORE_BETA | Delete and abandon exist; no suspend path | Add smallest operator disable/suspend path when abuse operations begin |
+| Immutable string clearing is ineffective | ACCEPTABLE_V1_RISK | Short-lived scripts/workers; no claim of reliable memory wipe | Avoid documenting string clearing as a security control |
+| Orphan fixture can create intentional unmanaged deployment | ACCEPTABLE_V1_RISK | Hard-coded disposable project guard and operator-only script | Keep operator-only; no automatic cleanup in 04.19 |
+| Runtime logs not fully ingested | ACCEPTABLE_V1_RISK | Build logs, health, diagnostics, timeline exist; runtime provider logs not fully surfaced | Define V1 provider-log support boundary when operations need it |
+
+## 14.2 Provider-Side Verification Checklist
+
+GitHub App:
+
+- Confirm repository contents permission is read-only.
+- Confirm metadata access is the only broad default permission.
+- Confirm webhook permissions are limited to events SSC actually consumes.
+- Confirm installations are restricted to selected repositories/workspaces.
+- Confirm no repository write, actions write, secrets write, administration, or deploy-key authority is granted.
+
+Vercel:
+
+- Confirm `VERCEL_TOKEN` is scoped to the SSC team/context used by `VERCEL_TEAM_ID`.
+- Confirm it can perform only the V1-required actions: project lookup/create/delete for SSC-owned projects, deployment list/read/create, deployment log read, and environment variable upsert on SSC-owned projects.
+- Confirm it cannot mutate unrelated personal/team projects outside SSC ownership.
+- Confirm provider-created Git connections have automatic deployments disabled for SSC-managed projects.
+- If Vercel cannot provide fine-grained project-level token scope, document the temporary founder-operated risk and operating controls before alpha.
+
+AWS KMS:
+
+- Confirm the runtime worker identity allows `kms:GenerateDataKey` and `kms:Decrypt` only on the SSC key.
+- Confirm no key admin actions are granted to runtime workers.
+- Add encryption-context conditions for SSC namespace/workspace/app/secret context where practical.
+- Confirm key admins are separate from runtime/deployment workers.
+
+Trigger.dev:
+
+- Confirm `TRIGGER_SECRET_KEY` or equivalent task-submission credential is environment-scoped.
+- Confirm production tasks cannot be invoked from untrusted clients or customer workloads.
+- Confirm task secrets are not exposed to Vercel/customer runtime env.
+- Confirm deployment/delete task invocation requires trusted operator/API authorization.
+
+Control-plane PostgreSQL:
+
+- Confirm whether runtime workers use a DML-only role.
+- Confirm migrations use a separate schema-owner role.
+- Confirm runtime role cannot `DROP`, `ALTER`, create unsafe extensions, or bypass expected ownership controls if separation is practical before alpha.
+- Confirm backups/restores preserve encrypted secret material and KMS decryptability.
+
+Neon/provider credentials, if retained or reintroduced:
+
+- Confirm provider/admin token is control-plane only and never injected into workloads.
+- Confirm customer databases/projects are isolated per app/workspace.
+- Confirm deletion/recovery boundaries for customer database resources.
+
+## 14.3 Code-Level Alpha Blocker Check
+
+| Area | Status | Evidence |
+| --- | --- | --- |
+| Customer code isolation | PASS | Source inspection reads GitHub content and JSON/text only; customer build runs on Vercel |
+| Workload credential exposure | PASS | 15.1 safe workload headers and tests |
+| Tenant isolation | PASS for current operator flow | 15.2 ownership assertions/tests; public authz layer still not implemented |
+| Secret binding/injection | PASS | Same-app/same-workspace joins and KMS context validation |
+| Provider resource attachment | PASS | Provider operation ledger, SSC metadata, source identity checks |
+| Source path traversal | PASS | 15.4 source-boundary helper/tests |
+| Symlink handling | PASS for active GitHub API path | No local archive extraction or filesystem symlink following |
+| Source resource exhaustion | PASS | 15.4 bounded file/path/byte limits |
+| SSRF | PASS for current Vercel workload verification | Initial URL and redirect target validation |
+| Workload redirects | PASS | Manual bounded health redirects; public-access redirect validation |
+| Diagnostics/log leakage | PASS | Redaction tests and no raw body storage for workload checks |
+| Deletion | PASS for current operator flow | Idempotent delete with workspace/deletion key and provider cleanup |
+
+`CODE_LEVEL_ALPHA_BLOCKERS_REMAINING = 0`.
+
+## 14.4 Node 15 Decision
+
+`NODE_15_CODE_HARDENING = PASS`
+
+`NODE_15_PROVIDER_SCOPE_VERIFICATION = INCOMPLETE`
+
+`NODE_15_SPECIALIST_REVIEW = REQUIRED`
+
+`NODE_15_READY_FOR_SPECIALIST_REVIEW = true`
 
 ## 15. Specialist Review Questions
 
 1. Is Vercel's build/runtime isolation acceptable for hostile small customer repositories under the planned invite-only external alpha?
-2. What is the narrowest practical Vercel token/team/project scope for SSC-owned runtime mutation?
-3. Should health verification ever authenticate to provider-protected URLs, or should V1 only perform anonymous checks?
-4. What DB-level controls should enforce `app_secret_bindings.secret_id` ownership?
-5. What minimum tenant-authorization tests are required before exposing deployment actions to external users?
-6. Are GitHub App permissions limited to read-only contents/metadata and webhook access?
-7. Are Trigger workers separated enough from public API credentials and ordinary user-triggered surfaces?
-8. Are KMS IAM permissions and encryption-context conditions narrow enough?
-9. What source-size and analysis-time limits are sufficient for external alpha?
-10. What non-destructive suspension capability is acceptable before external alpha?
-11. Are current redaction rules enough for provider logs and diagnostic/timeline output?
-12. What backup/restore controls are needed for encrypted secret material in restored control-plane databases?
+2. What is the narrowest practical Vercel token/team/project scope for SSC-owned project, env, deployment, log, and delete operations?
+3. Are GitHub App permissions limited to read-only contents/metadata and only the webhook permissions SSC actually consumes?
+4. Are KMS IAM permissions limited to `GenerateDataKey`/`Decrypt`, and can encryption-context conditions be enforced without breaking replay?
+5. Are Trigger workers and task-submission credentials isolated enough from future public API credentials and customer workloads?
+6. Are 15.2 application-level tenant-boundary checks sufficient for alpha, or should DB-level composite constraints be added first?
+7. Are 15.4 workload URL and redirect controls sufficient for V1 SSRF risk, including DNS rebinding considerations under `*.vercel.app`?
+8. Is the secret lifecycle acceptable, including operator input, KMS envelope encryption, provider env injection, deletion, and backup/restore behavior?
+9. What authorization/rate-limit/delete-confirmation controls are mandatory before exposing deploy/redeploy/delete to external users?
+10. Is destructive deletion acceptable as the only emergency containment path for alpha, or is a non-destructive suspend/disable required first?
 
 ## Severity Counts
 
