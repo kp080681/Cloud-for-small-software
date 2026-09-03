@@ -38,7 +38,7 @@ Primary evidence inspected:
 | Trigger workers to GitHub App | repository metadata, tree/blob contents for exact commits | `GITHUB_APP_ID`, `GITHUB_APP_PRIVATE_KEY`, installation token | Read selected GitHub installation repositories | High; repository source disclosure and possible source pipeline compromise |
 | Trigger workers to AWS KMS | encrypted data keys, encryption context | AWS identity, `AWS_KMS_KEY_ID` | Generate/decrypt data keys for app secrets | Critical when combined with DB access; KMS alone should not reveal plaintext |
 | Trigger workers to Vercel | project create/delete, env injection, deployment create/status/log lookup | `VERCEL_TOKEN`, optional `VERCEL_TEAM_ID` | Mutate runtime projects, env vars, deployments | Critical; could affect all Vercel resources reachable by token scope |
-| Control plane to customer workload URL | health/public GET requests | currently Vercel token in health-check request; no token in public-access check | Read application HTTP response | Critical issue: customer workload can observe health-check `Authorization` header |
+| Control plane to customer workload URL | health/public GET requests | no platform credentials after 15.1; workload requests use `workload-http.mjs` safe header helpers | Read application HTTP response | Original 15.0 health-check credential leak is fixed and covered by regression tests |
 | Vercel build/runtime to customer code | source commit, app env vars, build commands | intended app secrets only | Executes customer dependency/build/runtime code in Vercel isolation | Depends on provider isolation; must not receive platform credentials |
 | Customer workload to external providers | app-specific API calls and database traffic | customer-provided app secrets | Application-specific access | Customer/app impact; not control-plane impact if boundaries hold |
 
@@ -50,7 +50,7 @@ Customer code is packaged and executed by Vercel through `execute-build.ts`, whi
 
 `CUSTOMER_CODE_EXECUTES_IN_CONTROL_PLANE = false` based on current implementation.
 
-Critical caveat: `health-check.ts` sends `Authorization: Bearer ${VERCEL_TOKEN}` to the customer deployment URL. Customer code does not execute in the control-plane process, but hostile customer code could read and exfiltrate the provider credential from the incoming request. This violates the invariant that customer runtime must never receive platform provider credentials.
+Resolved 15.1 caveat: the original packet found that `health-check.ts` sent `Authorization: Bearer ${VERCEL_TOKEN}` to the customer deployment URL. Customer code did not execute in the control-plane process, but hostile customer code could have read and exfiltrated the provider credential from the incoming request. The 15.1 fix routes health and public workload requests through `control-plane/src/workload-http.mjs`, which rejects credential-bearing workload headers and omits `Authorization`.
 
 ## 3. Tenant Isolation Matrix
 
@@ -145,9 +145,9 @@ Remaining gaps:
 
 Provider API calls use fixed Vercel/GitHub endpoints with encoded path parameters. Public verification builds its URL from Vercel project/deployment data and performs an anonymous HTTPS GET with manual redirects.
 
-Health verification requires HTTPS, but uses `provider_deployment_url` from control-plane/provider state and follows redirects. Because the URL is expected to be a Vercel deployment URL, exposure is limited in current provider-owned flow. The more serious issue is not SSRF itself, but the Vercel bearer token sent to customer code by the health checker.
+Health verification requires HTTPS, uses `provider_deployment_url` from control-plane/provider state, and follows redirects. After 15.1 it does not include platform credentials, so redirects cannot forward platform credentials from the health request. Because the URL is expected to be a Vercel deployment URL, SSRF exposure is limited in current provider-owned flow, but host/redirect validation should still be tightened before external alpha.
 
-SSRF classification: MEDIUM residual risk for health-check URL validation and redirect policy; CRITICAL credential-disclosure risk because of the health-check authorization header.
+SSRF classification: MEDIUM residual risk for health-check URL validation and redirect policy; original CRITICAL credential-disclosure risk from the health-check authorization header is resolved by 15.1.
 
 ## 9. Resource / Abuse Controls
 
@@ -177,7 +177,7 @@ Strong controls:
 
 Risks:
 
-- Health-check `Authorization` header exposes `VERCEL_TOKEN` to customer workload.
+- Historical 15.0 finding: health-check `Authorization` header exposed `VERCEL_TOKEN` to customer workload. Status: RESOLVED in 15.1 by removing credential-bearing headers from workload requests and adding regression tests in `control-plane/test/workload-http.test.mjs`.
 - Some provider error messages are stored in `error_message`; diagnostics intentionally do not expose raw `error_message`, but operator logs/Trigger output need review before external alpha.
 - Secret digest output in `set-app-secret.mjs` is avoidable sensitive metadata.
 - Local scripts depend on operator discipline not to run with verbose shell/history capture of secret env values.
@@ -232,7 +232,7 @@ The current operator scripts should be treated as administrative tools, not publ
 
 | Severity | Threat | Attacker | Precondition | Impact | Current Control | Residual Risk | Recommended Minimum Fix |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| CRITICAL | Health check leaks Vercel bearer token to hostile workload | Malicious customer repo | External workload deployed and health checked | Provider credential compromise | None; header is explicitly sent | Critical | Remove provider token from customer-facing health request; test no platform credential reaches app |
+| RESOLVED | 15.0 health check leaked Vercel bearer token to hostile workload | Malicious customer repo | External workload deployed and health checked | Provider credential compromise | 15.1 removed `Authorization` from health workload requests; `workload-http.test.mjs` proves health/public workload requests omit credentials and reject credential-bearing workload headers | Residual risk reduced to regression risk | Keep regression tests required for health/public verification changes |
 | HIGH | Cross-tenant action by guessed deployment/app/secret id if internal task exposed | External user | Public entrypoint forwards ids without authz | Cross-tenant read/write/delete | Data model has workspace ids | High until API layer exists | Add authz facade before exposing scripts/tasks |
 | HIGH | Over-scoped Vercel token mutates non-SSC projects | Attacker with token or code path bug | Token compromise or wrong project id | Broad provider damage | Deterministic runtime ids; delete identity checks | High | Verify/create least-privilege Vercel token/project scope |
 | HIGH | Cross-app secret binding through privileged bug | Malicious/buggy operator path | Binding created to another app's `secret_id` | Secret exposure to wrong app | App scoped tables | Medium-high | Add DB constraint/trigger or transactional validation and tests |
@@ -252,7 +252,6 @@ The current operator scripts should be treated as administrative tools, not publ
 
 ALPHA_BLOCKER:
 
-- Health checker sends `VERCEL_TOKEN` to the customer workload as an `Authorization` header.
 - Public/customer entrypoints do not yet exist as hardened authenticated/authorized APIs; current scripts/tasks must not be exposed as-is.
 - Specialist review of provider build/runtime isolation and credential scopes is still required by the master graph/security model.
 
@@ -295,7 +294,7 @@ ALREADY_CONTROLLED:
 
 ## Severity Counts
 
-- Critical findings: 1
+- Critical findings: 0
 - High findings: 5
 - Medium findings: 6
 - Low findings: 3
@@ -304,7 +303,7 @@ ALREADY_CONTROLLED:
 
 SSC has strong security foundations for a founder-operated internal proof: separation from workload execution, encrypted secrets, immutable deployment identity, recovery auditability, redacted diagnostics, and safe deletion. It is not yet safe for arbitrary external customer code.
 
-The highest-priority fix before external alpha is to prevent platform provider credentials from crossing into customer workload HTTP requests. The next priority is to put any future customer-facing entrypoint behind explicit authentication, authorization, rate limits, and ownership checks instead of exposing the current operator scripts/tasks directly.
+The original highest-priority credential leak found in this packet has been resolved by 15.1. The next priority is to put any future customer-facing entrypoint behind explicit authentication, authorization, rate limits, and ownership checks instead of exposing the current operator scripts/tasks directly.
 
 `NODE_15_COMPLETE = false`
 

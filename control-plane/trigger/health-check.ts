@@ -1,6 +1,7 @@
 import { task } from "@trigger.dev/sdk";
 import pg from "pg";
 import { healthAttemptAction } from "../src/deployment-recovery-rules.mjs";
+import { healthCheckRequestInit } from "../src/workload-http.mjs";
 
 const { Client } = pg;
 const TIMEOUT_MS = 8000;
@@ -68,7 +69,7 @@ export const healthCheck = task({
 
       const started=Date.now(); let httpStatus:number|null=null; let status="UNHEALTHY"; let errorCode:string|null=null;
       try {
-        const response=await fetch(checkUrl,{method:"GET",redirect:"follow",signal:AbortSignal.timeout(TIMEOUT_MS),headers:{"User-Agent":"Small-Software-Cloud-Health-Check/1.0","Authorization":process.env.VERCEL_TOKEN?`Bearer ${process.env.VERCEL_TOKEN}`:""}});
+        const response=await fetch(checkUrl,healthCheckRequestInit({signal:AbortSignal.timeout(TIMEOUT_MS)}));
         httpStatus=response.status; status=response.status>=200&&response.status<400?"HEALTHY":"UNHEALTHY"; if(status!=="HEALTHY")errorCode=`HTTP_${response.status}`; try{await response.body?.cancel()}catch{}
       } catch(error:any){errorCode=safeErrorCode(error)}
       const latencyMs=Date.now()-started;

@@ -1,6 +1,7 @@
 import { task } from "@trigger.dev/sdk";
 import pg from "pg";
 import { publicAccessRecoveryAction } from "../src/deployment-recovery-rules.mjs";
+import { publicAccessRequestInit } from "../src/workload-http.mjs";
 
 const { Client } = pg;
 const API = "https://api.vercel.com";
@@ -9,7 +10,7 @@ const BROWSER_UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36
 function teamQuery(){const teamId=process.env.VERCEL_TEAM_ID;return teamId?`?teamId=${encodeURIComponent(teamId)}`:""}
 async function vercelRequest(path:string,options:RequestInit={}){if(!process.env.VERCEL_TOKEN)throw new Error("Missing VERCEL_TOKEN");const response=await fetch(`${API}${path}`,{...options,headers:{Authorization:`Bearer ${process.env.VERCEL_TOKEN}`,"Content-Type":"application/json",...(options.headers??{})}});const text=await response.text();let body:any=null;if(text){try{body=JSON.parse(text)}catch{body=null}}if(!response.ok)throw new Error(`Vercel API ${response.status} ${response.statusText}`);return body}
 function isVercelAuthRedirect(location:string|null){if(!location)return false;try{const u=new URL(location);return u.hostname==="vercel.com"||u.hostname.endsWith(".vercel.com")}catch{return /vercel\.com/i.test(location)}}
-async function anonymousCheck(url:string){const started=Date.now();const response=await fetch(url,{method:"GET",redirect:"manual",signal:AbortSignal.timeout(8000),headers:{"User-Agent":BROWSER_UA,Accept:"text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"}});const latencyMs=Date.now()-started;const location=response.headers.get("location");const vercelAuthRedirect=isVercelAuthRedirect(location);const publiclyReachable=!vercelAuthRedirect&&response.status>=200&&response.status<400;try{await response.body?.cancel()}catch{}return{httpStatus:response.status,latencyMs,location,vercelAuthRedirect,publiclyReachable}}
+async function anonymousCheck(url:string){const started=Date.now();const response=await fetch(url,publicAccessRequestInit({signal:AbortSignal.timeout(8000),userAgent:BROWSER_UA}));const latencyMs=Date.now()-started;const location=response.headers.get("location");const vercelAuthRedirect=isVercelAuthRedirect(location);const publiclyReachable=!vercelAuthRedirect&&response.status>=200&&response.status<400;try{await response.body?.cancel()}catch{}return{httpStatus:response.status,latencyMs,location,vercelAuthRedirect,publiclyReachable}}
 
 export const configurePublicAccess=task({id:"ssc-control-plane-configure-public-access",retry:{maxAttempts:2,minTimeoutInMs:2000,maxTimeoutInMs:8000,factor:2,randomize:false},run:async(payload:{deploymentId:string})=>{
  if(!process.env.DATABASE_URL)throw new Error("Missing DATABASE_URL");const db=new Client({connectionString:process.env.DATABASE_URL});await db.connect();
