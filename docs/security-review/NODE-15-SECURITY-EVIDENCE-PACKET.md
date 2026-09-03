@@ -124,6 +124,89 @@ Gaps:
 | `TRIGGER_SECRET_KEY` | Trigger task submission from runner scripts | Unknown | Trigger only required SSC tasks/environments | NO | Unauthorized task execution |
 | Neon/control-plane DB provider credentials | Database hosting/admin | Not represented in repo | Operational admin outside app runtime | UNKNOWN | DB availability/data compromise |
 
+## 5.1 Provider Credential Least-Privilege Review
+
+15.3 audit result: no new code-level path was found that sends platform/provider credentials to customer workload URLs. Provider credentials are used for fixed provider APIs or local/Trigger control-plane operations. Provider-side credential scopes are not fully provable from repository code, so those settings remain `VERIFY_PROVIDER_SETTING` until checked in GitHub, Vercel, AWS, Trigger.dev, and the control-plane database provider.
+
+### GitHub App
+
+Current code mints GitHub App installation tokens through `createAppAuth` and uses read-oriented API calls:
+
+- `apps.getInstallation` and `apps.listReposAccessibleToInstallation` in `sync-github-installation.mjs`
+- `repos.get` and `git.getRef` in `map-github-repository.mjs` and `inspect-repository.mjs`
+- `git.getCommit` and `repos.getContent` in `prepare-build-input.ts`
+- `git.getTree` and `git.getBlob` in `detect-env-requirements.ts`
+- `git.getRef` in `create-redeployment.ts`
+
+Repository write access is not required by current SSC code. The minimum practical GitHub App permission set is metadata plus read-only contents for selected installations/repositories. Webhook permissions/settings, if used outside this repo snapshot, should be verified separately. Current app-side permission settings are `VERIFY_PROVIDER_SETTING`.
+
+`GITHUB_REPOSITORY_WRITE_REQUIRED = false`.
+
+### Vercel
+
+Current Vercel API usage is provider-control-plane traffic, not customer workload traffic:
+
+| Endpoint/Method | Code Path | Purpose | Destructive |
+| --- | --- | --- | --- |
+| `GET /v9/projects/{id-or-name}` | `provision-runtime.ts`, `configure-public-access.ts`, `create-disposable-orphan-fixture.mjs` | Runtime/project lookup and reconciliation | No |
+| `POST /v11/projects` | `provision-runtime.ts` | Create SSC-managed Vercel project with Git auto-deploy disabled | Creates provider resource |
+| `POST /v10/projects/{project}/env?upsert=true` | `apply-runtime-env.ts` | Apply app-scoped runtime environment variables | Mutates provider env |
+| `GET /v7/deployments` | `execute-build.ts`, `detect-orphan-resources.ts`, `create-disposable-orphan-fixture.mjs` | Deployment recovery/orphan inventory | No |
+| `GET /v13/deployments/{id}` | `execute-build.ts`, `reconcile-build.ts`, `configure-public-access.ts`, `detect-orphan-resources.ts`, `create-disposable-orphan-fixture.mjs` | Provider deployment status/source/public URL evidence | No |
+| `POST /v13/deployments` | `execute-build.ts`, `create-disposable-orphan-fixture.mjs` | Create SSC deployment or disposable orphan fixture | Creates provider deployment |
+| `GET /v3/deployments/{id}/events` | `ingest-build-logs.ts` | Build log/event ingestion | No |
+| `DELETE /v9/projects/{projectId}` | `delete-app.ts` | Delete SSC-owned runtime project | Destructive |
+
+The minimum practical Vercel authority is scoped to the SSC Vercel team/projects and allows project lookup/create/delete, deployment list/read/create/log read, and environment writes for SSC-owned projects. The repository cannot prove the actual token is project/team-limited rather than broad account-level, so the setting remains `VERIFY_PROVIDER_SETTING` and should be reduced before external alpha if broad.
+
+### AWS KMS
+
+`secret-store.mjs` uses only `GenerateDataKeyCommand` and `DecryptCommand` with a stable encryption context containing the SSC namespace, workspace id, app id, and secret name. No code path uses KMS admin APIs such as key creation, deletion scheduling, policy mutation, or grant management.
+
+Runtime workers do not require KMS admin permissions. Minimum IAM is `kms:GenerateDataKey` and `kms:Decrypt` on the configured key, preferably constrained to the SSC worker identity and encryption context. Actual IAM policy is `VERIFY_PROVIDER_SETTING`.
+
+`KMS_RUNTIME_ADMIN_PERMISSION_REQUIRED = false`.
+
+### Trigger.dev
+
+`TRIGGER_SECRET_KEY` is used by local runner scripts to enqueue existing Trigger tasks. Trigger workers call each other through `tasks.triggerAndWait`, and `deploy:trigger` uses the Trigger CLI. No workload HTTP request or Vercel app environment path receives the Trigger credential in current code.
+
+The blast radius of a leaked Trigger submission credential is unauthorized execution of reachable control-plane tasks, including high-impact tasks such as deploy/delete runners if the environment permits them. Task/environment scoping is `VERIFY_PROVIDER_SETTING`.
+
+### Control-Plane PostgreSQL
+
+`DATABASE_URL` is used by workers and local scripts for the control-plane system of record. The same repository also includes `apply-migration.mjs`, so the repo cannot prove whether production runtime workers use a DML-only role while migrations use a separate DDL-capable role.
+
+The control-plane database credential is not exposed to customer workloads in current code. Before external alpha, verify or separate database roles so regular Trigger workers cannot perform schema-owner operations such as `DROP`/`ALTER` if that is not already true.
+
+### Neon / Customer PostgreSQL
+
+Current active control-plane code does not contain a Neon provisioning token path. Architecture/spike docs identify Neon as the preferred managed PostgreSQL direction and show customer `DATABASE_URL` injection as an app secret. Customer database credentials are workload credentials, not provider/admin credentials, and should remain stored through the encrypted secret path.
+
+No Neon provider/admin credential exposure to customer workloads was found in current code. If Neon provisioning is reintroduced, its provider credential must stay in the control-plane environment only and be scoped to SSC-managed customer database resources.
+
+### Credential Storage And Longevity
+
+| Credential Family | Current Storage Pattern | Lifetime/Exposure Notes |
+| --- | --- | --- |
+| GitHub App private key | Local/Trigger control-plane environment | Long-lived app credential; installation tokens are minted per installation and should remain short-lived |
+| Vercel token | Local/Trigger control-plane environment | Long-lived mutation credential unless provider setting says otherwise; provider scope must be verified |
+| AWS KMS worker identity | Local/Trigger environment/provider identity | Should be limited to data-key generation and decrypt on the SSC key |
+| Trigger submission credential | Local operator environment for runner scripts | Must not be embedded in workloads or public clients |
+| Control-plane `DATABASE_URL` | Local/Trigger control-plane environment | Critical system-of-record credential; separate runtime and migration privileges if not already separated |
+| Customer app secrets | `encrypted_secrets` plus KMS envelope encryption; Vercel sensitive env after injection | App-scoped workload credentials; plaintext should remain transient |
+| Customer database URLs | Encrypted app secret and provider workload env | Workload-scoped data credential, not a platform/provider admin token |
+
+### Code-Level Enforcement Evidence
+
+- GitHub access uses installation tokens rather than broad personal access tokens.
+- Immutable source identity and deployment build inputs prevent local filesystem source substitution.
+- 15.1 `workload-http.mjs` prevents workload HTTP requests from carrying platform credentials and protects redirect paths from forwarding `Authorization`.
+- 15.2 `tenant-boundary.mjs` and runtime-env joins prevent cross-workspace/app secret injection.
+- KMS encryption context binds secret decrypt operations to namespace/workspace/app/secret identity.
+- Provider operation ledger and Vercel SSC metadata constrain deployment recovery to deterministic SSC identity.
+- Vercel Git auto-deploy is disabled/verified during SSC project creation so provider-side Git pushes do not bypass SSC orchestration.
+
 ## 6. Build Isolation
 
 Customer build commands are inferred from `package.json` but are not executed by SSC. `prepare-build-input.ts` records commands such as `npm ci` and `npm run build`; `execute-build.ts` passes them to Vercel project/deployment settings. This keeps malicious lifecycle scripts out of the control-plane process and Trigger worker runtime.
