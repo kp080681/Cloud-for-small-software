@@ -1,6 +1,6 @@
 # Control-Plane Backup + Recovery Drill
 
-Status: Node 18 drill runbook and guarded scripts. The drill was not completed in the Codex session that created this document because `DATABASE_URL`, `RESTORE_DATABASE_URL`, KMS env, `pg_dump`, `pg_restore`, and `psql` were not available on PATH/in the shell. Do not mark Node 18 complete until the disposable restore proof below has been run and recorded.
+Status: Node 18 technical evidence complete. The real SSC control-plane backup, disposable Neon restore, metadata parity verification, and read-only functional verification completed successfully. Gate 12 is still not complete because Node 15 provider-scope verification/specialist review and Node 16/17 evidence remain, and the Gate 10/11 dependency path remains authoritative.
 
 Scope: SSC-owned control-plane PostgreSQL state only. Do not restore over the active control-plane database. Do not mutate Vantage Supabase, DealOS Supabase, customer databases, live workloads, or provider runtime resources.
 
@@ -8,7 +8,7 @@ Scope: SSC-owned control-plane PostgreSQL state only. Do not restore over the ac
 
 The repository architecture identifies PostgreSQL as the control-plane system of record and Neon as the current/preferred managed PostgreSQL provider. SSC owns the application-level responsibility to ensure the control-plane database can be restored and reconciled. The database provider owns the underlying backup/PITR mechanics according to the selected plan.
 
-Current provider-level backup status must be verified in the actual provider account. Neon documentation describes instant restore / point-in-time restore within a configured history window, plus snapshot/backup workflows and pg_dump automation guidance. Treat that as provider capability, not as proof that the SSC production project is configured correctly.
+Provider-managed Neon backup/PITR should be preferred where verified in the actual provider account. PostgreSQL `pg_dump` is a second portable recovery mechanism and was proven in this drill against a disposable restore target. Treat provider PITR capability as provider-owned infrastructure evidence, not as a substitute for SSC restore validation.
 
 ## Backup Scope
 
@@ -114,7 +114,12 @@ Expected safe output:
 - `plaintextPrinted: false`
 - `decrypted: false`
 
-The scripts do not run deployment diagnostics/timeline automatically because the current diagnostic and timeline runners enqueue Trigger tasks. For a strict read-only restore proof, either point those runners at an isolated Trigger environment backed by the disposable restored DB or add a direct read-only diagnostic/timeline runner in a separate approved node.
+Final functional verification uses `verify-restored-control-plane-functional.mjs`, which connects only to `RESTORE_DATABASE_URL`, invokes no Trigger tasks, invokes no providers, writes no database rows, and reuses the production diagnostic/timeline normalization modules.
+
+```powershell
+cd "C:\Users\Dealup Admin\OneDrive - Dealup Strategies Private Limited\Documents\ChatGPT\Cloud for small Software\control-plane"
+node scripts\verify-restored-control-plane-functional.mjs
+```
 
 ## Consistency Checks
 
@@ -143,7 +148,7 @@ Unrecoverable boundary: none expected for already covered deployment lifecycle s
 
 Expected behavior: restore the latest backup/PITR point into a new control-plane database, reconnect workers after validation, then inspect diagnostics/timeline/orphan detection before mutating provider state.
 
-Manual operator action: restore database, verify schema/row counts/secret metadata, verify KMS decryptability for an explicitly safe test secret, then run read-only inventory/orphan detection.
+Manual operator action: restore database, verify schema/row counts/secret metadata, optionally verify KMS decryptability for an explicitly safe test secret, then run read-only diagnostics, timeline, inventory, and orphan detection before any provider mutation.
 
 Unrecoverable boundary: writes after the selected backup/PITR point may be absent and must be reconstructed from provider evidence where possible.
 
@@ -183,17 +188,20 @@ Unrecoverable boundary: none if provider account/resource access is retained.
 
 Do not present these as customer SLAs. They are internal engineering targets.
 
-Current practical V1 target before drill:
+Practical V1 target after this drill:
 
-- `PRACTICAL_V1_RPO`: provider PITR/history window if verified, otherwise last successful pg_dump
-- `PRACTICAL_V1_RTO`: same-day founder/operator restore for small control-plane datasets after credentials and disposable restore validation are available
+- `PRACTICAL_V1_RPO`: provider-managed Neon PITR/history window where verified; otherwise the latest successful portable `pg_dump`
+- `PRACTICAL_V1_RTO`: same-day founder/operator restore for current small control-plane datasets, validated by this drill's 102.078 second disposable restore time plus operator credential/provider checks
 
-Record actual values after the drill:
+Observed engineering timings from this drill, not public SLA commitments:
 
-- `OBSERVED_BACKUP_DURATION`
-- `OBSERVED_RESTORE_DURATION`
-- restored database size/table count
-- source/restored row-count parity
+- `OBSERVED_BACKUP_DURATION = 35.129 seconds`
+- `OBSERVED_RESTORE_DURATION = 102.078 seconds`
+- `backupBytes = 115107`
+- `backupSha256 = 9972987d7a96bff053721c3e00207d4b48e2435c4013ddc5df0bf4edd956ffde`
+- `schemaRestored = true`
+- `rowCountParity = true`
+- `restoredTableCount = 23`
 
 ## Deletion Boundary
 
@@ -211,23 +219,70 @@ Recommended V1 posture:
 
 ## Current Drill Result
 
-This Codex session did not create a backup or restore because required connection env and PostgreSQL CLI tooling were unavailable:
+The real recovery drill completed successfully.
 
-- `DATABASE_URL = MISSING`
-- `RESTORE_DATABASE_URL = MISSING`
-- `AWS_REGION = MISSING`
-- `AWS_KMS_KEY_ID = MISSING`
-- `pg_dump` not found on PATH
-- `pg_restore` not found on PATH
-- `psql` not found on PATH
+Backup evidence:
 
-Current result:
+- Source: real SSC control-plane PostgreSQL
+- Tables reported: 23
+- `backupBytes = 115107`
+- `backupSha256 = 9972987d7a96bff053721c3e00207d4b48e2435c4013ddc5df0bf4edd956ffde`
+- `observedBackupDurationMs = 35129`
+- `plaintextSecretsPrinted = false`
 
-- `CONTROL_PLANE_BACKUP_CREATED = false`
-- `DISPOSABLE_RESTORE_COMPLETED = false`
-- `SCHEMA_RESTORED = false`
-- `ROW_COUNT_PARITY = false`
-- `DIAGNOSTIC_READ_FROM_RESTORED_DB = false`
-- `TIMELINE_READ_FROM_RESTORED_DB = false`
-- `SECRET_RECOVERY_VERIFIED = false`
-- `NODE_18_BACKUP_RECOVERY_PROOF = PARTIAL`
+Restore evidence:
+
+- Target: separate disposable Neon project
+- `observedRestoreDurationMs = 102078`
+- Restore completed successfully
+- Production provider resources untouched
+
+Parity evidence:
+
+- `schemaRestored = true`
+- `rowCountParity = true`
+- all current operational control-plane tables matched
+
+Encrypted secret recovery evidence:
+
+- `encrypted_secrets` rows: 12
+- complete metadata: 12/12
+- plaintext not printed
+- recovery verification was metadata-only
+- this drill did not perform fresh KMS decrypt verification
+
+Functional restore evidence:
+
+- DealUp deployment `fc494742-a56c-4050-8df0-0a667f32efa7`: `LIVE`, diagnostic `DEPLOYMENT_LIVE`, full timeline reconstructed
+- Failed-health deployment `06581b97-14f7-43f4-8254-947d2235efb9`: `FAILED`, diagnostic `HEALTH_CHECK_FAILED`, full timeline reconstructed
+- `providerCallsExecuted = false`
+- `triggerCallsExecuted = false`
+- `databaseWritesExecuted = false`
+- `plaintextSecretsPrinted = false`
+
+Node 18 result:
+
+- `CONTROL_PLANE_BACKUP_CREATED = true`
+- `DISPOSABLE_RESTORE_COMPLETED = true`
+- `SCHEMA_RESTORED = true`
+- `ROW_COUNT_PARITY = true`
+- `FUNCTIONAL_RECOVERY_VERIFIED = true`
+- `SECRET_RECOVERY = METADATA_ONLY`
+- `PRODUCTION_STATE_MUTATED = false`
+- `PRODUCTION_PROVIDER_RESOURCES_MUTATED = false`
+- `PLAINTEXT_SECRETS_PRINTED = false`
+- `NODE_18_BACKUP_RECOVERY_PROOF = PASS`
+- `NODE_18_TECHNICAL_EVIDENCE_COMPLETE = true`
+- `GATE_12_COMPLETE = false`
+
+## Cleanup
+
+The local `control-plane/.ssc-backups/` directory contains real control-plane backup data, including encrypted secret material. It is gitignored and must not be committed.
+
+After review, the operator may remove the local backup artifact with:
+
+```powershell
+Remove-Item -Recurse -Force ".\control-plane\.ssc-backups"
+```
+
+The disposable Neon restore project contains restored production control-plane metadata and should be deleted manually after the drill evidence is accepted.
