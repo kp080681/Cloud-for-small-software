@@ -2,35 +2,90 @@ function numberOrNull(value) {
   return value === null || value === undefined ? null : Number(value);
 }
 
-export async function loadDeploymentDiagnosticContext(db, deploymentId, { eventLimit = 25 } = {}) {
-  const deploymentResult = await db.query(
-    `SELECT d.id,
-            d.deployment_key,
-            d.app_id,
-            d.status,
-            d.source_commit_sha,
-            d.source_branch,
-            d.runtime_project_id,
-            d.provider_deployment_id,
-            d.live_url,
-            d.error_code,
-            d.created_at,
-            d.queued_at,
-            d.started_at,
-            d.updated_at,
-            d.finished_at,
-            a.slug AS app_slug,
-            COALESCE(p.policy_tier,'starter') AS policy_tier,
-            COALESCE(p.max_build_minutes,15) AS max_build_minutes,
-            COALESCE(p.max_health_attempts,3) AS max_health_attempts
-       FROM deployments d
-       JOIN apps a ON a.id = d.app_id
-       LEFT JOIN app_resource_policies p ON p.app_id = d.app_id
-      WHERE d.id = $1`,
-    [deploymentId],
-  );
+function nowMs() {
+  return Number(process.hrtime.bigint() / 1000000n);
+}
+
+function canRunIndependentQueriesConcurrently(db) {
+  return typeof db?.query === "function"
+    && typeof db?.connect === "function"
+    && Number.isInteger(db.totalCount)
+    && Number.isInteger(db.idleCount)
+    && Number.isInteger(db.waitingCount);
+}
+
+async function measuredQuery(db, query, queryObserver) {
+  const started = nowMs();
+  const result = await db.query(query.text, query.values);
+  queryObserver?.({
+    label: query.label,
+    durationMs: nowMs() - started,
+    rowCount: result.rowCount,
+  });
+  return result;
+}
+
+async function runIndependentQueries(db, queries, queryObserver) {
+  if (canRunIndependentQueriesConcurrently(db)) {
+    return Promise.all(queries.map((query) => measuredQuery(db, query, queryObserver)));
+  }
+
+  const results = [];
+  for (const query of queries) {
+    results.push(await measuredQuery(db, query, queryObserver));
+  }
+  return results;
+}
+
+export async function loadDeploymentDiagnosticContext(db, deploymentId, { eventLimit = 25, queryObserver = null } = {}) {
+  const deploymentResult = await measuredQuery(db, {
+    label: "deployment",
+    text: `SELECT d.id,
+                  d.deployment_key,
+                  d.app_id,
+                  d.status,
+                  d.source_commit_sha,
+                  d.source_branch,
+                  d.runtime_project_id,
+                  d.provider_deployment_id,
+                  d.live_url,
+                  d.error_code,
+                  d.created_at,
+                  d.queued_at,
+                  d.started_at,
+                  d.updated_at,
+                  d.finished_at,
+                  a.slug AS app_slug,
+                  COALESCE(p.policy_tier,'starter') AS policy_tier,
+                  COALESCE(p.max_build_minutes,15) AS max_build_minutes,
+                  COALESCE(p.max_health_attempts,3) AS max_health_attempts
+             FROM deployments d
+             JOIN apps a ON a.id = d.app_id
+             LEFT JOIN app_resource_policies p ON p.app_id = d.app_id
+            WHERE d.id = $1`,
+    values: [deploymentId],
+  }, queryObserver);
   if (deploymentResult.rowCount === 0) throw new Error(`Deployment not found: ${deploymentId}`);
   const deployment = deploymentResult.rows[0];
+
+  const eventQuery = eventLimit === null
+    ? {
+      label: "events",
+      text: `SELECT id, event_type, from_status, to_status, metadata, created_at
+               FROM deployment_events
+              WHERE deployment_id = $1
+              ORDER BY created_at DESC, id DESC`,
+      values: [deploymentId],
+    }
+    : {
+      label: "events",
+      text: `SELECT id, event_type, from_status, to_status, metadata, created_at
+               FROM deployment_events
+              WHERE deployment_id = $1
+              ORDER BY created_at DESC, id DESC
+              LIMIT $2`,
+      values: [deploymentId, eventLimit],
+    };
 
   const [
     eventResult,
@@ -41,78 +96,70 @@ export async function loadDeploymentDiagnosticContext(db, deploymentId, { eventL
     envSnapshotResult,
     logCountResult,
     operationResult,
-  ] = await Promise.all([
-    eventLimit === null
-      ? db.query(
-        `SELECT id, event_type, from_status, to_status, metadata, created_at
-           FROM deployment_events
-          WHERE deployment_id = $1
-          ORDER BY created_at DESC, id DESC`,
-        [deploymentId],
-      )
-      : db.query(
-        `SELECT id, event_type, from_status, to_status, metadata, created_at
-           FROM deployment_events
-          WHERE deployment_id = $1
-          ORDER BY created_at DESC, id DESC
-          LIMIT $2`,
-        [deploymentId, eventLimit],
-      ),
-    db.query(
-      `SELECT provider, provider_deployment_id, provider_deployment_url, source_commit_sha, status, updated_at
-         FROM deployment_builds
-        WHERE deployment_id = $1`,
-      [deploymentId],
-    ),
-    db.query(
-      `SELECT attempt_number, status, http_status, latency_ms, error_code, checked_at
-         FROM deployment_health_checks
-        WHERE deployment_id = $1
-        ORDER BY checked_at DESC
-        LIMIT 1`,
-      [deploymentId],
-    ),
-    db.query(
-      `SELECT count(*)::int AS count
-         FROM deployment_health_checks
-        WHERE deployment_id = $1`,
-      [deploymentId],
-    ),
-    db.query(
-      `SELECT r.env_key, r.required, b.id IS NOT NULL AS configured
-         FROM app_env_requirements r
-         LEFT JOIN app_secret_bindings b
-           ON b.app_id = r.app_id
-          AND b.env_key = r.env_key
-          AND b.target_environment = 'production'
-        WHERE r.app_id = $1
-          AND r.required = true
-        ORDER BY r.env_key`,
-      [deployment.app_id],
-    ),
-    db.query(
-      `SELECT id, detected_count, scanned_file_count, skipped_file_count, detector_version
-         FROM deployment_env_detection_snapshots
-        WHERE deployment_id = $1`,
-      [deploymentId],
-    ),
-    db.query(
-      `SELECT count(*)::int AS total,
-              count(*) FILTER (WHERE severity = 'error')::int AS errors
-         FROM deployment_logs
-        WHERE deployment_id = $1
-          AND source = 'build'`,
-      [deploymentId],
-    ),
-    db.query(
-      `SELECT id, operation_type, provider, source_commit_sha, provider_project_id, provider_resource_id, status, updated_at
-         FROM deployment_provider_operations
-        WHERE deployment_id = $1
-        ORDER BY updated_at DESC
-        LIMIT 1`,
-      [deploymentId],
-    ),
-  ]);
+  ] = await runIndependentQueries(db, [
+    eventQuery,
+    {
+      label: "build",
+      text: `SELECT provider, provider_deployment_id, provider_deployment_url, source_commit_sha, status, updated_at
+               FROM deployment_builds
+              WHERE deployment_id = $1`,
+      values: [deploymentId],
+    },
+    {
+      label: "latest_health",
+      text: `SELECT attempt_number, status, http_status, latency_ms, error_code, checked_at
+               FROM deployment_health_checks
+              WHERE deployment_id = $1
+              ORDER BY checked_at DESC
+              LIMIT 1`,
+      values: [deploymentId],
+    },
+    {
+      label: "health_count",
+      text: `SELECT count(*)::int AS count
+               FROM deployment_health_checks
+              WHERE deployment_id = $1`,
+      values: [deploymentId],
+    },
+    {
+      label: "required_env",
+      text: `SELECT r.env_key, r.required, b.id IS NOT NULL AS configured
+               FROM app_env_requirements r
+               LEFT JOIN app_secret_bindings b
+                 ON b.app_id = r.app_id
+                AND b.env_key = r.env_key
+                AND b.target_environment = 'production'
+              WHERE r.app_id = $1
+                AND r.required = true
+              ORDER BY r.env_key`,
+      values: [deployment.app_id],
+    },
+    {
+      label: "env_snapshot",
+      text: `SELECT id, detected_count, scanned_file_count, skipped_file_count, detector_version
+               FROM deployment_env_detection_snapshots
+              WHERE deployment_id = $1`,
+      values: [deploymentId],
+    },
+    {
+      label: "build_log_count",
+      text: `SELECT count(*)::int AS total,
+                    count(*) FILTER (WHERE severity = 'error')::int AS errors
+               FROM deployment_logs
+              WHERE deployment_id = $1
+                AND source = 'build'`,
+      values: [deploymentId],
+    },
+    {
+      label: "provider_operation",
+      text: `SELECT id, operation_type, provider, source_commit_sha, provider_project_id, provider_resource_id, status, updated_at
+               FROM deployment_provider_operations
+              WHERE deployment_id = $1
+              ORDER BY updated_at DESC
+              LIMIT 1`,
+      values: [deploymentId],
+    },
+  ], queryObserver);
 
   const requiredEnv = envResult.rows.map((row) => ({
     envKey: row.env_key,

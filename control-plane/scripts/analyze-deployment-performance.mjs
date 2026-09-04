@@ -4,7 +4,7 @@ import { normalizeDeploymentDiagnostic } from "../src/deployment-diagnostics.mjs
 import { normalizeDeploymentTimeline } from "../src/deployment-timeline.mjs";
 import { normalizeDeploymentPerformance, summarizeReadTimings } from "../src/deployment-performance.mjs";
 
-const { Client } = pg;
+const { Pool } = pg;
 
 const DEPLOYMENTS = [
   { label: "DealUp", deploymentId: "fc494742-a56c-4050-8df0-0a667f32efa7" },
@@ -29,8 +29,8 @@ async function timed(label, fn) {
 }
 
 async function connect() {
-  const db = new Client({ connectionString: requireEnv("DATABASE_URL") });
-  await db.connect();
+  const db = new Pool({ connectionString: requireEnv("DATABASE_URL"), max: 9 });
+  await db.query("SELECT 1");
   return db;
 }
 
@@ -71,41 +71,68 @@ async function publicLatencySample(url) {
   }
 }
 
-const db = await connect();
+const connectionRead = await timed("database connection", connect);
+const db = connectionRead.result;
 
 try {
   const deployments = [];
   const readSamples = [];
   const runtimeLatencySamples = [];
+  const queryInstrumentation = [];
 
   for (const item of DEPLOYMENTS) {
+    const shouldTraceQueries = item.label === "DealUp";
     const diagnosticRead = await timed(`${item.label} diagnostic`, async () => {
-      const context = await loadDeploymentDiagnosticContext(db, item.deploymentId);
+      const querySamples = [];
+      const context = await loadDeploymentDiagnosticContext(db, item.deploymentId, {
+        queryObserver: shouldTraceQueries ? (sample) => querySamples.push(sample) : null,
+      });
       const diagnostic = normalizeDeploymentDiagnostic(context);
+      if (shouldTraceQueries) {
+        queryInstrumentation.push({
+          label: `${item.label} diagnostic query detail`,
+          sqlRoundTrips: querySamples.length,
+          sequential: false,
+          querySamples,
+        });
+      }
       return { context, diagnostic };
     });
     readSamples.push({ label: diagnosticRead.label, durationMs: diagnosticRead.durationMs });
 
     const timelineRead = await timed(`${item.label} timeline`, async () => {
-      const context = await loadDeploymentDiagnosticContext(db, item.deploymentId, { eventLimit: null });
+      const querySamples = [];
+      const context = await loadDeploymentDiagnosticContext(db, item.deploymentId, {
+        eventLimit: null,
+        queryObserver: shouldTraceQueries ? (sample) => querySamples.push(sample) : null,
+      });
       const diagnostic = normalizeDeploymentDiagnostic(context);
-      return normalizeDeploymentTimeline(context, diagnostic);
+      const timeline = normalizeDeploymentTimeline(context, diagnostic);
+      if (shouldTraceQueries) {
+        queryInstrumentation.push({
+          label: `${item.label} timeline query detail`,
+          sqlRoundTrips: querySamples.length,
+          sequential: false,
+          querySamples,
+        });
+      }
+      return { context, diagnostic, timeline };
     });
     readSamples.push({ label: timelineRead.label, durationMs: timelineRead.durationMs });
 
     const lookupRead = await timed(`${item.label} lookup`, () => simpleLookup(db, item.deploymentId));
     readSamples.push({ label: lookupRead.label, durationMs: lookupRead.durationMs });
 
-    const performance = normalizeDeploymentPerformance(timelineRead.result);
+    const performance = normalizeDeploymentPerformance(timelineRead.result.context);
     deployments.push({
       label: item.label,
       ...performance,
-      currentStatus: timelineRead.result.currentStatus,
+      currentStatus: timelineRead.result.timeline.currentStatus,
       diagnosticCode: timelineRead.result.diagnostic.code,
       diagnosticSeverity: timelineRead.result.diagnostic.severity,
     });
 
-    if (timelineRead.result.currentStatus === "LIVE" && timelineRead.result.diagnostic.evidence?.liveUrl) {
+    if (timelineRead.result.timeline.currentStatus === "LIVE" && timelineRead.result.diagnostic.evidence?.liveUrl) {
       for (let sample = 1; sample <= 3; sample += 1) {
         runtimeLatencySamples.push({
           label: item.label,
@@ -127,6 +154,14 @@ try {
       maxMs: readSummary.maxMs,
       sampleCount: readSummary.count,
     },
+    connectionSetupMs: connectionRead.durationMs,
+    steadyStateReadSamples: readSamples,
+    steadyStateReadSummary: {
+      p50Ms: readSummary.p50Ms,
+      maxMs: readSummary.maxMs,
+      sampleCount: readSummary.count,
+    },
+    queryInstrumentation,
     runtimeLatencySamples,
     architecture: {
       sscRuntimeProxyPresent: false,
