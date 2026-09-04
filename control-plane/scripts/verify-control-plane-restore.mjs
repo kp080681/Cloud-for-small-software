@@ -20,11 +20,20 @@ const IMPORTANT_TABLES = [
   "deployment_logs",
   "app_deletions",
   "app_resource_policies",
-  "redeployments",
   "deployment_env_detection_snapshots",
   "deployment_env_requirement_detections",
   "deployment_provider_operations",
 ];
+
+function publicTableIdentifier(table) {
+  if (!IMPORTANT_TABLES.includes(table) && table !== "encrypted_secrets") {
+    throw new Error(`Unexpected table identifier: ${table}`);
+  }
+  if (!/^[a-z_][a-z0-9_]*$/.test(table)) {
+    throw new Error(`Unsafe table identifier: ${table}`);
+  }
+  return `public.${table}`;
+}
 
 function requireEnv(name) {
   const value = process.env[name];
@@ -63,7 +72,7 @@ async function tableSummary(db, table) {
     [table],
   );
   if (hasCreatedAt.rowCount === 1) {
-    const result = await db.query(`SELECT count(*)::int AS row_count, min(created_at) AS min_created_at, max(created_at) AS max_created_at FROM ${table}`);
+    const result = await db.query(`SELECT count(*)::int AS row_count, min(created_at) AS min_created_at, max(created_at) AS max_created_at FROM ${publicTableIdentifier(table)}`);
     return {
       table,
       exists: true,
@@ -72,7 +81,7 @@ async function tableSummary(db, table) {
       maxCreatedAt: result.rows[0].max_created_at,
     };
   }
-  const result = await db.query(`SELECT count(*)::int AS row_count FROM ${table}`);
+  const result = await db.query(`SELECT count(*)::int AS row_count FROM ${publicTableIdentifier(table)}`);
   return { table, exists: true, rowCount: result.rows[0].row_count, minCreatedAt: null, maxCreatedAt: null };
 }
 
@@ -90,7 +99,7 @@ async function secretMetadataSummary(db) {
                 AND kms_key_id IS NOT NULL
                 AND encryption_context IS NOT NULL
             )::int AS complete_metadata_count
-       FROM encrypted_secrets`,
+       FROM ${publicTableIdentifier("encrypted_secrets")}`,
   );
   return {
     tableExists: true,
