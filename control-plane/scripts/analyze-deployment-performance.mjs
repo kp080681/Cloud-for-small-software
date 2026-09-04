@@ -12,6 +12,8 @@ const DEPLOYMENTS = [
   { label: "Recovery Test LIVE", deploymentId: "38a1dbc8-e200-45ae-9b42-a589ceb914dc" },
 ];
 
+const REPRESENTATIVE_DEPLOYMENT = DEPLOYMENTS[0];
+
 function requireEnv(name) {
   const value = process.env[name];
   if (!value) throw new Error(`Missing required environment variable: ${name}`);
@@ -46,6 +48,22 @@ async function simpleLookup(db, deploymentId) {
   return result.rows[0];
 }
 
+async function readDiagnostic(db, deploymentId, queryObserver = null) {
+  const context = await loadDeploymentDiagnosticContext(db, deploymentId, { queryObserver });
+  const diagnostic = normalizeDeploymentDiagnostic(context);
+  return { context, diagnostic };
+}
+
+async function readTimeline(db, deploymentId, queryObserver = null) {
+  const context = await loadDeploymentDiagnosticContext(db, deploymentId, {
+    eventLimit: null,
+    queryObserver,
+  });
+  const diagnostic = normalizeDeploymentDiagnostic(context);
+  const timeline = normalizeDeploymentTimeline(context, diagnostic);
+  return { context, diagnostic, timeline };
+}
+
 async function publicLatencySample(url) {
   if (!url) return null;
   const started = nowMs();
@@ -76,52 +94,65 @@ const db = connectionRead.result;
 
 try {
   const deployments = [];
-  const readSamples = [];
+  const steadyStateDiagnosticSamples = [];
+  const steadyStateTimelineSamples = [];
+  const steadyStateLookupSamples = [];
   const runtimeLatencySamples = [];
   const queryInstrumentation = [];
+
+  const coldStartQuerySamples = [];
+  const coldStartRead = await timed(`${REPRESENTATIVE_DEPLOYMENT.label} cold-start diagnostic`, () => (
+    readDiagnostic(db, REPRESENTATIVE_DEPLOYMENT.deploymentId, (sample) => coldStartQuerySamples.push(sample))
+  ));
+  const coldStart = {
+    label: coldStartRead.label,
+    durationMs: coldStartRead.durationMs,
+    sqlRoundTrips: coldStartQuerySamples.length,
+    querySamples: coldStartQuerySamples,
+  };
 
   for (const item of DEPLOYMENTS) {
     const shouldTraceQueries = item.label === "DealUp";
     const diagnosticRead = await timed(`${item.label} diagnostic`, async () => {
       const querySamples = [];
-      const context = await loadDeploymentDiagnosticContext(db, item.deploymentId, {
-        queryObserver: shouldTraceQueries ? (sample) => querySamples.push(sample) : null,
-      });
-      const diagnostic = normalizeDeploymentDiagnostic(context);
+      const diagnosticResult = await readDiagnostic(
+        db,
+        item.deploymentId,
+        shouldTraceQueries ? (sample) => querySamples.push(sample) : null,
+      );
       if (shouldTraceQueries) {
         queryInstrumentation.push({
-          label: `${item.label} diagnostic query detail`,
+          label: `${item.label} steady-state diagnostic query detail`,
           sqlRoundTrips: querySamples.length,
           sequential: false,
           querySamples,
         });
       }
-      return { context, diagnostic };
+      return diagnosticResult;
     });
-    readSamples.push({ label: diagnosticRead.label, durationMs: diagnosticRead.durationMs });
+    steadyStateDiagnosticSamples.push({ label: diagnosticRead.label, durationMs: diagnosticRead.durationMs });
 
     const timelineRead = await timed(`${item.label} timeline`, async () => {
       const querySamples = [];
-      const context = await loadDeploymentDiagnosticContext(db, item.deploymentId, {
-        eventLimit: null,
-        queryObserver: shouldTraceQueries ? (sample) => querySamples.push(sample) : null,
-      });
-      const diagnostic = normalizeDeploymentDiagnostic(context);
-      const timeline = normalizeDeploymentTimeline(context, diagnostic);
+      const timelineResult = await readTimeline(
+        db,
+        item.deploymentId,
+        shouldTraceQueries ? (sample) => querySamples.push(sample) : null,
+      );
       if (shouldTraceQueries) {
         queryInstrumentation.push({
-          label: `${item.label} timeline query detail`,
+          label: `${item.label} steady-state timeline query detail`,
           sqlRoundTrips: querySamples.length,
           sequential: false,
           querySamples,
         });
       }
-      return { context, diagnostic, timeline };
+      return timelineResult;
     });
-    readSamples.push({ label: timelineRead.label, durationMs: timelineRead.durationMs });
+    steadyStateTimelineSamples.push({ label: timelineRead.label, durationMs: timelineRead.durationMs });
 
     const lookupRead = await timed(`${item.label} lookup`, () => simpleLookup(db, item.deploymentId));
-    readSamples.push({ label: lookupRead.label, durationMs: lookupRead.durationMs });
+    steadyStateLookupSamples.push({ label: lookupRead.label, durationMs: lookupRead.durationMs });
 
     const performance = normalizeDeploymentPerformance(timelineRead.result.context);
     deployments.push({
@@ -143,11 +174,20 @@ try {
     }
   }
 
+  const readSamples = [
+    ...steadyStateDiagnosticSamples,
+    ...steadyStateTimelineSamples,
+    ...steadyStateLookupSamples,
+  ];
   const readSummary = summarizeReadTimings(readSamples);
+  const diagnosticSummary = summarizeReadTimings(steadyStateDiagnosticSamples);
+  const timelineSummary = summarizeReadTimings(steadyStateTimelineSamples);
+  const lookupSummary = summarizeReadTimings(steadyStateLookupSamples);
 
   console.log(JSON.stringify({
     result: "NODE_17_PERFORMANCE_ANALYSIS",
     deployments,
+    coldStart,
     controlPlaneReadSamples: readSamples,
     controlPlaneReadSummary: {
       p50Ms: readSummary.p50Ms,
@@ -155,11 +195,30 @@ try {
       sampleCount: readSummary.count,
     },
     connectionSetupMs: connectionRead.durationMs,
+    coldStartMs: coldStart.durationMs,
     steadyStateReadSamples: readSamples,
     steadyStateReadSummary: {
       p50Ms: readSummary.p50Ms,
       maxMs: readSummary.maxMs,
       sampleCount: readSummary.count,
+    },
+    steadyStateDiagnosticSamples,
+    steadyStateDiagnosticSummary: {
+      p50Ms: diagnosticSummary.p50Ms,
+      maxMs: diagnosticSummary.maxMs,
+      sampleCount: diagnosticSummary.count,
+    },
+    steadyStateTimelineSamples,
+    steadyStateTimelineSummary: {
+      p50Ms: timelineSummary.p50Ms,
+      maxMs: timelineSummary.maxMs,
+      sampleCount: timelineSummary.count,
+    },
+    steadyStateLookupSamples,
+    steadyStateLookupSummary: {
+      p50Ms: lookupSummary.p50Ms,
+      maxMs: lookupSummary.maxMs,
+      sampleCount: lookupSummary.count,
     },
     queryInstrumentation,
     runtimeLatencySamples,
