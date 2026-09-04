@@ -30,9 +30,9 @@ function assertTruthy(value, label) {
 async function connectRestoredDb() {
   const db = new Client({
     connectionString: requireEnv("RESTORE_DATABASE_URL"),
-    options: "-c search_path=public",
   });
   await db.connect();
+  await db.query("SET search_path TO public");
   return db;
 }
 
