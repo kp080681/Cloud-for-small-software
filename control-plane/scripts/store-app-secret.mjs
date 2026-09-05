@@ -1,11 +1,11 @@
 import pg from "pg";
+import { requireWorkspaceId, resolveAppTarget } from "../src/operator-targeting.mjs";
 import { encryptAppSecret } from "../src/secret-store.mjs";
 
 const required = [
   "DATABASE_URL",
+  "CONTROL_PLANE_WORKSPACE_ID",
   "CONTROL_PLANE_APP_ID",
-  "CONTROL_PLANE_SECRET_NAME",
-  "CONTROL_PLANE_SECRET_VALUE",
   "AWS_REGION",
   "AWS_KMS_KEY_ID",
 ];
@@ -17,21 +17,13 @@ for (const name of required) {
 const { Client } = pg;
 const db = new Client({ connectionString: process.env.DATABASE_URL });
 await db.connect();
+const workspaceId = requireWorkspaceId();
 
 try {
-  const appResult = await db.query(
-    `SELECT id, workspace_id, name
-       FROM apps
-      WHERE id = $1
-      LIMIT 1`,
-    [process.env.CONTROL_PLANE_APP_ID],
-  );
-
-  if (appResult.rowCount === 0) {
-    throw new Error(`App not found: ${process.env.CONTROL_PLANE_APP_ID}`);
+  const app = await resolveAppTarget(db, { workspaceId, appId: process.env.CONTROL_PLANE_APP_ID });
+  for (const name of ["CONTROL_PLANE_SECRET_NAME", "CONTROL_PLANE_SECRET_VALUE"]) {
+    if (!process.env[name]) throw new Error(`Missing required environment variable: ${name}`);
   }
-
-  const app = appResult.rows[0];
   const stored = await encryptAppSecret(db, {
     workspaceId: app.workspace_id,
     appId: app.id,

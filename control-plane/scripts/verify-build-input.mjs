@@ -1,13 +1,27 @@
 import pg from "pg";
+import {
+  optionalAppId,
+  optionalDeploymentId,
+  requireAppSlug,
+  requireWorkspaceId,
+  resolveDeploymentTarget,
+  resolveLatestDeploymentForAppTarget,
+} from "../src/operator-targeting.mjs";
 
 if (!process.env.DATABASE_URL) throw new Error("Missing required environment variable: DATABASE_URL");
 
-const appSlug = process.env.CONTROL_PLANE_APP_SLUG || "vantage";
+const deploymentId = optionalDeploymentId();
+const workspaceId = deploymentId ? process.env.CONTROL_PLANE_WORKSPACE_ID?.trim?.() : requireWorkspaceId();
+const appId = process.env.CONTROL_PLANE_APP_ID ? optionalAppId() : null;
+const appSlug = deploymentId || appId ? process.env.CONTROL_PLANE_APP_SLUG?.trim?.() || null : requireAppSlug();
 const { Client } = pg;
 const db = new Client({ connectionString: process.env.DATABASE_URL });
 await db.connect();
 
 try {
+  const deployment = deploymentId
+    ? await resolveDeploymentTarget(db, { deploymentId, workspaceId, appId, slug: appSlug })
+    : await resolveLatestDeploymentForAppTarget(db, { workspaceId, appId, slug: appSlug });
   const result = await db.query(
     `SELECT d.id AS deployment_id,
             d.deployment_key,
@@ -27,18 +41,15 @@ try {
        FROM deployments d
        JOIN apps a ON a.id = d.app_id
        LEFT JOIN deployment_build_inputs b ON b.deployment_id = d.id
-      WHERE lower(a.slug) = lower($1)
-      ORDER BY d.created_at DESC
-      LIMIT 1`,
-    [appSlug],
+      WHERE d.id = $1`,
+    [deployment.id],
   );
 
-  if (result.rowCount === 0) throw new Error(`No deployment found for app slug: ${appSlug}`);
   const row = result.rows[0];
 
   console.log(JSON.stringify({
     result: row.manifest_sha256 ? "NODE_04_7_BUILD_INPUT_VERIFIED" : "NODE_04_7_BUILD_INPUT_NOT_READY",
-    appSlug,
+    appSlug: deployment.app_slug,
     deploymentId: row.deployment_id,
     deploymentKey: row.deployment_key,
     status: row.status,

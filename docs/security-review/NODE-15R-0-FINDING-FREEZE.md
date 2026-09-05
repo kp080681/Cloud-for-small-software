@@ -58,7 +58,7 @@ Notes: this is the highest-priority remediation because it crosses tenant, secre
 
 Reviewer claim: mutating operator scripts select by slug alone and can operate on the wrong workspace when slugs collide.
 
-Classification: `CONFIRMED`
+Classification: `CONFIRMED`; `RESOLVED_BY_15R_2`
 
 Exact files/functions:
 
@@ -74,7 +74,11 @@ Observed result: founder intending Workspace B can select Workspace A if both ha
 
 Concrete consequence: wrong app secret update/import, wrong app delete, wrong redeploy, wrong targeted worker rerun, or wrong verification command.
 
-Required next node: `15R.1 Provider Project Identity / Slug Collision`
+Resolution: Node `15R.2 Tenant-Safe Operator Targeting` adds a shared operator target resolver and rewires mutating operator scripts so slug lookup requires workspace identity, app-id targeting is workspace-scoped, deployment-id targeting derives app/workspace from the deployment and verifies optional caller-supplied ownership, and read-only slug inspection refuses ambiguity instead of choosing one row.
+
+Regression evidence: `control-plane/test/operator-targeting.test.mjs` covers same-slug apps in different workspaces, missing workspace refusal, delete/redeploy targeting, app/workspace mismatch refusal, no-match refusal, app-id/slug mismatch refusal, read-only ambiguity refusal, and legitimate single-workspace flow.
+
+Required next node: `15R.3 Production Tenant-Boundary Wiring`
 
 Provider verification required? No.
 
@@ -487,7 +491,7 @@ Notes: this is a product-contract gap more than a hostile-code bug, but it is al
 | Frozen ID | Source Finding | Classification | Required Next Node | Summary |
 | --- | --- | --- | --- | --- |
 | `15R-F01` | P0-A | `CONFIRMED`; `RESOLVED_BY_15R_1` | `15R.1` | Slug-only Vercel project naming/adoption crosses workspaces |
-| `15R-F02` | P0-B | `CONFIRMED` | `15R.1` | Mutating operator scripts target slug without workspace identity |
+| `15R-F02` | P0-B | `CONFIRMED`; `RESOLVED_BY_15R_2` | `15R.2` | Mutating operator scripts now require workspace-scoped app targeting or immutable deployment id targeting |
 | `15R-F03` | Tenant-boundary assertion wiring | `PARTIALLY_CONFIRMED` | `15R.1` | Assertions exist, but production use is limited |
 | `15R-F04` | P1-A | `CONFIRMED` | `15R.2` | Concurrent build execution can double-create provider deployments |
 | `15R-F05` | P1-B | `CONFIRMED` | `15R.2` | Delete/provision and abandon/build races can leave residual provider state |
@@ -509,7 +513,7 @@ No speculative remediation nodes were added beyond reproduced findings. The next
 
 `P0_A_PROJECT_ADOPTION = CONFIRMED`
 
-`P0_B_OPERATOR_TARGETING = CONFIRMED`
+`P0_B_OPERATOR_TARGETING = RESOLVED_BY_15R_2`
 
 `TENANT_ASSERTIONS_PRODUCTION_WIRING = PARTIAL`
 

@@ -1,6 +1,7 @@
 import { createAppAuth } from "@octokit/auth-app";
 import { Octokit } from "@octokit/rest";
 import pg from "pg";
+import { requireWorkspaceId } from "../src/operator-targeting.mjs";
 
 const required = [
   "DATABASE_URL",
@@ -37,8 +38,6 @@ await db.connect();
 try {
   await db.query("BEGIN");
 
-  const workspaceName = process.env.CONTROL_PLANE_WORKSPACE_NAME || "Internal Alpha";
-
   // If the installation is already mapped, its workspace is canonical.
   const existingInstallation = await db.query(
     `SELECT workspace_id
@@ -56,26 +55,37 @@ try {
     );
     workspace = workspaceResult.rows[0];
   } else {
-    // Internal bootstrap path: reuse the oldest workspace with this name before creating one.
-    const workspaceResult = await db.query(
-      `SELECT id, name
-         FROM workspaces
-        WHERE name = $1
-        ORDER BY created_at ASC
-        LIMIT 1`,
-      [workspaceName],
-    );
-
-    if (workspaceResult.rowCount > 0) {
+    if (process.env.SSC_ALLOW_LOCAL_BOOTSTRAP_WORKSPACE_FALLBACK !== "true") {
+      const workspaceId = requireWorkspaceId();
+      const workspaceResult = await db.query(
+        `SELECT id, name FROM workspaces WHERE id = $1`,
+        [workspaceId],
+      );
+      if (workspaceResult.rowCount === 0) throw new Error(`Workspace not found: ${workspaceId}`);
       workspace = workspaceResult.rows[0];
     } else {
-      const created = await db.query(
-        `INSERT INTO workspaces (name)
-         VALUES ($1)
-         RETURNING id, name`,
+      const workspaceName = process.env.CONTROL_PLANE_WORKSPACE_NAME || "Internal Alpha";
+      // Explicit local/bootstrap-only path retained for first workspace setup.
+      const workspaceResult = await db.query(
+        `SELECT id, name
+           FROM workspaces
+          WHERE name = $1
+          ORDER BY created_at ASC
+          LIMIT 1`,
         [workspaceName],
       );
-      workspace = created.rows[0];
+
+      if (workspaceResult.rowCount > 0) {
+        workspace = workspaceResult.rows[0];
+      } else {
+        const created = await db.query(
+          `INSERT INTO workspaces (name)
+           VALUES ($1)
+           RETURNING id, name`,
+          [workspaceName],
+        );
+        workspace = created.rows[0];
+      }
     }
   }
 

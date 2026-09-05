@@ -1,11 +1,25 @@
 import pg from "pg";
+import {
+  optionalAppId,
+  optionalDeploymentId,
+  requireAppSlug,
+  requireWorkspaceId,
+  resolveDeploymentTarget,
+  resolveLatestDeploymentForAppTarget,
+} from "../src/operator-targeting.mjs";
 
 if (!process.env.DATABASE_URL) throw new Error("Missing required environment variable: DATABASE_URL");
-const appSlug = process.env.CONTROL_PLANE_APP_SLUG || "vantage";
+const deploymentId = optionalDeploymentId();
+const workspaceId = deploymentId ? process.env.CONTROL_PLANE_WORKSPACE_ID?.trim?.() : requireWorkspaceId();
+const appId = process.env.CONTROL_PLANE_APP_ID ? optionalAppId() : null;
+const appSlug = deploymentId || appId ? process.env.CONTROL_PLANE_APP_SLUG?.trim?.() || null : requireAppSlug();
 const { Client } = pg;
 const db = new Client({ connectionString: process.env.DATABASE_URL });
 await db.connect();
 try {
+  const deployment = deploymentId
+    ? await resolveDeploymentTarget(db, { deploymentId, workspaceId, appId, slug: appSlug })
+    : await resolveLatestDeploymentForAppTarget(db, { workspaceId, appId, slug: appSlug });
   const result = await db.query(
     `SELECT r.env_key, r.required, r.public, r.source,
             b.id IS NOT NULL AS configured
@@ -15,9 +29,9 @@ try {
          ON b.app_id = r.app_id
         AND b.env_key = r.env_key
         AND b.target_environment = 'production'
-      WHERE lower(a.slug) = lower($1)
+      WHERE r.app_id = $1
       ORDER BY r.env_key`,
-    [appSlug],
+    [deployment.app_id],
   );
   const requirements = result.rows.map((row) => ({
     envKey: row.env_key,
@@ -33,14 +47,14 @@ try {
             s.created_at
        FROM deployment_env_detection_snapshots s
        JOIN apps a ON a.id = s.app_id
-      WHERE lower(a.slug) = lower($1)
+      WHERE s.app_id = $1
       ORDER BY s.created_at DESC
       LIMIT 1`,
-    [appSlug],
+    [deployment.app_id],
   );
   console.log(JSON.stringify({
     result: missing.length ? "NODE_04_9_ENV_INPUT_REQUIRED" : "NODE_04_9_ENV_READY",
-    appSlug,
+    appSlug: deployment.app_slug,
     latestDetectionSnapshot: snapshot.rowCount ? {
       deploymentId: snapshot.rows[0].deployment_id,
       commitSha: snapshot.rows[0].commit_sha,

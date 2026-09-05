@@ -1,12 +1,14 @@
 import crypto from "node:crypto";
 import pg from "pg";
+import { requireWorkspaceId } from "../src/operator-targeting.mjs";
 
-const required = ["DATABASE_URL", "CONTROL_PLANE_REPOSITORY", "CONTROL_PLANE_COMMIT_SHA"];
+const required = ["DATABASE_URL", "CONTROL_PLANE_WORKSPACE_ID", "CONTROL_PLANE_REPOSITORY", "CONTROL_PLANE_COMMIT_SHA"];
 for (const name of required) {
   if (!process.env[name]) throw new Error(`Missing required environment variable: ${name}`);
 }
 
 const repositoryFullName = process.env.CONTROL_PLANE_REPOSITORY;
+const workspaceId = requireWorkspaceId();
 const commitSha = process.env.CONTROL_PLANE_COMMIT_SHA;
 const branch = process.env.CONTROL_PLANE_BRANCH || "main";
 const appName = process.env.CONTROL_PLANE_APP_NAME || repositoryFullName.split("/").at(-1);
@@ -31,12 +33,12 @@ try {
   const repoResult = await db.query(
     `SELECT r.id, r.workspace_id, r.full_name, r.default_branch
        FROM github_repositories r
-      WHERE lower(r.full_name) = lower($1)
-      LIMIT 1
+      WHERE r.workspace_id = $1
+        AND lower(r.full_name) = lower($2)
       FOR UPDATE`,
-    [repositoryFullName],
+    [workspaceId, repositoryFullName],
   );
-  if (repoResult.rowCount === 0) throw new Error(`Repository is not mapped in the control plane: ${repositoryFullName}`);
+  if (repoResult.rowCount === 0) throw new Error(`Repository is not mapped in workspace ${workspaceId}: ${repositoryFullName}`);
   const repository = repoResult.rows[0];
 
   const existingApp = await db.query(

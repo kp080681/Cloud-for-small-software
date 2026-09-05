@@ -1,13 +1,15 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import pg from "pg";
+import { requireAppSlug, requireWorkspaceId, resolveAppTarget } from "../src/operator-targeting.mjs";
 import { encryptAppSecret } from "../src/secret-store.mjs";
 
 if (!process.env.DATABASE_URL) throw new Error("Missing required environment variable: DATABASE_URL");
 if (!process.env.AWS_REGION) throw new Error("Missing required environment variable: AWS_REGION");
 if (!process.env.AWS_KMS_KEY_ID) throw new Error("Missing required environment variable: AWS_KMS_KEY_ID");
 
-const appSlug = process.env.CONTROL_PLANE_APP_SLUG || "vantage";
+const workspaceId = requireWorkspaceId();
+const appSlug = requireAppSlug();
 const inputPath = process.env.SSC_ENV_FILE;
 if (!inputPath) throw new Error("Missing required environment variable: SSC_ENV_FILE");
 
@@ -30,19 +32,15 @@ function parseEnv(text) {
   return values;
 }
 
-const raw = await fs.readFile(inputPath, "utf8");
-const supplied = parseEnv(raw);
 const { Client } = pg;
 const db = new Client({ connectionString: process.env.DATABASE_URL });
 await db.connect();
+let raw = "";
 
 try {
-  const appResult = await db.query(
-    `SELECT id, workspace_id, slug FROM apps WHERE lower(slug) = lower($1) LIMIT 1`,
-    [appSlug],
-  );
-  if (appResult.rowCount === 0) throw new Error(`App not found: ${appSlug}`);
-  const app = appResult.rows[0];
+  const app = await resolveAppTarget(db, { workspaceId, slug: appSlug });
+  raw = await fs.readFile(inputPath, "utf8");
+  const supplied = parseEnv(raw);
 
   const requirementResult = await db.query(
     `SELECT env_key FROM app_env_requirements WHERE app_id=$1 AND required=true ORDER BY env_key`,

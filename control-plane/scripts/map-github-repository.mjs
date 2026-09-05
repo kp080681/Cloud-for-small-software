@@ -1,12 +1,14 @@
 import { createAppAuth } from "@octokit/auth-app";
 import { Octokit } from "@octokit/rest";
 import pg from "pg";
+import { requireWorkspaceId } from "../src/operator-targeting.mjs";
 
-for (const name of ["DATABASE_URL", "GITHUB_APP_ID", "GITHUB_APP_PRIVATE_KEY", "CONTROL_PLANE_REPOSITORY"]) {
+for (const name of ["DATABASE_URL", "GITHUB_APP_ID", "GITHUB_APP_PRIVATE_KEY", "CONTROL_PLANE_WORKSPACE_ID", "CONTROL_PLANE_REPOSITORY"]) {
   if (!process.env[name]) throw new Error(`Missing required environment variable: ${name}`);
 }
 
 const repositoryFullName = process.env.CONTROL_PLANE_REPOSITORY;
+const workspaceId = requireWorkspaceId();
 const [owner, repo] = repositoryFullName.split("/");
 if (!owner || !repo) throw new Error("CONTROL_PLANE_REPOSITORY must be owner/repo");
 
@@ -18,12 +20,13 @@ try {
   const installationRows = await db.query(
     `SELECT id, workspace_id, github_installation_id, account_login, account_type
        FROM github_installations
-      WHERE lower(account_login)=lower($1)
+      WHERE workspace_id = $1
+        AND lower(account_login)=lower($2)
       ORDER BY created_at ASC`,
-    [owner],
+    [workspaceId, owner],
   );
   if (installationRows.rowCount === 0) {
-    throw new Error(`No GitHub App installation is mapped for account: ${owner}`);
+    throw new Error(`No GitHub App installation is mapped for workspace ${workspaceId} and account: ${owner}`);
   }
 
   let matched = null;

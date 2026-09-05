@@ -1,8 +1,10 @@
 import pg from "pg";
+import { requireAppSlug, requireWorkspaceId, resolveAppTarget } from "../src/operator-targeting.mjs";
 
 if (!process.env.DATABASE_URL) throw new Error("Missing required environment variable: DATABASE_URL");
 
-const appSlug = process.env.CONTROL_PLANE_APP_SLUG || "vantage";
+const workspaceId = requireWorkspaceId();
+const appSlug = requireAppSlug();
 const requirements = [
   "NEXT_PUBLIC_SUPABASE_URL",
   "NEXT_PUBLIC_SUPABASE_ANON_KEY",
@@ -21,12 +23,7 @@ const { Client } = pg;
 const db = new Client({ connectionString: process.env.DATABASE_URL });
 await db.connect();
 try {
-  const appResult = await db.query(
-    `SELECT id, workspace_id, slug FROM apps WHERE lower(slug) = lower($1) LIMIT 1`,
-    [appSlug],
-  );
-  if (appResult.rowCount === 0) throw new Error(`App not found: ${appSlug}`);
-  const app = appResult.rows[0];
+  const app = await resolveAppTarget(db, { workspaceId, slug: appSlug });
 
   for (const requirement of requirements) {
     await db.query(

@@ -1,26 +1,29 @@
 import { tasks } from "@trigger.dev/sdk";
 import pg from "pg";
+import {
+  optionalAppId,
+  optionalDeploymentId,
+  requireAppSlug,
+  requireWorkspaceId,
+  resolveDeploymentTarget,
+  resolveLatestDeploymentForAppTarget,
+} from "../src/operator-targeting.mjs";
 
 if (!process.env.DATABASE_URL) throw new Error("Missing required environment variable: DATABASE_URL");
 if (!process.env.TRIGGER_SECRET_KEY) throw new Error("Missing required environment variable: TRIGGER_SECRET_KEY");
 
-const appSlug = process.env.CONTROL_PLANE_APP_SLUG || "vantage";
+const deploymentId = optionalDeploymentId();
+const workspaceId = deploymentId ? process.env.CONTROL_PLANE_WORKSPACE_ID?.trim?.() : requireWorkspaceId();
+const appId = process.env.CONTROL_PLANE_APP_ID ? optionalAppId() : null;
+const appSlug = deploymentId || appId ? process.env.CONTROL_PLANE_APP_SLUG?.trim?.() || null : requireAppSlug();
 const { Client } = pg;
 const db = new Client({ connectionString: process.env.DATABASE_URL });
 await db.connect();
 
 try {
-  const result = await db.query(
-    `SELECT d.id, d.deployment_key, d.status, d.source_commit_sha
-       FROM deployments d
-       JOIN apps a ON a.id = d.app_id
-      WHERE lower(a.slug) = lower($1)
-      ORDER BY d.created_at DESC
-      LIMIT 1`,
-    [appSlug],
-  );
-  if (result.rowCount === 0) throw new Error(`No deployment found for app slug: ${appSlug}`);
-  const deployment = result.rows[0];
+  const deployment = deploymentId
+    ? await resolveDeploymentTarget(db, { deploymentId, workspaceId, appId, slug: appSlug })
+    : await resolveLatestDeploymentForAppTarget(db, { workspaceId, appId, slug: appSlug });
   if (deployment.status !== "ANALYZING") throw new Error(`Node 04.17 detection requires ANALYZING; current status is ${deployment.status}`);
 
   const handle = await tasks.trigger("ssc-control-plane-detect-env-requirements", {
@@ -29,7 +32,7 @@ try {
 
   console.log(JSON.stringify({
     result: "NODE_04_17_ENV_DETECTION_TRIGGERED",
-    appSlug,
+    appSlug: deployment.app_slug,
     deploymentId: deployment.id,
     deploymentKey: deployment.deployment_key,
     statusBeforeRun: deployment.status,
