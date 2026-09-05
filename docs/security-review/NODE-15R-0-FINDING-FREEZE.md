@@ -88,12 +88,16 @@ Notes: `create-app-deployment.mjs` is a safer exception because it scopes app lo
 
 Reviewer claim: tenant-boundary assertions may exist mostly as tests rather than production controls.
 
-Classification: `PARTIALLY_CONFIRMED`
+Classification: `PARTIALLY_CONFIRMED`; `RESOLVED_BY_15R_3`
 
 Exact files/functions:
 
 - `control-plane/src/tenant-boundary.mjs`
 - `control-plane/trigger/apply-runtime-env.ts`
+- `control-plane/trigger/prepare-build-input.ts`
+- `control-plane/trigger/detect-env-requirements.ts`
+- `control-plane/trigger/execute-build.ts`
+- `control-plane/trigger/reconcile-build.ts`
 - `control-plane/test/tenant-boundary.test.mjs`
 
 Assertion wiring:
@@ -101,27 +105,27 @@ Assertion wiring:
 | Assertion | Test Call Sites | Production Call Sites | Meaningful Production Use | Tautological | Production Value Source |
 | --- | --- | --- | --- | --- | --- |
 | `assertAppInWorkspace` | yes | none | false | n/a | n/a |
-| `assertRepositoryInWorkspace` | yes | none | false | n/a | n/a |
+| `assertRepositoryInWorkspace` | yes | `prepare-build-input.ts`, `detect-env-requirements.ts` | true | false | repository workspace is checked against deployment workspace before GitHub source reads |
 | `assertDeploymentInWorkspace` | yes | none | false | n/a | n/a |
 | `assertDeploymentBelongsToApp` | yes | none | false | n/a | n/a |
 | `assertSecretBindingBelongsToApp` | yes | `apply-runtime-env.ts` | true | false | independent joined binding and secret columns |
 | `assertRuntimeBelongsToApp` | yes | none | false | n/a | n/a |
-| `assertRuntimeMatchesDeployment` | yes | `apply-runtime-env.ts` | true | partially | deployment and runtime are joined by `r.app_id = d.app_id`, but runtime project id and workspace checks still catch corrupted rows |
-| `assertProviderBuildBelongsToDeployment` | yes | none | false | n/a | n/a |
-| `assertProviderOperationBelongsToDeployment` | yes | none | false | n/a | n/a |
-| `assertSscProviderResourceIdentity` | yes | none | false | n/a | n/a |
+| `assertRuntimeMatchesDeployment` | yes | `provision-runtime.ts`, `apply-runtime-env.ts`, `execute-build.ts` | true | false | runtime row workspace/app/project identity is checked before provider runtime use |
+| `assertProviderBuildBelongsToDeployment` | yes | `reconcile-build.ts` | true | false | local build row source/deployment identity is checked before build reconciliation state mutation |
+| `assertProviderOperationBelongsToDeployment` | yes | `execute-build.ts` | true | false | operation ledger row is checked before provider create/recovery continuation |
+| `assertSscProviderResourceIdentity` | yes | `execute-build.ts`, `reconcile-build.ts` | true | false | provider deployment metadata is checked before local build attachment/reconciliation |
 
 Reproduction method: static call-site inspection with `rg`.
 
-Observed result: only runtime/env injection uses tenant-boundary assertions in production. `assertSscProviderResourceIdentity` is not called in production.
+Observed result: Node 15R.3 wires meaningful tenant-boundary checks into source preparation/detection, runtime/env injection, build execution, and build reconciliation. App/deployment ownership helpers remain available for future self-service paths where caller-supplied identities meet deployment-derived identities.
 
-Concrete consequence: tests prove intended invariants, but production credit should be limited to the paths where assertions are wired.
+Concrete consequence: controlled-alpha production paths now fail before GitHub source reads, secret decrypt/injection, provider deployment creation/attachment, and build reconciliation state mutation when tenant/resource identities diverge.
 
-Required next node: `15R.1 Provider Project Identity / Slug Collision`, then only add assertion wiring where it closes a reproduced path.
+Required next node: `15R.4 Provider Mutation Concurrency / Fencing`.
 
 Provider verification required? No.
 
-Notes: do not count assertion-only tests as production enforcement.
+Notes: schema-enforced boundaries remain documented separately; no broad authorization framework or PostgreSQL RLS was added.
 
 ### P1-A - Duplicate Provider Deployment Creation Under Concurrent Execution
 
@@ -492,7 +496,7 @@ Notes: this is a product-contract gap more than a hostile-code bug, but it is al
 | --- | --- | --- | --- | --- |
 | `15R-F01` | P0-A | `CONFIRMED`; `RESOLVED_BY_15R_1` | `15R.1` | Slug-only Vercel project naming/adoption crosses workspaces |
 | `15R-F02` | P0-B | `CONFIRMED`; `RESOLVED_BY_15R_2` | `15R.2` | Mutating operator scripts now require workspace-scoped app targeting or immutable deployment id targeting |
-| `15R-F03` | Tenant-boundary assertion wiring | `PARTIALLY_CONFIRMED` | `15R.1` | Assertions exist, but production use is limited |
+| `15R-F03` | Tenant-boundary assertion wiring | `PARTIALLY_CONFIRMED`; `RESOLVED_BY_15R_3` | `15R.3` | Meaningful tenant-boundary assertions are wired into controlled-alpha source, runtime, secret, build, and provider-resource paths |
 | `15R-F04` | P1-A | `CONFIRMED` | `15R.2` | Concurrent build execution can double-create provider deployments |
 | `15R-F05` | P1-B | `CONFIRMED` | `15R.2` | Delete/provision and abandon/build races can leave residual provider state |
 | `15R-F06` | P1-C | `CONFIRMED` | `15R.3` | Timeout/abandon does not cancel provider build execution |
@@ -515,7 +519,7 @@ No speculative remediation nodes were added beyond reproduced findings. The next
 
 `P0_B_OPERATOR_TARGETING = RESOLVED_BY_15R_2`
 
-`TENANT_ASSERTIONS_PRODUCTION_WIRING = PARTIAL`
+`TENANT_ASSERTIONS_PRODUCTION_WIRING = RESOLVED_BY_15R_3`
 
 `DUPLICATE_PROVIDER_CREATE = CONFIRMED`
 

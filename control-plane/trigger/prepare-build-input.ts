@@ -4,6 +4,7 @@ import { Octokit } from "@octokit/rest";
 import { task } from "@trigger.dev/sdk";
 import pg from "pg";
 import { normalizeRootDirectory } from "../src/source-boundary.mjs";
+import { assertRepositoryInWorkspace } from "../src/tenant-boundary.mjs";
 
 const { Client } = pg;
 
@@ -48,6 +49,7 @@ export const prepareBuildInput = task({
       const deploymentResult = await db.query(
         `SELECT d.id, d.workspace_id, d.app_id, d.source_commit_sha, d.status,
                 a.root_directory, a.framework, a.runtime,
+                r.workspace_id AS repository_workspace_id,
                 r.full_name AS repository_full_name,
                 i.github_installation_id
            FROM deployments d
@@ -62,6 +64,10 @@ export const prepareBuildInput = task({
       if (deployment.status !== "ANALYZING") {
         throw new Error(`Build input cannot be prepared from status ${deployment.status}`);
       }
+      assertRepositoryInWorkspace({
+        workspace_id: deployment.repository_workspace_id,
+        full_name: deployment.repository_full_name,
+      }, deployment.workspace_id);
 
       const existing = await db.query(
         `SELECT repository_full_name, commit_sha, git_tree_sha, root_directory,

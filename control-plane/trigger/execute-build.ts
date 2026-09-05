@@ -11,6 +11,11 @@ import {
   assertProviderProjectNotOwnedByAnotherApp,
   assertRemoteProjectMatchesSscApp,
 } from "../src/provider-project-identity.mjs";
+import {
+  assertProviderOperationBelongsToDeployment,
+  assertRuntimeMatchesDeployment,
+  assertSscProviderResourceIdentity,
+} from "../src/tenant-boundary.mjs";
 
 const { Client } = pg;
 const API = "https://api.vercel.com";
@@ -71,7 +76,7 @@ async function ensureBuildOperation(db: pg.Client, deployment: any) {
      VALUES ($1,'vercel-create-deployment','vercel',$2,$3,$4,'INTENT_RECORDED',$5::jsonb)
      ON CONFLICT (deployment_id, operation_type) DO UPDATE SET
        updated_at = deployment_provider_operations.updated_at
-     RETURNING id, status, provider_resource_id`,
+     RETURNING id, deployment_id, status, provider_resource_id, source_commit_sha`,
     [
       deployment.id,
       idempotencyKey,
@@ -86,6 +91,10 @@ async function ensureBuildOperation(db: pg.Client, deployment: any) {
 async function attachProviderDeployment(db: pg.Client, deployment: any, providerDeployment: any, operationId: string, eventType: string) {
   const providerDeploymentId = providerDeployment?.id ?? providerDeployment?.uid;
   if (!providerDeploymentId) throw new Error("Provider deployment has no id");
+  assertSscProviderResourceIdentity(providerDeployment, {
+    id: deployment.id,
+    source_commit_sha: deployment.commit_sha,
+  });
   const deploymentUrl = providerDeploymentUrl(providerDeployment);
   const providerStatus = providerDeployment?.readyState ?? providerDeployment?.status ?? "QUEUED";
 
@@ -146,10 +155,12 @@ export const executeBuild=task({id:"ssc-control-plane-execute-build",retry:{maxA
   const result=await db.query(`SELECT d.id,d.workspace_id,d.app_id,d.status,d.runtime_project_id,a.slug,a.framework,rt.provider,rt.provider_project_id,rt.provider_project_name,bi.repository_full_name,bi.commit_sha,bi.root_directory,bi.install_command,bi.build_command,bi.manifest_sha256 FROM deployments d JOIN apps a ON a.id=d.app_id JOIN app_runtimes rt ON rt.app_id=d.app_id JOIN deployment_build_inputs bi ON bi.deployment_id=d.id WHERE d.id=$1`,[payload.deploymentId]);
   if(result.rowCount===0)throw new Error(`Build prerequisites not found: ${payload.deploymentId}`);const deployment=result.rows[0];
   if(deployment.status!=="BUILDING")throw new Error(`Build can only execute from BUILDING; current status is ${deployment.status}`);if(deployment.provider!=="vercel")throw new Error(`Unsupported build provider: ${deployment.provider}`);if(deployment.runtime_project_id!==deployment.provider_project_id)throw new Error("Runtime project binding mismatch");
+  assertRuntimeMatchesDeployment({workspace_id:deployment.workspace_id,app_id:deployment.app_id,provider_project_id:deployment.provider_project_id},deployment);
   const localOwners=await db.query(`SELECT app_id,provider_project_id FROM app_runtimes WHERE provider=$1 AND provider_project_id=$2`,[deployment.provider,deployment.provider_project_id]);
   assertProviderProjectNotOwnedByAnotherApp(localOwners.rows,{appId:deployment.app_id,providerProjectId:deployment.provider_project_id});
   assertRemoteProjectMatchesSscApp(await getVercelProject(deployment.provider_project_id),{workspaceId:deployment.workspace_id,appId:deployment.app_id,slug:deployment.slug,storedProjectName:deployment.provider_project_name,allowLegacyStoredBinding:true});
   const operation=await ensureBuildOperation(db,deployment);
+  assertProviderOperationBelongsToDeployment(operation,{id:deployment.id,source_commit_sha:deployment.commit_sha});
 
   const matches=matchingSscDeployments(await listCandidateDeployments(deployment.provider_project_id),{deploymentId:deployment.id,sourceCommitSha:deployment.commit_sha});
   const action=buildRecoveryAction({matches,operationStatus:operation.status});

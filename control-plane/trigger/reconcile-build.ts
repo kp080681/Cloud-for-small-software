@@ -1,6 +1,10 @@
 import { task } from "@trigger.dev/sdk";
 import pg from "pg";
 import { buildReconciliationAction, isRecoveryTerminalStatus } from "../src/deployment-recovery-rules.mjs";
+import {
+  assertProviderBuildBelongsToDeployment,
+  assertSscProviderResourceIdentity,
+} from "../src/tenant-boundary.mjs";
 
 const { Client } = pg;
 const API = "https://api.vercel.com";
@@ -35,7 +39,9 @@ export const reconcileBuild = task({
     await db.connect();
     try {
       const result = await db.query(
-        `SELECT d.status AS deployment_status, b.provider_deployment_id, b.provider_deployment_url,
+        `SELECT d.id AS deployment_id, d.workspace_id, d.app_id,
+                d.source_commit_sha AS deployment_source_commit_sha,
+                d.status AS deployment_status, b.provider_deployment_id, b.provider_deployment_url,
                 b.source_commit_sha, b.status AS build_status
            FROM deployment_builds b
            JOIN deployments d ON d.id=b.deployment_id
@@ -46,10 +52,21 @@ export const reconcileBuild = task({
         return { result: "NODE_04_10_BUILD_NOT_CREATED", deploymentId: payload.deploymentId };
       }
       const build = result.rows[0];
+      assertProviderBuildBelongsToDeployment({
+        deployment_id: build.deployment_id,
+        source_commit_sha: build.source_commit_sha,
+      }, {
+        id: build.deployment_id,
+        source_commit_sha: build.deployment_source_commit_sha,
+      });
       if (isRecoveryTerminalStatus(build.deployment_status)) {
         return { result: "NODE_04_18_TERMINAL_NOOP", deploymentId: payload.deploymentId, status: build.deployment_status };
       }
       const provider = await getVercelDeployment(build.provider_deployment_id);
+      assertSscProviderResourceIdentity(provider, {
+        id: build.deployment_id,
+        source_commit_sha: build.source_commit_sha,
+      });
       const providerStatus = provider?.readyState ?? provider?.status ?? "UNKNOWN";
       const observedSha = providerCommitSha(provider);
       const sourceIdentityMatches = observedSha === build.source_commit_sha;

@@ -17,6 +17,7 @@ import {
   normalizeRootDirectory,
   relativePathUnderRoot,
 } from "../src/source-boundary.mjs";
+import { assertRepositoryInWorkspace } from "../src/tenant-boundary.mjs";
 
 const { Client } = pg;
 
@@ -43,6 +44,8 @@ export const detectEnvRequirements = task({
       const deploymentResult = await db.query(
         `SELECT d.id, d.workspace_id, d.app_id, d.source_commit_sha, d.status,
                 bi.repository_full_name, bi.commit_sha, bi.git_tree_sha, bi.root_directory,
+                r.workspace_id AS repository_workspace_id,
+                r.full_name AS app_repository_full_name,
                 i.github_installation_id
            FROM deployments d
            JOIN deployment_build_inputs bi ON bi.deployment_id = d.id
@@ -56,6 +59,13 @@ export const detectEnvRequirements = task({
       const deployment = deploymentResult.rows[0];
       if (deployment.status !== "ANALYZING") throw new Error(`Environment detection can only run from ANALYZING; current status is ${deployment.status}`);
       if (deployment.commit_sha !== deployment.source_commit_sha) throw new Error("Build input source identity does not match deployment");
+      assertRepositoryInWorkspace({
+        workspace_id: deployment.repository_workspace_id,
+        full_name: deployment.app_repository_full_name,
+      }, deployment.workspace_id);
+      if (deployment.repository_full_name !== deployment.app_repository_full_name) {
+        throw new Error("Build input repository does not match app repository");
+      }
 
       const existingSnapshot = await db.query(
         `SELECT id, repository_full_name, commit_sha, git_tree_sha, root_directory,

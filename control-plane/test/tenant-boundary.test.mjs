@@ -176,3 +176,57 @@ test("secret inventory and runtime injection require same-app same-workspace sec
     assert.match(source, /s\.app_id = b\.app_id/);
   }
 });
+
+test("production build preparation verifies repository workspace before source reads", () => {
+  const prepareBuildInput = readControlPlaneFile("trigger/prepare-build-input.ts");
+  const detectEnvRequirements = readControlPlaneFile("trigger/detect-env-requirements.ts");
+
+  assert.match(prepareBuildInput, /assertRepositoryInWorkspace/);
+  assert.ok(
+    prepareBuildInput.indexOf("assertRepositoryInWorkspace") < prepareBuildInput.indexOf("octokit.git.getCommit"),
+    "prepare-build-input must validate repository workspace before GitHub source reads",
+  );
+  assert.match(detectEnvRequirements, /assertRepositoryInWorkspace/);
+  assert.match(detectEnvRequirements, /Build input repository does not match app repository/);
+  assert.ok(
+    detectEnvRequirements.indexOf("assertRepositoryInWorkspace") < detectEnvRequirements.indexOf("octokit.git.getTree"),
+    "detect-env-requirements must validate repository workspace before GitHub source tree reads",
+  );
+});
+
+test("production build execution verifies runtime and operation ownership before provider mutation", () => {
+  const executeBuild = readControlPlaneFile("trigger/execute-build.ts");
+
+  assert.match(executeBuild, /assertRuntimeMatchesDeployment/);
+  assert.match(executeBuild, /assertProviderOperationBelongsToDeployment/);
+  assert.ok(
+    executeBuild.indexOf("assertRuntimeMatchesDeployment") < executeBuild.indexOf("ensureBuildOperation"),
+    "execute-build must validate runtime ownership before provider operation intent",
+  );
+  assert.ok(
+    executeBuild.indexOf("assertProviderOperationBelongsToDeployment") < executeBuild.indexOf("vercelRequest(`/v13/deployments"),
+    "execute-build must validate provider operation ownership before Vercel deployment creation",
+  );
+});
+
+test("production provider deployment attachment requires SSC metadata before local attach", () => {
+  const executeBuild = readControlPlaneFile("trigger/execute-build.ts");
+  const reconcileBuild = readControlPlaneFile("trigger/reconcile-build.ts");
+
+  assert.match(executeBuild, /assertSscProviderResourceIdentity/);
+  assert.ok(
+    executeBuild.indexOf("assertSscProviderResourceIdentity") < executeBuild.indexOf("INSERT INTO deployment_builds"),
+    "execute-build must verify provider deployment metadata before local build attachment",
+  );
+
+  assert.match(reconcileBuild, /assertProviderBuildBelongsToDeployment/);
+  assert.match(reconcileBuild, /assertSscProviderResourceIdentity/);
+  assert.ok(
+    reconcileBuild.indexOf("assertProviderBuildBelongsToDeployment") < reconcileBuild.indexOf("getVercelDeployment"),
+    "reconcile-build must verify local build ownership before provider lookup",
+  );
+  assert.ok(
+    reconcileBuild.indexOf("assertSscProviderResourceIdentity") < reconcileBuild.indexOf("UPDATE deployment_builds"),
+    "reconcile-build must verify provider deployment metadata before state mutation",
+  );
+});
