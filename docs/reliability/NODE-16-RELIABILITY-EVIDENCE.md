@@ -1,6 +1,6 @@
 # Node 16 Reliability Evidence
 
-Status: PARTIAL. Existing Node 04.16-04.21 reliability/idempotency work proves the core recovery model, but this Codex task could not run the current live orphan inventory scan because `DATABASE_URL`, `VERCEL_TOKEN`, and `TRIGGER_SECRET_KEY` are not loaded in the task environment. Do not mark Node 16 complete until that read-only scan is captured.
+Status: PASS. Existing Node 04.16-04.21 reliability/idempotency work proves the core recovery model, and the final read-only live orphan inventory scan found no actionable recoverable, orphan, or ambiguous SSC-owned Vercel resources.
 
 Scope: SSC V1 deployment reliability only. No provider resources, databases, Trigger workers, workloads, or customer state were mutated for this packet.
 
@@ -14,7 +14,7 @@ Scope: SSC V1 deployment reliability only. No provider resources, databases, Tri
 | Retries are idempotent | ALREADY_PROVEN | Trigger retry settings are bounded; replay guards exist in analyze/build/runtime/public access/delete paths; provider operation ledger has unique `idempotency_key` and unique `(deployment_id, operation_type)`. | Code and unit tests | None for current path |
 | State-machine integrity tested | ALREADY_PROVEN | `deployment-state.mjs` defines allowed transitions; `deployment-state.test.mjs` rejects illegal backward transitions and confirms retry/deletion paths. | Unit tests | None for current path |
 | Terminal replay is safe | ALREADY_PROVEN | Orchestrator returns terminal no-op for `LIVE`, `FAILED`, `DELETED`; `reconcile-build.ts` and `configure-public-access.ts` also return terminal no-ops; tests cover public verification and terminal statuses. | Code and unit tests | None |
-| Orphan/provider resource reconciliation works | ALREADY_PROVEN for classification/recovery logic; PARTIALLY_PROVEN for current inventory | `orphan-resource-classification.test.mjs` proves `KNOWN`, `RECOVERABLE`, `ORPHAN`, `AMBIGUOUS`, and `FOREIGN_IGNORE`; `detect-orphan-resources.ts` is read-only and never deletes/mutates; current live scan was not run in this Codex task because credentials are absent. | Unit tests and architecture; live current counts pending | Run `run-detect-orphan-resources.mjs` from an operator shell and record counts |
+| Orphan/provider resource reconciliation works | ALREADY_PROVEN | `orphan-resource-classification.test.mjs` proves `KNOWN`, `RECOVERABLE`, `ORPHAN`, `AMBIGUOUS`, and `FOREIGN_IGNORE`; `detect-orphan-resources.ts` is read-only and never deletes/mutates; final live scan found `KNOWN=6`, `RECOVERABLE=0`, `ORPHAN=0`, `AMBIGUOUS=0`, `FOREIGN_IGNORE=1`, `ACTIONABLE=0`. | Unit tests, architecture, live provider inventory | None for current V1 path |
 | Repeated user actions do not create duplicate infrastructure | ALREADY_PROVEN | App deployment creation deduplicates same app/source SHA; runtime has unique `app_id` and `reconciliation_key`; build creation uses provider operation ledger and SSC metadata lookup; deletion uses `app_deletions` unique app/deletion key. | Code and unit tests | None for current trusted operator path |
 
 ## Real Deployment Evidence
@@ -103,28 +103,29 @@ Implementation evidence:
 - Provider resources without SSC ownership metadata are never classified as SSC orphans.
 - Terminal historical deployments with legitimate provider history are not falsely labelled orphan solely because they are terminal.
 
-Current live scan status:
+Final live scan result:
 
 ```text
-DATABASE_URL = MISSING
-VERCEL_TOKEN = MISSING
-TRIGGER_SECRET_KEY = MISSING
-CURRENT_ORPHAN_COUNTS = NOT_RUN_IN_THIS_CODEX_SESSION
+result = NODE_04_19_ORPHAN_RESOURCE_DETECTION_COMPLETE
+provider = vercel
+runtimeCount = 3
+providerProjectCount = 3
+providerDeploymentCount = 7
+KNOWN = 6
+RECOVERABLE = 0
+ORPHAN = 0
+AMBIGUOUS = 0
+FOREIGN_IGNORE = 1
+ACTIONABLE = 0
 ```
 
-Operator command to capture current counts:
-
-```powershell
-cd "C:\Users\Dealup Admin\OneDrive - Dealup Strategies Private Limited\Documents\ChatGPT\Cloud for small Software\control-plane"
-node .\scripts\run-detect-orphan-resources.mjs
-```
-
-Expected safety fields:
+Safety fields from the live scan:
 
 - `destructiveOperationExecuted = false`
 - `providerResourcesMutated = false`
-- no tokens/secrets printed
-- current classification counts recorded from the Trigger task output
+- `providerResponseBodiesReturned = false`
+- `tokensPrinted = false`
+- `secretsPrinted = false`
 
 ## Control-Plane State Integrity
 
@@ -193,11 +194,11 @@ Recovery order after suspected interruption:
 | public access blocked | remains `HEALTH_CHECKING` and actionable | workload GET only | yes | rerun public verification after external fix | diagnostics tests | PASS |
 | terminal replay | terminal no-op | no | yes | no-op | recovery-rule tests | PASS |
 | deletion replay | completed no-op; missing provider project accepted | delete may repeat safely | yes | `app_deletions` ledger | delete-app code | PASS |
-| orphan detection | safe counts/actionable classes | no | yes | read-only detector; manual repair later | classification tests; current scan pending | PARTIAL |
+| orphan detection | safe counts/actionable classes | no | yes | read-only detector; manual repair later | classification tests; final live scan actionable count is `0` | PASS |
 
 ## Residual Risks
 
-- Current live orphan counts were not captured in this Codex task because credentials are unavailable.
+- Current live orphan inventory has no actionable recoverable, orphan, or ambiguous SSC-owned Vercel resources; future recovery drills should still run read-only inventory before any provider repair/delete mutation.
 - Runtime logs remain provider-limited where feasible; build logs, diagnostics, health checks, timeline, and provider ids are available.
 - Public/customer entrypoints are not implemented; current scripts/tasks remain trusted operator tools and must not be exposed directly.
 - No generic rollback system exists; V1 recovery is replay/reconcile/abandon/delete.
@@ -217,14 +218,14 @@ Recovery order after suspected interruption:
 
 `TERMINAL_REPLAY_SAFETY = PASS`
 
-`ORPHAN_RECONCILIATION = PARTIAL`
+`ORPHAN_RECONCILIATION = PASS`
 
 `FIX_BEFORE_ALPHA_FINDINGS = 0`
 
 `NEW_CODE_CHANGES_REQUIRED = false`
 
-`NODE_16_RELIABILITY_EVIDENCE = PARTIAL`
+`NODE_16_RELIABILITY_EVIDENCE = PASS`
 
-`NODE_16_COMPLETE = false`
+`NODE_16_COMPLETE = true`
 
 `GATE_12_COMPLETE = false`
