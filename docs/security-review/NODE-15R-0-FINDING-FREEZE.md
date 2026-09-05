@@ -20,7 +20,7 @@ Classification key:
 
 Reviewer claim: two workspaces can each have an app with the same slug and both can adopt the same Vercel project because runtime project naming is based only on slug.
 
-Classification: `CONFIRMED`
+Classification: `CONFIRMED`; `RESOLVED_BY_15R_4`
 
 Remediation status: `RESOLVED_BY_15R_1`. Node 15R.1 replaces slug-only provider project identity with deterministic workspace/app-id-based project names, refuses remote project adoption unless the remote project name matches the expected SSC app identity, adds local provider project uniqueness, and verifies runtime identity before secret injection, build targeting, and provider deletion.
 
@@ -148,7 +148,11 @@ PROVIDER_CREATE_CALL_COUNT = 2 possible
 
 Concrete consequence: two provider deployments can exist for one SSC deployment identity. Later replay detects ambiguity, but the duplicate provider side effect has already occurred.
 
-Required next node: `15R.2 Provider Operation Concurrency Fencing`
+Resolution: Node `15R.4 Provider Mutation Concurrency / Fencing` adds an atomic `deployment_provider_operations` claim transition before Vercel deployment creation. Concurrent workers that observe the same logical operation after it has been claimed return an in-flight/no-create result instead of issuing another provider create call.
+
+Regression evidence: `control-plane/test/provider-mutation-fencing.test.mjs` reproduces the pre-fix duplicate create decision count of `2` and proves the atomic claim permits exactly one creator.
+
+Required next node: `15R.4 Provider Operation Concurrency Fencing`
 
 Provider verification required? No.
 
@@ -158,7 +162,7 @@ Notes: the ledger prevents lost-response replay duplication, but it is not an in
 
 Reviewer claim: lifecycle workers can race with delete/abandon and leave provider resources after local state moved terminal.
 
-Classification: `CONFIRMED`
+Classification: `CONFIRMED`; `STATE_SAFETY_RESOLVED_BY_15R_4`; `REMOTE_CANCELLATION_DEFERRED_TO_15R_5`
 
 Exact files/functions:
 
@@ -176,7 +180,11 @@ Observed result: provider resource creation can complete after local deletion or
 
 Concrete consequence: residual provider project/deployment clutter, cost, or ambiguity; possible unexpected workload execution after abandonment.
 
-Required next node: `15R.2 Provider Operation Concurrency Fencing`
+Resolution: Node `15R.4 Provider Mutation Concurrency / Fencing` moves abandonment locking inside a transaction, claims app deletion before provider deletion, revalidates app/deployment state before runtime insertion, revalidates deployment/provider-operation state before build attachment, and records stale provider results as traceable events/operation evidence instead of reviving active lifecycle state.
+
+Regression evidence: `control-plane/test/provider-mutation-fencing.test.mjs` covers stale build result fencing, stale runtime result fencing, delete transaction locking, abandon transaction locking, independent app/deployment claims, and provider response-loss reconciliation.
+
+Required next node: `15R.5 Build Timeout + Remote Cancellation`
 
 Provider verification required? No.
 
@@ -497,8 +505,8 @@ Notes: this is a product-contract gap more than a hostile-code bug, but it is al
 | `15R-F01` | P0-A | `CONFIRMED`; `RESOLVED_BY_15R_1` | `15R.1` | Slug-only Vercel project naming/adoption crosses workspaces |
 | `15R-F02` | P0-B | `CONFIRMED`; `RESOLVED_BY_15R_2` | `15R.2` | Mutating operator scripts now require workspace-scoped app targeting or immutable deployment id targeting |
 | `15R-F03` | Tenant-boundary assertion wiring | `PARTIALLY_CONFIRMED`; `RESOLVED_BY_15R_3` | `15R.3` | Meaningful tenant-boundary assertions are wired into controlled-alpha source, runtime, secret, build, and provider-resource paths |
-| `15R-F04` | P1-A | `CONFIRMED` | `15R.2` | Concurrent build execution can double-create provider deployments |
-| `15R-F05` | P1-B | `CONFIRMED` | `15R.2` | Delete/provision and abandon/build races can leave residual provider state |
+| `15R-F04` | P1-A | `CONFIRMED`; `RESOLVED_BY_15R_4` | `15R.4` | Atomic provider-operation claim prevents duplicate Vercel deployment creation for one logical operation |
+| `15R-F05` | P1-B | `CONFIRMED`; `STATE_SAFETY_RESOLVED_BY_15R_4`; `REMOTE_CANCELLATION_DEFERRED_TO_15R_5` | `15R.5` | Delete/provision and abandon/build races cannot revive active state; remote cancellation remains separate |
 | `15R-F06` | P1-C | `CONFIRMED` | `15R.3` | Timeout/abandon does not cancel provider build execution |
 | `15R-F07` | P1-D | `CONFIRMED_PROVIDER_DEPENDENT` | `15R.4` | Git auto-deploy containment is not production-proven |
 | `15R-F08` | P1-E | `CONFIRMED` | `15R.5` | Build can advance with missing independently observed source SHA |
@@ -521,11 +529,11 @@ No speculative remediation nodes were added beyond reproduced findings. The next
 
 `TENANT_ASSERTIONS_PRODUCTION_WIRING = RESOLVED_BY_15R_3`
 
-`DUPLICATE_PROVIDER_CREATE = CONFIRMED`
+`DUPLICATE_PROVIDER_CREATE = RESOLVED_BY_15R_4`
 
-`DELETE_PROVISION_RACE = CONFIRMED`
+`DELETE_PROVISION_RACE = STATE_SAFETY_RESOLVED_BY_15R_4`
 
-`ABANDON_BUILD_RACE = CONFIRMED`
+`ABANDON_BUILD_RACE = STATE_SAFETY_RESOLVED_BY_15R_4`
 
 `REMOTE_BUILD_CANCELLATION = ABSENT`
 

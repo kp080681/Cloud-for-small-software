@@ -9,6 +9,7 @@ import {
   sscProviderProjectName,
 } from "../src/provider-project-identity.mjs";
 import { assertRuntimeMatchesDeployment } from "../src/tenant-boundary.mjs";
+import { runtimeResultAttachmentDecision } from "../src/provider-mutation-fencing.mjs";
 
 const { Client } = pg;
 const API = "https://api.vercel.com";
@@ -39,6 +40,13 @@ export const provisionRuntime=task({
    assertProviderProjectNotOwnedByAnotherApp(localOwners.rows,{appId:deployment.app_id,providerProjectId:runtime.provider_project_id});
    if(deployment.status==="PROVISIONING"){
     await db.query("BEGIN");try{
+     const current=await db.query(`SELECT d.status AS deployment_status,a.deleted_at AS app_deleted_at FROM deployments d JOIN apps a ON a.id=d.app_id WHERE d.id=$1 FOR UPDATE OF d,a`,[payload.deploymentId]);
+     if(current.rowCount!==1)throw new Error(`Deployment disappeared before runtime reconciliation: ${payload.deploymentId}`);
+     const decision=runtimeResultAttachmentDecision(current.rows[0]);
+     if(decision.action!=="attach"){
+      await db.query("COMMIT");
+      return{result:"NODE_15R_4_RUNTIME_RECONCILE_STALE_NOOP",deploymentId:payload.deploymentId,status:current.rows[0].deployment_status,provider:runtime.provider,providerProjectId:runtime.provider_project_id,providerProjectName:runtime.provider_project_name,reconciliationKey:runtime.reconciliation_key,runtimeStatus:runtime.status,staleReason:decision.reason};
+     }
      const advanced=await db.query(`UPDATE deployments SET runtime_project_id=$1,status='BUILDING',updated_at=now() WHERE id=$2 AND status='PROVISIONING' RETURNING id`,[runtime.provider_project_id,payload.deploymentId]);
      if(advanced.rowCount===1)await db.query(`INSERT INTO deployment_events (deployment_id,from_status,to_status,event_type,message,metadata) VALUES ($1,'PROVISIONING','BUILDING','RUNTIME_RECONCILED','Existing application runtime reconciled for deployment',$2::jsonb)`,[payload.deploymentId,JSON.stringify({provider:runtime.provider,providerProjectId:runtime.provider_project_id,reconciliationKey:runtime.reconciliation_key})]);
      await db.query("COMMIT");
@@ -51,6 +59,14 @@ export const provisionRuntime=task({
   const localOwners=await db.query(`SELECT app_id,provider_project_id FROM app_runtimes WHERE provider='vercel' AND provider_project_id=$1`,[project.id]);
   assertProviderProjectNotOwnedByAnotherApp(localOwners.rows,{appId:deployment.app_id,providerProjectId:project.id});
   await db.query("BEGIN");try{
+   const current=await db.query(`SELECT d.status AS deployment_status,a.deleted_at AS app_deleted_at FROM deployments d JOIN apps a ON a.id=d.app_id WHERE d.id=$1 FOR UPDATE OF d,a`,[payload.deploymentId]);
+   if(current.rowCount!==1)throw new Error(`Deployment disappeared before runtime attachment: ${payload.deploymentId}`);
+   const decision=runtimeResultAttachmentDecision(current.rows[0]);
+   if(decision.action!=="attach"){
+    await db.query(`INSERT INTO deployment_events (deployment_id,from_status,to_status,event_type,message,metadata) VALUES ($1,$2,$2,'RUNTIME_PROVIDER_RESULT_STALE','Provider runtime result was observed after app/deployment became incompatible',$3::jsonb)`,[payload.deploymentId,current.rows[0].deployment_status,JSON.stringify({provider:"vercel",providerProjectId:project.id,providerProjectName:project.name??projectName,reconciliationKey,staleReason:decision.reason,providerResourceTraceable:true})]);
+    await db.query("COMMIT");
+    return{result:"NODE_15R_4_RUNTIME_PROVIDER_RESULT_STALE",deploymentId:payload.deploymentId,status:current.rows[0].deployment_status,provider:"vercel",providerProjectId:project.id,providerProjectName:project.name??projectName,reconciliationKey,created:provisioned.created,reconciled:provisioned.reconciled,providerResourceTraceable:true,staleReason:decision.reason};
+   }
    await db.query(`INSERT INTO app_runtimes (workspace_id,app_id,provider,provider_project_id,provider_project_name,reconciliation_key,status) VALUES ($1,$2,'vercel',$3,$4,$5,'READY')`,[deployment.workspace_id,deployment.app_id,project.id,project.name??projectName,reconciliationKey]);
    await db.query(`UPDATE deployments SET runtime_project_id=$1,status='BUILDING',updated_at=now() WHERE id=$2 AND status='PROVISIONING'`,[project.id,payload.deploymentId]);
    await db.query(`INSERT INTO deployment_events (deployment_id,from_status,to_status,event_type,message,metadata) VALUES ($1,'PROVISIONING','BUILDING','RUNTIME_PROVISIONED','Application runtime provisioned or reconciled',$2::jsonb)`,[payload.deploymentId,JSON.stringify({provider:"vercel",providerProjectId:project.id,providerProjectName:project.name??projectName,reconciliationKey,created:provisioned.created,reconciled:provisioned.reconciled,skipGitConnectDuringLink:true})]);await db.query("COMMIT");

@@ -12,6 +12,7 @@ export const abandonDeployment = task({
     const db = new Client({ connectionString: process.env.DATABASE_URL });
     await db.connect();
     try {
+      await db.query("BEGIN");
       const result = await db.query(
         `SELECT id, app_id, status, error_code FROM deployments WHERE id=$1 FOR UPDATE`,
         [payload.deploymentId],
@@ -20,6 +21,7 @@ export const abandonDeployment = task({
       const row = result.rows[0];
 
       if (["LIVE","FAILED","DELETED"].includes(row.status)) {
+        await db.query("COMMIT");
         return {
           result: "DEPLOYMENT_ABANDON_TERMINAL_NOOP",
           deploymentId: payload.deploymentId,
@@ -30,7 +32,6 @@ export const abandonDeployment = task({
       if (!ABANDONABLE.has(row.status)) throw new Error(`Deployment cannot be abandoned from status ${row.status}`);
 
       const reason = String(payload.reason || "Deployment abandoned by control-plane operator after superseded lifecycle test.").slice(0, 500);
-      await db.query("BEGIN");
       try {
         await db.query(
           `UPDATE deployments
@@ -63,6 +64,9 @@ export const abandonDeployment = task({
         errorCode: "DEPLOYMENT_ABANDONED",
         providerResourcesDeleted: false,
       };
+    } catch (error) {
+      try { await db.query("ROLLBACK"); } catch {}
+      throw error;
     } finally {
       await db.end();
     }

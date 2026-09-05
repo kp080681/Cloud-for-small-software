@@ -45,22 +45,26 @@ export const deleteApp = task({
     const db = new Client({ connectionString: process.env.DATABASE_URL });
     await db.connect();
     try {
+      await db.query("BEGIN");
+      let app;
       const appResult = await db.query(
         `SELECT a.id, a.workspace_id, a.slug, a.deleted_at,
                 rt.provider, rt.provider_project_id, rt.provider_project_name
            FROM apps a
            LEFT JOIN app_runtimes rt ON rt.app_id=a.id
-          WHERE a.id=$1 AND a.workspace_id=$2`,
+          WHERE a.id=$1 AND a.workspace_id=$2
+          FOR UPDATE OF a`,
         [payload.appId, payload.workspaceId],
       );
       if (appResult.rowCount === 0) throw new Error("App not found in requested workspace");
-      const app = appResult.rows[0];
+      app = appResult.rows[0];
 
       const existing = await db.query(`SELECT * FROM app_deletions WHERE app_id=$1`, [payload.appId]);
       if (existing.rowCount === 1) {
         const deletion = existing.rows[0];
         if (deletion.deletion_key !== payload.deletionKey) throw new Error("Deletion key does not match existing deletion request");
         if (deletion.status === "COMPLETED") {
+          await db.query("COMMIT");
           return { result: "NODE_04_13_REPLAY_NOOP", appId: payload.appId, deletionKey: payload.deletionKey, status: "COMPLETED" };
         }
       } else {
@@ -89,6 +93,7 @@ export const deleteApp = task({
 
       await db.query(`UPDATE app_deletions SET status='DELETING', error_code=NULL, error_message=NULL, updated_at=now() WHERE app_id=$1`, [payload.appId]);
       await db.query(`UPDATE deployments SET status='DELETING', updated_at=now() WHERE app_id=$1 AND status <> 'DELETED'`, [payload.appId]);
+      await db.query("COMMIT");
 
       if (deletion.provider_project_id) {
         if (deletion.provider !== "vercel") throw new Error(`Unsupported deletion provider: ${deletion.provider}`);
@@ -136,6 +141,7 @@ export const deleteApp = task({
         status: "COMPLETED",
       };
     } catch (error: any) {
+      try { await db.query("ROLLBACK"); } catch {}
       try {
         await db.query(`UPDATE app_deletions SET status='FAILED', error_code='APP_DELETION_FAILED', error_message=$1, updated_at=now() WHERE app_id=$2 AND deletion_key=$3`, [String(error?.message ?? "App deletion failed").slice(0, 1000), payload.appId, payload.deletionKey]);
       } catch {}

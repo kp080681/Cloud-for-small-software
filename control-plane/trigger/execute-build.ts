@@ -16,6 +16,11 @@ import {
   assertRuntimeMatchesDeployment,
   assertSscProviderResourceIdentity,
 } from "../src/tenant-boundary.mjs";
+import {
+  buildResultAttachmentDecision,
+  claimProviderCreateOperation,
+  providerCreateClaimDecision,
+} from "../src/provider-mutation-fencing.mjs";
 
 const { Client } = pg;
 const API = "https://api.vercel.com";
@@ -100,6 +105,50 @@ async function attachProviderDeployment(db: pg.Client, deployment: any, provider
 
   await db.query("BEGIN");
   try {
+    const current = await db.query(
+      `SELECT d.status AS deployment_status,
+              o.status AS operation_status
+         FROM deployments d
+         JOIN deployment_provider_operations o ON o.id=$1
+        WHERE d.id=$2
+        FOR UPDATE OF d,o`,
+      [operationId, deployment.id],
+    );
+    if (current.rowCount !== 1) throw new Error("Deployment/provider operation disappeared before build attachment");
+    const decision = buildResultAttachmentDecision(current.rows[0]);
+    if (decision.action !== "attach") {
+      await db.query(
+        `UPDATE deployment_provider_operations
+            SET provider_resource_id=$1,
+                status='OBSERVED_STALE',
+                updated_at=now(),
+                metadata=metadata||$2::jsonb
+          WHERE id=$3`,
+        [providerDeploymentId, JSON.stringify({
+          staleReason: decision.reason,
+          providerDeploymentUrl: deploymentUrl,
+          providerStatus,
+          sourceCommitSha: deployment.commit_sha,
+        }), operationId],
+      );
+      await db.query(
+        `INSERT INTO deployment_events
+           (deployment_id,from_status,to_status,event_type,message,metadata)
+         VALUES ($1,$2,$2,'BUILD_PROVIDER_RESULT_STALE',
+                 'Provider deployment result was observed after deployment became incompatible', $3::jsonb)`,
+        [deployment.id, current.rows[0].deployment_status, JSON.stringify({
+          provider: "vercel",
+          providerDeploymentId,
+          providerDeploymentUrl: deploymentUrl,
+          providerStatus,
+          staleReason: decision.reason,
+          providerOperationId: operationId,
+          providerResourceTraceable: true,
+        })],
+      );
+      await db.query("COMMIT");
+      return { providerDeploymentId, providerDeploymentUrl: deploymentUrl, providerStatus, stale: true, staleReason: decision.reason };
+    }
     await db.query(
       `INSERT INTO deployment_builds
          (deployment_id, provider, provider_deployment_id, provider_deployment_url, source_commit_sha, status)
@@ -177,10 +226,19 @@ export const executeBuild=task({id:"ssc-control-plane-execute-build",retry:{maxA
   }
 
   const [org,repo]=String(deployment.repository_full_name).split("/");if(!org||!repo)throw new Error(`Invalid GitHub repository identity: ${deployment.repository_full_name}`);
-  await db.query(`UPDATE deployment_provider_operations SET status='CREATE_REQUESTED',updated_at=now() WHERE id=$1`,[operation.id]);
+  if(providerCreateClaimDecision(operation).action!=="claim-create"){
+    return{result:"NODE_15R_4_BUILD_CREATE_NOT_CLAIMED",deploymentId:payload.deploymentId,status:"BUILDING",providerProjectId:deployment.provider_project_id,sourceCommitSha:deployment.commit_sha,createdNewDeployment:false,operationStatus:operation.status};
+  }
+  const claim=await claimProviderCreateOperation(db,{operationId:operation.id});
+  if(!claim.claimed){
+    return{result:"NODE_15R_4_BUILD_CREATE_ALREADY_CLAIMED",deploymentId:payload.deploymentId,status:"BUILDING",providerProjectId:deployment.provider_project_id,sourceCommitSha:deployment.commit_sha,createdNewDeployment:false,operationStatus:claim.operation.status};
+  }
   const body:any={name:deployment.provider_project_name,project:deployment.provider_project_id,target:"production",gitSource:{type:"github",org,repo,ref:deployment.commit_sha},meta:sscDeploymentMeta({deploymentId:payload.deploymentId,sourceCommitSha:deployment.commit_sha,manifestSha256:deployment.manifest_sha256}),projectSettings:{framework:deployment.framework||"nextjs",installCommand:deployment.install_command,buildCommand:deployment.build_command}};
   let created:any;try{created=await vercelRequest(`/v13/deployments${teamQuery()}`,{method:"POST",body:JSON.stringify(body)})}catch(error:any){const classifiedError=classifyProviderError(error);if(!classifiedError)throw error;await db.query(`UPDATE deployments SET error_code=$1,error_message=$2,updated_at=now() WHERE id=$3`,[classifiedError.errorCode,classifiedError.userMessage,payload.deploymentId]);await db.query(`UPDATE deployment_provider_operations SET status='FAILED',updated_at=now(),metadata=metadata||$1::jsonb WHERE id=$2`,[JSON.stringify({classification:classifiedError.classification,errorCode:classifiedError.errorCode}),operation.id]);await db.query(`INSERT INTO deployment_events (deployment_id,from_status,to_status,event_type,message,metadata) VALUES ($1,'BUILDING','BUILDING','BUILD_PROVIDER_BLOCKED',$2,$3::jsonb)`,[payload.deploymentId,classifiedError.userMessage,JSON.stringify({provider:"vercel",classification:classifiedError.classification,errorCode:classifiedError.errorCode,retryableNow:classifiedError.retryableNow,providerOperationId:operation.id})]);return{result:`NODE_04_10_${classifiedError.classification}`,deploymentId:payload.deploymentId,provider:"vercel",sourceCommitSha:deployment.commit_sha,deploymentStatus:deployment.status,errorCode:classifiedError.errorCode,message:classifiedError.userMessage,retryableNow:classifiedError.retryableNow}}
   const attached=await attachProviderDeployment(db,deployment,created,operation.id,"BUILD_STARTED");
+  if(attached.stale){
+    return{result:"NODE_15R_4_BUILD_PROVIDER_RESULT_STALE",deploymentId:payload.deploymentId,provider:"vercel",providerProjectId:deployment.provider_project_id,...attached,sourceCommitSha:deployment.commit_sha,manifestSha256:deployment.manifest_sha256,target:"production",createdNewDeployment:true,providerResourceTraceable:true};
+  }
   return{result:"NODE_04_10_BUILD_STARTED",deploymentId:payload.deploymentId,provider:"vercel",providerProjectId:deployment.provider_project_id,...attached,sourceCommitSha:deployment.commit_sha,manifestSha256:deployment.manifest_sha256,target:"production",createdNewDeployment:true};
  }finally{await db.end()}
 }});
