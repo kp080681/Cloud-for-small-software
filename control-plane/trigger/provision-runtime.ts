@@ -3,6 +3,12 @@ import pg from "pg";
 import { sscManagedProjectGitSettings } from "../src/vercel-project-config.mjs";
 import { runtimeRecoveryAction } from "../src/vercel-runtime-recovery.mjs";
 import { vercelRootDirectory } from "../src/source-boundary.mjs";
+import {
+  assertProviderProjectNotOwnedByAnotherApp,
+  assertRemoteProjectMatchesSscApp,
+  sscProviderProjectName,
+} from "../src/provider-project-identity.mjs";
+import { assertRuntimeMatchesDeployment } from "../src/tenant-boundary.mjs";
 
 const { Client } = pg;
 const API = "https://api.vercel.com";
@@ -17,7 +23,7 @@ function teamQuery() { const teamId=process.env.VERCEL_TEAM_ID; return teamId?`?
 function safeProviderErrorBody(body:any){ if(!body||typeof body!=="object")return body; const error=body.error&&typeof body.error==="object"?body.error:null; return {error:error?{code:error.code??null,message:error.message??null}:null,code:body.code??null,message:body.message??null}; }
 async function request(path:string,options:RequestInit={}){ const token=process.env.VERCEL_TOKEN; if(!token)throw new Error("Missing VERCEL_TOKEN"); const response=await fetch(`${API}${path}`,{...options,headers:{Authorization:`Bearer ${token}`,"Content-Type":"application/json",...(options.headers??{})}}); const text=await response.text(); let body:any=null; if(text){try{body=JSON.parse(text)}catch{body=text}} if(!response.ok){const safeBody=safeProviderErrorBody(body);const details=safeBody?`: ${JSON.stringify(safeBody)}`:"";const error:any=new Error(`Vercel API ${response.status} ${response.statusText}${details}`);error.status=response.status;throw error;} return body; }
 async function getRuntime(name:string){try{return await request(`/v9/projects/${encodeURIComponent(name)}${teamQuery()}`)}catch(error:any){if(error.status===404)return null;throw error}}
-async function ensureRuntime({name,repository,rootDirectory}:{name:string;repository:string;rootDirectory:string}){const existing=await getRuntime(name);const action=runtimeRecoveryAction({localRuntime:null,remoteProject:existing});if(action.action==="reconcile-remote-project")return{resource:existing,created:false,reconciled:true};const normalizedRootDirectory=vercelRootDirectory(rootDirectory);try{const created=await request(`/v11/projects${teamQuery()}`,{method:"POST",body:JSON.stringify({name,framework:"nextjs",...(normalizedRootDirectory?{rootDirectory:normalizedRootDirectory}:{}),gitRepository:{type:"github",repo:repository},...sscManagedProjectGitSettings()})});return{resource:created,created:true,reconciled:false}}catch(error:any){if([400,409].includes(error.status)){const reconciled=await getRuntime(name);if(reconciled)return{resource:reconciled,created:false,reconciled:true}}throw error}}
+async function ensureRuntime({name,repository,rootDirectory,workspaceId,appId,slug}:{name:string;repository:string;rootDirectory:string;workspaceId:string;appId:string;slug:string}){const existing=await getRuntime(name);const action=runtimeRecoveryAction({localRuntime:null,remoteProject:existing});if(action.action==="reconcile-remote-project"){assertRemoteProjectMatchesSscApp(existing,{workspaceId,appId,slug});return{resource:existing,created:false,reconciled:true};}const normalizedRootDirectory=vercelRootDirectory(rootDirectory);try{const created=await request(`/v11/projects${teamQuery()}`,{method:"POST",body:JSON.stringify({name,framework:"nextjs",...(normalizedRootDirectory?{rootDirectory:normalizedRootDirectory}:{}),gitRepository:{type:"github",repo:repository},...sscManagedProjectGitSettings()})});assertRemoteProjectMatchesSscApp(created,{workspaceId,appId,slug});return{resource:created,created:true,reconciled:false}}catch(error:any){if([400,409].includes(error.status)){const reconciled=await getRuntime(name);if(reconciled){assertRemoteProjectMatchesSscApp(reconciled,{workspaceId,appId,slug});return{resource:reconciled,created:false,reconciled:true}}}throw error}}
 
 export const provisionRuntime=task({
  id:"ssc-control-plane-provision-runtime", retry:{maxAttempts:3,minTimeoutInMs:2000,maxTimeoutInMs:10000,factor:2,randomize:false},
@@ -25,9 +31,12 @@ export const provisionRuntime=task({
   const result=await db.query(`SELECT d.id,d.workspace_id,d.app_id,d.status,a.slug,a.root_directory,r.full_name AS repository_full_name FROM deployments d JOIN apps a ON a.id=d.app_id JOIN github_repositories r ON r.id=a.repository_id WHERE d.id=$1`,[payload.deploymentId]);
   if(result.rowCount===0)throw new Error(`Deployment not found: ${payload.deploymentId}`);const deployment=result.rows[0];
   if(!["PROVISIONING","BUILDING"].includes(deployment.status))throw new Error(`Runtime cannot be provisioned from status ${deployment.status}`);
-  const existingRuntime=await db.query(`SELECT provider,provider_project_id,provider_project_name,reconciliation_key,status FROM app_runtimes WHERE app_id=$1`,[deployment.app_id]);
+  const existingRuntime=await db.query(`SELECT workspace_id,app_id,provider,provider_project_id,provider_project_name,reconciliation_key,status FROM app_runtimes WHERE app_id=$1`,[deployment.app_id]);
   if(existingRuntime.rowCount===1){
    const runtime=existingRuntime.rows[0];
+   assertRuntimeMatchesDeployment(runtime,deployment);
+   const localOwners=await db.query(`SELECT app_id,provider_project_id FROM app_runtimes WHERE provider=$1 AND provider_project_id=$2`,[runtime.provider,runtime.provider_project_id]);
+   assertProviderProjectNotOwnedByAnotherApp(localOwners.rows,{appId:deployment.app_id,providerProjectId:runtime.provider_project_id});
    if(deployment.status==="PROVISIONING"){
     await db.query("BEGIN");try{
      const advanced=await db.query(`UPDATE deployments SET runtime_project_id=$1,status='BUILDING',updated_at=now() WHERE id=$2 AND status='PROVISIONING' RETURNING id`,[runtime.provider_project_id,payload.deploymentId]);
@@ -37,8 +46,10 @@ export const provisionRuntime=task({
    }
    return{result:"NODE_04_8_RUNTIME_RECONCILED",deploymentId:payload.deploymentId,status:"BUILDING",provider:runtime.provider,providerProjectId:runtime.provider_project_id,providerProjectName:runtime.provider_project_name,reconciliationKey:runtime.reconciliation_key,runtimeStatus:runtime.status};
   }
-  const projectName=`ssc-${deployment.slug}`.toLowerCase().replace(/[^a-z0-9-]/g,"-").slice(0,80);const reconciliationKey=`runtime:${deployment.workspace_id}:${deployment.app_id}`;
-  const provisioned=await ensureRuntime({name:projectName,repository:deployment.repository_full_name,rootDirectory:deployment.root_directory});const project=provisioned.resource;if(!project?.id)throw new Error("Vercel runtime creation returned no project id");
+  const projectName=sscProviderProjectName({workspaceId:deployment.workspace_id,appId:deployment.app_id,slug:deployment.slug});const reconciliationKey=`runtime:${deployment.workspace_id}:${deployment.app_id}`;
+  const provisioned=await ensureRuntime({name:projectName,repository:deployment.repository_full_name,rootDirectory:deployment.root_directory,workspaceId:deployment.workspace_id,appId:deployment.app_id,slug:deployment.slug});const project=provisioned.resource;if(!project?.id)throw new Error("Vercel runtime creation returned no project id");
+  const localOwners=await db.query(`SELECT app_id,provider_project_id FROM app_runtimes WHERE provider='vercel' AND provider_project_id=$1`,[project.id]);
+  assertProviderProjectNotOwnedByAnotherApp(localOwners.rows,{appId:deployment.app_id,providerProjectId:project.id});
   await db.query("BEGIN");try{
    await db.query(`INSERT INTO app_runtimes (workspace_id,app_id,provider,provider_project_id,provider_project_name,reconciliation_key,status) VALUES ($1,$2,'vercel',$3,$4,$5,'READY')`,[deployment.workspace_id,deployment.app_id,project.id,project.name??projectName,reconciliationKey]);
    await db.query(`UPDATE deployments SET runtime_project_id=$1,status='BUILDING',updated_at=now() WHERE id=$2 AND status='PROVISIONING'`,[project.id,payload.deploymentId]);

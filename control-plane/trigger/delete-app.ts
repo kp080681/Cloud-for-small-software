@@ -1,5 +1,9 @@
 import { task } from "@trigger.dev/sdk";
 import pg from "pg";
+import {
+  assertProviderProjectNotOwnedByAnotherApp,
+  assertRemoteProjectMatchesSscApp,
+} from "../src/provider-project-identity.mjs";
 
 const { Client } = pg;
 const API = "https://api.vercel.com";
@@ -20,6 +24,19 @@ async function deleteVercelProject(projectId: string) {
   throw new Error(`Vercel project deletion failed: ${response.status} ${response.statusText}${text ? `: ${text.slice(0, 500)}` : ""}`);
 }
 
+async function getVercelProject(projectId: string) {
+  if (!process.env.VERCEL_TOKEN) throw new Error("Missing VERCEL_TOKEN");
+  const response = await fetch(`${API}/v9/projects/${encodeURIComponent(projectId)}${teamQuery()}`, {
+    headers: { Authorization: `Bearer ${process.env.VERCEL_TOKEN}` },
+  });
+  if (response.status === 404) return null;
+  if (!response.ok) {
+    const text = await response.text();
+    throw new Error(`Vercel project lookup failed before deletion: ${response.status} ${response.statusText}${text ? `: ${text.slice(0, 500)}` : ""}`);
+  }
+  return response.json();
+}
+
 export const deleteApp = task({
   id: "ssc-control-plane-delete-app",
   retry: { maxAttempts: 2, minTimeoutInMs: 2000, maxTimeoutInMs: 8000, factor: 2, randomize: false },
@@ -29,8 +46,8 @@ export const deleteApp = task({
     await db.connect();
     try {
       const appResult = await db.query(
-        `SELECT a.id, a.workspace_id, a.deleted_at,
-                rt.provider, rt.provider_project_id
+        `SELECT a.id, a.workspace_id, a.slug, a.deleted_at,
+                rt.provider, rt.provider_project_id, rt.provider_project_name
            FROM apps a
            LEFT JOIN app_runtimes rt ON rt.app_id=a.id
           WHERE a.id=$1 AND a.workspace_id=$2`,
@@ -59,12 +76,32 @@ export const deleteApp = task({
       const deletion = deletionResult.rows[0];
       if (deletion.workspace_id !== payload.workspaceId) throw new Error("Deletion workspace binding mismatch");
       if (deletion.provider_project_id !== app.provider_project_id) throw new Error("Provider project identity changed after deletion request");
+      if (deletion.provider_project_id) {
+        const localOwners = await db.query(
+          `SELECT app_id, provider_project_id FROM app_runtimes WHERE provider=$1 AND provider_project_id=$2`,
+          [deletion.provider, deletion.provider_project_id],
+        );
+        assertProviderProjectNotOwnedByAnotherApp(localOwners.rows, {
+          appId: payload.appId,
+          providerProjectId: deletion.provider_project_id,
+        });
+      }
 
       await db.query(`UPDATE app_deletions SET status='DELETING', error_code=NULL, error_message=NULL, updated_at=now() WHERE app_id=$1`, [payload.appId]);
       await db.query(`UPDATE deployments SET status='DELETING', updated_at=now() WHERE app_id=$1 AND status <> 'DELETED'`, [payload.appId]);
 
       if (deletion.provider_project_id) {
         if (deletion.provider !== "vercel") throw new Error(`Unsupported deletion provider: ${deletion.provider}`);
+        const remoteProject = await getVercelProject(deletion.provider_project_id);
+        if (remoteProject) {
+          assertRemoteProjectMatchesSscApp(remoteProject, {
+            workspaceId: payload.workspaceId,
+            appId: payload.appId,
+            slug: app.slug,
+            storedProjectName: app.provider_project_name,
+            allowLegacyStoredBinding: true,
+          });
+        }
         await deleteVercelProject(deletion.provider_project_id);
       }
 

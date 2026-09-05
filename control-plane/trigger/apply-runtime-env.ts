@@ -5,6 +5,10 @@ import {
   assertRuntimeMatchesDeployment,
   assertSecretBindingBelongsToApp,
 } from "../src/tenant-boundary.mjs";
+import {
+  assertProviderProjectNotOwnedByAnotherApp,
+  assertRemoteProjectMatchesSscApp,
+} from "../src/provider-project-identity.mjs";
 
 const { Client } = pg;
 const API = "https://api.vercel.com";
@@ -47,6 +51,10 @@ async function vercelRequest(path: string, options: RequestInit = {}) {
   return body;
 }
 
+async function getVercelProject(projectId: string) {
+  return vercelRequest(`/v9/projects/${encodeURIComponent(projectId)}${teamQuery()}`);
+}
+
 export const applyRuntimeEnv = task({
   id: "ssc-control-plane-apply-runtime-env",
   retry: { maxAttempts: 3, minTimeoutInMs: 2000, maxTimeoutInMs: 10000, factor: 2, randomize: false },
@@ -58,8 +66,10 @@ export const applyRuntimeEnv = task({
     try {
       const deploymentResult = await db.query(
         `SELECT d.id, d.workspace_id, d.app_id, d.status, d.runtime_project_id,
-                r.provider, r.provider_project_id
+                a.slug,
+                r.provider, r.provider_project_id, r.provider_project_name
            FROM deployments d
+           JOIN apps a ON a.id = d.app_id
            JOIN app_runtimes r ON r.app_id = d.app_id
           WHERE d.id = $1`,
         [payload.deploymentId],
@@ -74,6 +84,21 @@ export const applyRuntimeEnv = task({
         workspace_id: deployment.workspace_id,
         provider_project_id: deployment.provider_project_id,
       }, deployment);
+      const localOwners = await db.query(
+        `SELECT app_id, provider_project_id FROM app_runtimes WHERE provider=$1 AND provider_project_id=$2`,
+        [deployment.provider, deployment.provider_project_id],
+      );
+      assertProviderProjectNotOwnedByAnotherApp(localOwners.rows, {
+        appId: deployment.app_id,
+        providerProjectId: deployment.provider_project_id,
+      });
+      assertRemoteProjectMatchesSscApp(await getVercelProject(deployment.provider_project_id), {
+        workspaceId: deployment.workspace_id,
+        appId: deployment.app_id,
+        slug: deployment.slug,
+        storedProjectName: deployment.provider_project_name,
+        allowLegacyStoredBinding: true,
+      });
 
       const bindingResult = await db.query(
         `SELECT b.id AS binding_id, b.workspace_id AS binding_workspace_id,

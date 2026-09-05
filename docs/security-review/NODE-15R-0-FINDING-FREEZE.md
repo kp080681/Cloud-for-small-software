@@ -22,6 +22,8 @@ Reviewer claim: two workspaces can each have an app with the same slug and both 
 
 Classification: `CONFIRMED`
 
+Remediation status: `RESOLVED_BY_15R_1`. Node 15R.1 replaces slug-only provider project identity with deterministic workspace/app-id-based project names, refuses remote project adoption unless the remote project name matches the expected SSC app identity, adds local provider project uniqueness, and verifies runtime identity before secret injection, build targeting, and provider deletion.
+
 Exact files/functions:
 
 - `control-plane/db/001_initial_schema.sql`: `apps` has `UNIQUE (workspace_id, slug)`, so duplicate slugs across workspaces are valid.
@@ -484,7 +486,7 @@ Notes: this is a product-contract gap more than a hostile-code bug, but it is al
 
 | Frozen ID | Source Finding | Classification | Required Next Node | Summary |
 | --- | --- | --- | --- | --- |
-| `15R-F01` | P0-A | `CONFIRMED` | `15R.1` | Slug-only Vercel project naming/adoption crosses workspaces |
+| `15R-F01` | P0-A | `CONFIRMED`; `RESOLVED_BY_15R_1` | `15R.1` | Slug-only Vercel project naming/adoption crosses workspaces |
 | `15R-F02` | P0-B | `CONFIRMED` | `15R.1` | Mutating operator scripts target slug without workspace identity |
 | `15R-F03` | Tenant-boundary assertion wiring | `PARTIALLY_CONFIRMED` | `15R.1` | Assertions exist, but production use is limited |
 | `15R-F04` | P1-A | `CONFIRMED` | `15R.2` | Concurrent build execution can double-create provider deployments |
