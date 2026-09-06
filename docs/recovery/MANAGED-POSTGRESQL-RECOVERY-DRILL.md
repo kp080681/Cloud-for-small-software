@@ -1,6 +1,12 @@
 # Managed PostgreSQL Recovery Drill
 
-Status: Node 15R.12B drill tooling debugged after the first disposable provider attempt. A clean operator rerun is still required before managed PostgreSQL recovery can be marked proven. No production control-plane database, customer database, workload, Vercel resource, Trigger worker, or Supabase project is touched by this drill.
+Status: Node 15R.12B managed PostgreSQL recovery proof is complete. A real disposable SSC-managed Neon PostgreSQL database was restored to a previously captured LSN using Neon branch restore, and deterministic test data was recovered with exact row-count and digest parity. No production control-plane database, customer database, workload, Vercel resource, Trigger worker, or Supabase project was touched by this drill.
+
+```text
+PROVIDER_NATIVE_RECOVERY_VERIFIED = true
+SSC_MANAGED_DATABASE_RECOVERY_STATUS = PASS
+NODE_15R_12B_COMPLETE = true
+```
 
 ## First Disposable Drill Attempt
 
@@ -34,8 +40,88 @@ Corrective change:
 Current status:
 
 ```text
-MANAGED_POSTGRESQL_RECOVERY_DRILL_STATUS = CODE_FIXED_PENDING_CLEAN_OPERATOR_RERUN
+MANAGED_POSTGRESQL_RECOVERY_DRILL_STATUS = FAILED_CLOSED_THEN_FIXED_AND_RERUN_SUCCESSFULLY
 ```
+
+## Successful Disposable Recovery Drill
+
+Observed result:
+
+```text
+provider: Neon
+recoveryMechanism: NEON_BRANCH_RESTORE_TO_LSN
+restoreTargetModel: IN_PLACE_BRANCH_RESTORE_WITH_PRESERVED_BACKUP_BRANCH
+providerProjectId: broad-credit-71300249
+providerProjectName: ssc-5f248009bd81-fd03a3a0e2d8-db
+providerBranchId: br-square-night-awu7etz0
+providerEndpointId: ep-cool-haze-awgryisx
+database: neondb
+role: neondb_owner
+hostSuffix: aws.neon.tech
+```
+
+Data proof:
+
+```text
+originalRowCount: 3
+originalDigest: 2813db600857eb54ce76585a5769ce7f26659852ff21d4bbb1b5b7d7ac0bb859
+destructiveTestMutationConfirmed: true
+mutatedRowCount: 0
+mutatedDigest: 4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945
+recoveryCompleted: true
+recoveredRowCount: 3
+recoveredDigest: 2813db600857eb54ce76585a5769ce7f26659852ff21d4bbb1b5b7d7ac0bb859
+rowCountParity: true
+dataDigestParity: true
+```
+
+Observed timings:
+
+```text
+databaseProvisionDurationMs: 5795
+recoveryOperationDurationMs: 6983
+postRecoveryVerificationDurationMs: 3273
+```
+
+These timings are engineering observations only. They are not public SLA, RTO, or RPO commitments.
+
+Database URL behavior:
+
+```text
+recoveryRequiresNewDatabaseUrl: false
+recoveredDatabaseUrlEncrypted: NOT_APPLICABLE
+```
+
+This was the observed behavior for the tested in-place Neon branch-restore-to-LSN path. Do not infer that every future Neon recovery mechanism will preserve the same connection URL behavior.
+
+Security and isolation evidence:
+
+```text
+providerCallsExecuted: true
+providerResourcesMutated: DISPOSABLE_ONLY
+productionDatabaseMutated: false
+plaintextDatabaseCredentialsPrinted: false
+```
+
+Cleanup proof:
+
+```text
+cleanupResult: SSC_MANAGED_DATABASE_RECOVERY_DRILL_CLEANUP
+providerProjectId: broad-credit-71300249
+deleted: true
+notFound: false
+plaintextDatabaseCredentialsPrinted: false
+CLEANUP_COMPLETE: true
+DISPOSABLE_RESOURCE_REMAINING: false
+```
+
+The demonstrated claim is intentionally narrow:
+
+```text
+A disposable SSC-managed Neon PostgreSQL database was restored to a previously captured LSN using Neon branch restore, and deterministic test data was recovered with exact row-count and digest parity.
+```
+
+This does not prove zero data loss generally, guaranteed RPO, guaranteed RTO, customer self-service restore, scheduled SSC-managed backups, or all Neon recovery mechanisms.
 
 ## Recovery Contract
 
@@ -65,10 +151,10 @@ Current classification:
 ```text
 NEON_RECOVERY_MECHANISM = NEON_BRANCH_RESTORE_TO_LSN
 RESTORE_TARGET_MODEL = IN_PLACE_BRANCH_RESTORE_WITH_PRESERVED_BACKUP_BRANCH
-CUSTOMER_DATABASE_RECOVERY_STATUS = CODE_READY_PENDING_REAL_DRILL
+CUSTOMER_DATABASE_RECOVERY_STATUS = PASS
 ```
 
-Retention/history window and plan availability remain provider/account-dependent until the operator records live account evidence. Do not treat documentation availability as proof that the current account has the required recovery window.
+Retention/history window and plan availability remain provider/account-dependent and must be verified in 15R.13 before external alpha provider configuration signoff. The successful drill proves the tested disposable branch-restore path, not every account/plan recovery boundary.
 
 ## Drill Runner
 

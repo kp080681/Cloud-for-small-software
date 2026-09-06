@@ -27,7 +27,7 @@ Node 15R.12 concerns only customer workload PostgreSQL. Node 18 backup/recovery 
 | Customer database deletion | `PRODUCTION_WIRED` | `control-plane/trigger/delete-app.ts` calls ownership-aware managed DB deletion; `EXTERNAL`/`NONE` skip provider deletion and `UNKNOWN` fails closed. |
 | Customer database retry/idempotency | `PRODUCTION_WIRED` | `app_databases` intent/status plus deterministic reconciliation key prevent duplicate create on replay and allow retry/reconcile. |
 | Customer database orphan reconciliation | `PARTIALLY_PRODUCTION_WIRED` | `control-plane/trigger/detect-orphan-resources.ts` can read-only classify SSC-looking Neon projects when a Neon token is present; live provider-wide completeness remains 15R.13. |
-| Customer database backup/restore proof | `ABSENT` | Node 18 proves control-plane backup/restore only. External customer database backups remain externally owned. |
+| Customer database backup/restore proof | `PROVIDER_NATIVE_RECOVERY_VERIFIED` | Node 15R.12B restored a disposable SSC-managed Neon PostgreSQL database to a captured LSN using Neon branch restore and verified exact row-count/digest parity. External customer database backups remain externally owned. |
 | Customer database resource limits | `PRODUCTION_WIRED` | Workspace policy now includes `max_managed_databases` with controlled-alpha default `3`; provider storage/compute/spend controls remain provider-verification items. |
 | Customer database tenant ownership | `PRODUCTION_WIRED` | Managed DB records bind workspace/app/provider identity and deletion/provisioning helpers assert ownership before mutation. |
 | External database configuration diagnostics | `PRODUCTION_WIRED` | Missing required `DATABASE_URL` or Supabase env names can produce actionable environment diagnostics. |
@@ -86,7 +86,7 @@ For controlled alpha:
 - Existing external PostgreSQL/Supabase workloads are supported through encrypted app secrets and normal env requirement verification.
 - SSC must not delete, modify, migrate, back up, or restore external customer databases.
 - SSC-managed PostgreSQL is now production-wired in code and schema, pending migration application and live provider verification.
-- Managed customer database backup/restore proof remains separate and is tracked as `15R.12B Managed PostgreSQL Recovery Proof`.
+- Managed customer database backup/restore proof for the tested Neon branch-restore-to-LSN path is complete under `15R.12B Managed PostgreSQL Recovery Proof`.
 
 This does not remove PostgreSQL from the V1 thesis. It also prevents the platform from inferring ownership from `DATABASE_URL` or provider hostnames.
 
@@ -104,7 +104,7 @@ Node 15R.12A implements:
 - Add workspace database admission limit `max_managed_databases` with default `3`.
 - Extend inventory/orphan detection to SSC-owned database resources.
 - Add audit events and diagnostics for managed database create/reconcile/delete/failure states.
-- Document provider backup/PITR responsibility and keep customer database restore proof in Node 15R.12B.
+- Document provider backup/PITR responsibility and the completed disposable customer database restore proof from Node 15R.12B.
 - Record live Neon token scope, backup/PITR, quota, and cost controls as provider-dependent verification items.
 
 ## Current Safe Destructive Boundary
@@ -129,11 +129,16 @@ SSC-managed database mode:
 - SSC must verify provider-managed backup/PITR and prove at least one customer database restore path before claiming backup coverage.
 - Control-plane backup evidence does not prove customer database recovery.
 
-Node 15R.12B prepares the managed database recovery drill around Neon branch restore to an LSN using a disposable project and synthetic data. Until the real drill is run and accepted, customer database recovery remains:
+Node 15R.12B proved the managed database recovery drill around Neon branch restore to an LSN using a disposable project and synthetic data. The drill restored row-count and SHA-256 digest parity after destructive mutation, printed no plaintext database credentials, and cleaned up the disposable Neon project.
 
 ```text
-CUSTOMER_DATABASE_RECOVERY_STATUS = CODE_READY_PENDING_REAL_DRILL
+PROVIDER_NATIVE_RECOVERY_VERIFIED = true
+SSC_MANAGED_DATABASE_RECOVERY_STATUS = PASS
+CUSTOMER_DATABASE_RECOVERY_STATUS = PASS
+NODE_15R_12B_COMPLETE = true
 ```
+
+The proven claim remains narrow: a disposable SSC-managed Neon PostgreSQL database was restored to a previously captured LSN using Neon branch restore, and deterministic test data was recovered with exact row-count and digest parity. This does not claim zero data loss generally, guaranteed RPO/RTO, customer self-service restore, scheduled SSC backups, or coverage for all Neon recovery mechanisms.
 
 ## Provider-Dependent Security Checks
 
@@ -212,6 +217,6 @@ Spike security gaps closed by 15R.12A:
 Remaining provider-dependent gaps:
 
 - Live Neon token scope and account permissions.
-- Provider backup/PITR behavior.
+- Provider backup/PITR account/plan settings beyond the tested disposable branch-restore path.
 - Project/storage/compute/spend limits.
 - Live provider orphan inventory completeness.
