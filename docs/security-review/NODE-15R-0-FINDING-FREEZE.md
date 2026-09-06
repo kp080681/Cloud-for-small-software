@@ -565,7 +565,7 @@ Concrete consequence before 15R.12A: a workload requiring SSC-provisioned Postgr
 
 Decision: Node 15R.12 selected explicit database ownership modes for controlled alpha. Node 15R.12A implements `NONE`, `EXTERNAL`, and `SSC_MANAGED` production wiring while preserving existing no-database and external-database workload safety.
 
-Resolution: Node 15R.12A adds explicit `NONE`, `EXTERNAL`, and `SSC_MANAGED` database modes, a managed database resource record, workspace managed database admission limit, durable create intent/claim, Neon provisioning/reconciliation, encrypted generated `DATABASE_URL`, production-only binding, ownership-aware deletion, and read-only managed database inventory/orphan classification. Provider credential scope, live Neon account behavior, and customer database recovery proof remain separate verification work.
+Resolution: Node 15R.12A adds explicit `NONE`, `EXTERNAL`, and `SSC_MANAGED` database modes, a managed database resource record, workspace managed database admission limit, durable create intent/claim, Neon provisioning/reconciliation, encrypted generated `DATABASE_URL`, production-only binding, ownership-aware deletion, and read-only managed database inventory/orphan classification. Node 15R.12B prepares a disposable Neon branch-restore drill for managed customer database recovery. Provider credential scope, live Neon account behavior, and the real disposable recovery run remain separate verification work.
 
 Required next node: `15R.12B Managed PostgreSQL Recovery Proof`
 

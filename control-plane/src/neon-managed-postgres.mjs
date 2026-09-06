@@ -98,6 +98,59 @@ export async function getNeonConnectionUri(resource, { request = neonRequest } =
   return request(`/projects/${encodeURIComponent(resource.providerProjectId)}/connection_uri?${params.toString()}`);
 }
 
+export async function restoreNeonBranch({ projectId, branchId, sourceBranchId, sourceLsn, sourceTimestamp, preserveUnderName }, { request = neonRequest } = {}) {
+  const body = {
+    source_branch_id: sourceBranchId,
+    ...(sourceLsn ? { source_lsn: sourceLsn } : {}),
+    ...(sourceTimestamp ? { source_timestamp: sourceTimestamp } : {}),
+    ...(preserveUnderName ? { preserve_under_name: preserveUnderName } : {}),
+  };
+  return request(`/projects/${encodeURIComponent(projectId)}/branches/${encodeURIComponent(branchId)}/restore${neonOrgQuery()}`, {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+}
+
+export async function getNeonOperation({ projectId, operationId }, { request = neonRequest } = {}) {
+  return request(`/projects/${encodeURIComponent(projectId)}/operations/${encodeURIComponent(operationId)}${neonOrgQuery()}`);
+}
+
+export function operationIdsFromNeonResponse(body) {
+  const operations = Array.isArray(body?.operations) ? body.operations : body?.operation ? [body.operation] : [];
+  return operations.map((operation) => operation?.id).filter(Boolean);
+}
+
+export function neonOperationStatus(operation) {
+  return String(operation?.status ?? operation?.operation?.status ?? "").toLowerCase();
+}
+
+export async function waitForNeonOperations({ projectId, operationIds, timeoutMs = 120000, pollMs = 2000 }, { getOperation = getNeonOperation, sleep = defaultSleep } = {}) {
+  const ids = [...new Set(operationIds.filter(Boolean))];
+  if (!ids.length) return [];
+  const deadline = Date.now() + timeoutMs;
+  const completed = new Map();
+  while (Date.now() < deadline) {
+    for (const operationId of ids) {
+      if (completed.has(operationId)) continue;
+      const body = await getOperation({ projectId, operationId });
+      const operation = body?.operation ?? body;
+      const status = neonOperationStatus(operation);
+      if (["finished", "succeeded", "success", "completed"].includes(status)) {
+        completed.set(operationId, { operationId, status });
+      } else if (["failed", "error", "cancelled", "canceled"].includes(status)) {
+        throw new Error(`Neon operation ${operationId} failed with status ${status}`);
+      }
+    }
+    if (completed.size === ids.length) return [...completed.values()];
+    await sleep(pollMs);
+  }
+  throw new Error(`Timed out waiting for Neon operations: ${ids.join(",")}`);
+}
+
+function defaultSleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 export function normalizeNeonProjectResource(body) {
   const project = body?.project ?? body;
   const branch = body?.branch ?? body?.branches?.[0] ?? project?.default_branch ?? null;

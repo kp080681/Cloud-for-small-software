@@ -104,7 +104,7 @@ Node 15R.12A implements:
 - Add workspace database admission limit `max_managed_databases` with default `3`.
 - Extend inventory/orphan detection to SSC-owned database resources.
 - Add audit events and diagnostics for managed database create/reconcile/delete/failure states.
-- Document provider backup/PITR responsibility and keep customer database restore proof separate.
+- Document provider backup/PITR responsibility and keep customer database restore proof in Node 15R.12B.
 - Record live Neon token scope, backup/PITR, quota, and cost controls as provider-dependent verification items.
 
 ## Current Safe Destructive Boundary
@@ -117,7 +117,7 @@ Managed database deletion is fail-closed:
 - `SSC_MANAGED`: delete only when provider identity and tenant ownership match the persisted SSC record and provider evidence.
 - `UNKNOWN`: refuse destructive operation and require explicit recovery classification.
 
-## Backup Responsibility
+## Backup And Recovery Responsibility
 
 External database mode:
 
@@ -128,6 +128,12 @@ SSC-managed database mode:
 
 - SSC must verify provider-managed backup/PITR and prove at least one customer database restore path before claiming backup coverage.
 - Control-plane backup evidence does not prove customer database recovery.
+
+Node 15R.12B prepares the managed database recovery drill around Neon branch restore to an LSN using a disposable project and synthetic data. Until the real drill is run and accepted, customer database recovery remains:
+
+```text
+CUSTOMER_DATABASE_RECOVERY_STATUS = CODE_READY_PENDING_REAL_DRILL
+```
 
 ## Provider-Dependent Security Checks
 

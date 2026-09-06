@@ -19,7 +19,12 @@ import {
   DEFAULT_WORKSPACE_RESOURCE_POLICY,
   managedDatabaseLimitDecision,
 } from "../src/workspace-resource-policy.mjs";
-import { normalizeNeonProjectResource } from "../src/neon-managed-postgres.mjs";
+import {
+  normalizeNeonProjectResource,
+  operationIdsFromNeonResponse,
+  restoreNeonBranch,
+  waitForNeonOperations,
+} from "../src/neon-managed-postgres.mjs";
 
 const root = path.resolve(import.meta.dirname, "..");
 const workspaceId = "11111111-1111-4111-8111-111111111111";
@@ -236,6 +241,67 @@ test("Neon resource normalization and TLS connection string are safe for product
   });
   assert.equal(ensureTlsConnectionString("postgres://user:pass@example.neon.tech/appdb").includes("sslmode=require"), true);
   assert.equal(ensureTlsConnectionString("postgres://user:pass@example.neon.tech/appdb?sslmode=require"), "postgres://user:pass@example.neon.tech/appdb?sslmode=require");
+});
+
+test("Neon branch restore helper uses provider-native LSN restore without credentials in request", async () => {
+  const calls = [];
+  await restoreNeonBranch({
+    projectId: "project-id",
+    branchId: "branch-id",
+    sourceBranchId: "branch-id",
+    sourceLsn: "0/1A2B3C4",
+    preserveUnderName: "backup-before-restore",
+  }, {
+    request: async (path, options) => {
+      calls.push({ path, options });
+      return { operations: [{ id: "operation-id" }] };
+    },
+  });
+
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].path, "/projects/project-id/branches/branch-id/restore");
+  const body = JSON.parse(calls[0].options.body);
+  assert.deepEqual(body, {
+    source_branch_id: "branch-id",
+    source_lsn: "0/1A2B3C4",
+    preserve_under_name: "backup-before-restore",
+  });
+  assert.equal(JSON.stringify(body).includes("postgres://"), false);
+  assert.equal(JSON.stringify(body).includes("password"), false);
+});
+
+test("Neon operation polling waits for completion and fails closed on provider failure", async () => {
+  const completed = await waitForNeonOperations({
+    projectId: "project-id",
+    operationIds: operationIdsFromNeonResponse({ operations: [{ id: "op-1" }] }),
+    pollMs: 0,
+  }, {
+    getOperation: async () => ({ operation: { status: "finished" } }),
+    sleep: async () => {},
+  });
+  assert.deepEqual(completed, [{ operationId: "op-1", status: "finished" }]);
+
+  await assert.rejects(
+    () => waitForNeonOperations({ projectId: "project-id", operationIds: ["op-2"], pollMs: 0 }, {
+      getOperation: async () => ({ operation: { status: "failed" } }),
+      sleep: async () => {},
+    }),
+    /failed with status failed/,
+  );
+});
+
+test("managed database recovery drill runner is guarded and never prints database URLs", () => {
+  const script = readControlPlaneFile("scripts/run-managed-database-recovery-drill.mjs");
+  assert.match(script, /SSC_MANAGED_DB_RECOVERY_DRILL_CONFIRM/);
+  assert.match(script, /CREATE_DISPOSABLE_NEON_RECOVERY_DRILL/);
+  assert.match(script, /SSC_MANAGED_DB_RECOVERY_DRILL_CLEANUP_CONFIRM/);
+  assert.match(script, /DELETE_DISPOSABLE_NEON_RECOVERY_DRILL_RESOURCE/);
+  assert.match(script, /plaintextDatabaseCredentialsPrinted: false/);
+  assert.match(script, /sourceLsn: recoveryLsn/);
+  assert.match(script, /preserveUnderName/);
+  assert.doesNotMatch(script, /connectionUri:/);
+  assert.doesNotMatch(script, /safeConnectionUri:/);
+  assert.doesNotMatch(script, /DATABASE_URL/);
 });
 
 test("production orchestration provisions managed database before runtime env and build", () => {
