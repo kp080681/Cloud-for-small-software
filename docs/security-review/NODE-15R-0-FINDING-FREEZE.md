@@ -538,7 +538,7 @@ Notes: this is not billing, pricing, or usage metering. It is a founder-controll
 
 Reviewer claim: SSC V1 advertises PostgreSQL support, but production lifecycle does not provision customer PostgreSQL.
 
-Classification: `CONFIRMED`
+Classification: `CONFIRMED`; `SCOPED_BY_15R_12`; `REQUIRES_15R_12A_BEFORE_ALPHA`
 
 Exact files/functions:
 
@@ -558,7 +558,9 @@ CUSTOMER_POSTGRESQL_PROVISIONING = SPIKE_ONLY
 
 Concrete consequence: a workload requiring SSC-provisioned PostgreSQL cannot currently be deployed through the production control-plane lifecycle without using an existing external database/secret path.
 
-Required next node: `15R.12 Customer PostgreSQL Lifecycle Reality`
+Decision: Node 15R.12 selected explicit database ownership modes for controlled alpha: `EXTERNAL`, `SSC_MANAGED`, and fail-closed `UNKNOWN`. Current real workloads can use no database or existing external databases through encrypted app secrets, but SSC-managed customer PostgreSQL remains unimplemented in the production lifecycle.
+
+Required next node: `15R.12A Production PostgreSQL Provisioning`
 
 Provider verification required? Yes before implementation, to validate current Neon API/scope/deletion/backup semantics.
 
@@ -583,7 +585,7 @@ Notes: this is a product-contract gap more than a hostile-code bug, but it is al
 | `15R-F13` | P1-J | `CONFIRMED`; `RESOLVED_CODE_PENDING_NEW_DRILL_BY_15R_10` | none | Restore guard now requires independent disposable target identity, canonical same-database refusal, and backup SHA-256 verification before restore |
 | `15R-F14` | P1-K | `CONFIRMED`; `RESOLVED_BY_15R_10` | none | Optional restored-secret decrypt branch now calls `decryptAppSecret(db, { appId, name })` and fails digest mismatch without plaintext output |
 | `15R-F15` | P1-L | `PARTIALLY_CONFIRMED`; `RESOLVED_CODE_PENDING_LIVE_VERIFY_BY_15R_11` | none | Workspace active app, deployment, and provider-operation admission limits now exist; provider-account spend/resource controls remain live-verification dependent |
-| `15R-F16` | P1-M | `CONFIRMED` | `15R.12` | Customer PostgreSQL provisioning is spike/schema only |
+| `15R-F16` | P1-M | `CONFIRMED`; `SCOPED_BY_15R_12`; `REQUIRES_15R_12A_BEFORE_ALPHA` | `15R.12A` | Customer PostgreSQL provisioning remains spike/schema only; Node 15R.12 selected explicit external vs SSC-managed ownership modes |
 
 No speculative remediation nodes were added beyond reproduced findings. The next node should start with the P0 class because provider project identity and slug targeting affect multiple downstream operations.
 
@@ -621,7 +623,7 @@ No speculative remediation nodes were added beyond reproduced findings. The next
 
 `WORKSPACE_RESOURCE_LIMIT = RESOLVED_CODE_PENDING_LIVE_VERIFY`
 
-`CUSTOMER_POSTGRESQL_PROVISIONING = SPIKE_ONLY`
+`CUSTOMER_POSTGRESQL_PROVISIONING = REQUIRES_15R_12A_BEFORE_ALPHA`
 
 `CONFIRMED_P0_COUNT = 2`
 
@@ -631,7 +633,7 @@ No speculative remediation nodes were added beyond reproduced findings. The next
 
 `REJECTED_FINDING_COUNT = 0`
 
-`NEXT_NODE = 15R.12 Production PostgreSQL Scope Decision`
+`NEXT_NODE = 15R.12A Production PostgreSQL Provisioning`
 
 `NODE_15R_0_COMPLETE = true`
 
