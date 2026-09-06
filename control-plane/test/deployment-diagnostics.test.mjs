@@ -51,13 +51,21 @@ test("env configuration required is blocked with missing keys but no values", ()
 test("build timeout is a failed build diagnostic", () => {
   const diagnostic = normalizeDeploymentDiagnostic(baseContext({
     deployment: { status: "FAILED", errorCode: "BUILD_TIMEOUT" },
-    events: [{ eventType: "BUILD_TIMEOUT", metadata: { maxBuildMinutes: 2 }, createdAt: "2026-09-03T00:00:00Z" }],
+    events: [{
+      eventType: "BUILD_TIMEOUT",
+      metadata: {
+        maxBuildMinutes: 2,
+        remoteContainment: { remoteContainment: "REMOTE_CANCEL_CONFIRMED" },
+      },
+      createdAt: "2026-09-03T00:00:00Z",
+    }],
   }));
 
   assert.equal(diagnostic.severity, "FAILED");
   assert.equal(diagnostic.stage, "BUILD");
   assert.equal(diagnostic.code, "BUILD_TIMEOUT");
   assert.equal(diagnostic.evidence.maxBuildMinutes, 2);
+  assert.equal(diagnostic.evidence.remoteContainment, "REMOTE_CANCEL_CONFIRMED");
 });
 
 test("provider build failure points to stored build logs without returning raw logs", () => {

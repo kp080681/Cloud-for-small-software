@@ -50,6 +50,16 @@ function latestEvent(events, eventType) {
     .sort((a, b) => eventAt(b) - eventAt(a))[0] ?? null;
 }
 
+function latestRemoteContainmentEvent(events) {
+  return [...(events ?? [])]
+    .filter((event) => [
+      "PROVIDER_CANCEL_CONFIRMED",
+      "PROVIDER_ALREADY_TERMINAL",
+      "PROVIDER_CANCEL_FAILED",
+    ].includes(event.eventType ?? event.event_type))
+    .sort((a, b) => eventAt(b) - eventAt(a))[0] ?? null;
+}
+
 function publicAccessStillBlocked(context) {
   const blocked = latestEvent(context.events, "PUBLIC_ACCESS_BLOCKED");
   if (!blocked || context.deployment?.status === "LIVE") return null;
@@ -102,6 +112,7 @@ function envBlockedEvidence(context, event) {
 
 function buildEvidence(context, event) {
   const metadata = eventMetadata(event);
+  const remoteContainment = metadata.remoteContainment?.remoteContainment ?? metadata.remoteContainment;
   return pickDefined({
     deploymentStatus: context.deployment?.status,
     buildStatus: context.build?.status,
@@ -117,6 +128,7 @@ function buildEvidence(context, event) {
     providerOperationStatus: context.providerOperation?.status,
     providerOperationType: context.providerOperation?.operationType,
     providerOperationId: context.providerOperation?.id,
+    remoteContainment,
   });
 }
 
@@ -177,12 +189,15 @@ function providerBlockEvidence(context, event) {
 }
 
 function unknownEvidence(context) {
+  const containment = eventMetadata(latestRemoteContainmentEvent(context.events));
   return pickDefined({
     deploymentStatus: context.deployment?.status,
     errorCode: context.deployment?.errorCode,
     latestEventType: context.events?.[0]?.eventType,
     providerDeploymentId: context.build?.providerDeploymentId ?? context.deployment?.providerDeploymentId,
     sourceCommitSha: context.deployment?.sourceCommitSha,
+    remoteContainment: containment.remoteContainment,
+    remoteContainmentRetryable: containment.retryable,
   });
 }
 

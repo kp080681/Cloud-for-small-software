@@ -162,7 +162,7 @@ Notes: the ledger prevents lost-response replay duplication, but it is not an in
 
 Reviewer claim: lifecycle workers can race with delete/abandon and leave provider resources after local state moved terminal.
 
-Classification: `CONFIRMED`; `STATE_SAFETY_RESOLVED_BY_15R_4`; `REMOTE_CANCELLATION_DEFERRED_TO_15R_5`
+Classification: `CONFIRMED`; `STATE_SAFETY_RESOLVED_BY_15R_4`; `REMOTE_CANCELLATION_RESOLVED_BY_15R_5`
 
 Exact files/functions:
 
@@ -188,23 +188,24 @@ Required next node: `15R.5 Build Timeout + Remote Cancellation`
 
 Provider verification required? No.
 
-Notes: `abandon-deployment.ts` performs `SELECT ... FOR UPDATE` before `BEGIN`, so the row lock is not held across its update on normal autocommit PostgreSQL clients.
+Notes: Node 15R.5 adds remote build containment for abandoned in-flight provider deployments while preserving the 15R.4 stale-worker fencing.
 
 ### P1-C - Build Timeout / Abandonment Does Not Cancel Provider-Side Execution
 
 Reviewer claim: SSC marks timeout/abandon locally but does not cancel the remote Vercel deployment.
 
-Classification: `CONFIRMED`
+Classification: `CONFIRMED`; `RESOLVED_BY_15R_5`
 
 Exact files/functions:
 
 - `control-plane/trigger/orchestrate-deployment.ts`: `failBuildTimeout`
 - `control-plane/trigger/abandon-deployment.ts`
 - `control-plane/trigger/delete-app.ts`
+- `control-plane/src/vercel-deployment-cancellation.mjs`
 
 Reproduction method: static search for Vercel deployment cancellation API usage and timeout/abandon paths.
 
-Observed result:
+Observed pre-15R.5 result:
 
 ```text
 ON_SSC_BUILD_TIMEOUT_PROVIDER_CANCELLATION_CALLED = no
@@ -214,11 +215,17 @@ REMOTE_BUILD_CAN_CONTINUE_AFTER_LOCAL_FAILED_OR_ABANDONED = true
 
 Concrete consequence: provider build/runtime execution may continue after SSC has marked the deployment failed/abandoned.
 
-Required next node: `15R.3 Provider Build Cancellation Semantics`
+Resolution: Node 15R.5 verifies Vercel deployment cancellation semantics and adds bounded remote containment for build timeout and abandonment paths. Timeout uses the persisted `deployment_builds.created_at` timestamp instead of an invocation-local clock, records `PROVIDER_CANCEL_REQUESTED`, and then records one normalized terminal containment event: `PROVIDER_CANCEL_CONFIRMED`, `PROVIDER_ALREADY_TERMINAL`, or `PROVIDER_CANCEL_FAILED`. Replays reuse existing final containment evidence and do not create new provider deployments.
 
-Provider verification required? Yes, to verify exact Vercel cancellation API, states, and permissions before implementation.
+Provider behavior verified from Vercel documentation: `PATCH /v12/deployments/{id}/cancel` cancels in-progress deployments; already `READY`, `ERROR`, or `CANCELED` deployments are no longer cancelable. SSC first reads provider status, cancels only potentially active deployments, reconciles after the cancel request when needed, and treats provider `404` as safe when deletion won the race.
 
-Notes: app deletion deletes the whole Vercel project, but timeout/abandon do not cancel an individual deployment.
+Economic note: `max_build_minutes` is an SSC orchestration deadline and cancellation trigger. It is not a guaranteed hard provider-spend cutoff; provider billing containment also depends on successful provider cancellation and Vercel account/project limits.
+
+Required next node: none for remote build cancellation; continue with `15R.6 Git Auto-Deploy Containment`.
+
+Provider verification required? Vercel cancellation endpoint/status semantics were verified from provider documentation for implementation. Token permission scope still belongs to the broader provider-scope verification track.
+
+Notes: app deletion still deletes the whole Vercel project. If deletion wins the race and the deployment lookup returns not found, cancellation is recorded as already terminal/absent rather than as a confirmed cancel.
 
 ### P1-D - Git Auto-Deployment Prevention Is Not Actually Established In Production
 
@@ -506,8 +513,8 @@ Notes: this is a product-contract gap more than a hostile-code bug, but it is al
 | `15R-F02` | P0-B | `CONFIRMED`; `RESOLVED_BY_15R_2` | `15R.2` | Mutating operator scripts now require workspace-scoped app targeting or immutable deployment id targeting |
 | `15R-F03` | Tenant-boundary assertion wiring | `PARTIALLY_CONFIRMED`; `RESOLVED_BY_15R_3` | `15R.3` | Meaningful tenant-boundary assertions are wired into controlled-alpha source, runtime, secret, build, and provider-resource paths |
 | `15R-F04` | P1-A | `CONFIRMED`; `RESOLVED_BY_15R_4` | `15R.4` | Atomic provider-operation claim prevents duplicate Vercel deployment creation for one logical operation |
-| `15R-F05` | P1-B | `CONFIRMED`; `STATE_SAFETY_RESOLVED_BY_15R_4`; `REMOTE_CANCELLATION_DEFERRED_TO_15R_5` | `15R.5` | Delete/provision and abandon/build races cannot revive active state; remote cancellation remains separate |
-| `15R-F06` | P1-C | `CONFIRMED` | `15R.3` | Timeout/abandon does not cancel provider build execution |
+| `15R-F05` | P1-B | `CONFIRMED`; `STATE_SAFETY_RESOLVED_BY_15R_4`; `REMOTE_CANCELLATION_RESOLVED_BY_15R_5` | `15R.5` | Delete/provision and abandon/build races cannot revive active state; abandoned in-flight provider deployments now receive remote containment attempts |
+| `15R-F06` | P1-C | `CONFIRMED`; `RESOLVED_BY_15R_5` | `15R.5` | Timeout/abandon now requests and records provider build containment instead of only marking local state |
 | `15R-F07` | P1-D | `CONFIRMED_PROVIDER_DEPENDENT` | `15R.4` | Git auto-deploy containment is not production-proven |
 | `15R-F08` | P1-E | `CONFIRMED` | `15R.5` | Build can advance with missing independently observed source SHA |
 | `15R-F09` | P1-F | `CONFIRMED` | `15R.6` | Public URL check proves reachability, not exact deployment identity |
@@ -535,7 +542,7 @@ No speculative remediation nodes were added beyond reproduced findings. The next
 
 `ABANDON_BUILD_RACE = STATE_SAFETY_RESOLVED_BY_15R_4`
 
-`REMOTE_BUILD_CANCELLATION = ABSENT`
+`REMOTE_BUILD_CANCELLATION = RESOLVED_BY_15R_5`
 
 `GIT_AUTODEPLOY_CONTAINMENT = PROVIDER_DEPENDENT`
 
@@ -565,7 +572,7 @@ No speculative remediation nodes were added beyond reproduced findings. The next
 
 `REJECTED_FINDING_COUNT = 0`
 
-`NEXT_NODE = 15R.1 Provider Project Identity / Slug Collision`
+`NEXT_NODE = 15R.6 Git Auto-Deploy Containment`
 
 `NODE_15R_0_COMPLETE = true`
 

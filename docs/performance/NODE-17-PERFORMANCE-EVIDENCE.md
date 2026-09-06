@@ -160,7 +160,7 @@ SSC's slow infrastructure work is asynchronous relative to the initial queueing 
 - `queue-deployment.mjs` commits `READY -> QUEUED` and its audit event before submitting the Trigger task.
 - `orchestrate-deployment.ts` delegates slow phases to Trigger workers through `tasks.triggerAndWait`.
 - Provider build polling is inside the durable orchestrator loop, not a user-facing synchronous request path.
-- Build polling is bounded by `max_build_minutes`.
+- Build polling uses `max_build_minutes` as SSC's orchestration deadline and remote cancellation trigger. This is not a public hard spend cutoff; provider billing containment also depends on successful provider cancellation and Vercel-side limits.
 - Health retry polling is bounded by `max_health_attempts`.
 - Terminal replay guards prevent already LIVE/FAILED/DELETED deployments from looping.
 
@@ -192,7 +192,7 @@ These are workload/provider/network observations. SSC is not in the runtime requ
 | Area | Finding | Classification | Evidence / Rationale |
 | --- | --- | --- | --- |
 | Diagnostic/timeline reads | Nine context SQL round trips; sequential remote reads measured `~2.6-2.8 s`; final warm pool reads measured `0.57-0.67 s` | PASS | Pool-based independent reads and cold/steady-state separation verified by final operator measurement |
-| Provider build polling | 15 second polling loop while provider build is active | ALREADY_ACCEPTABLE | Durable Trigger worker loop; provider build dominates; bounded by policy |
+| Provider build polling | 15 second polling loop while provider build is active | ALREADY_ACCEPTABLE | Durable Trigger worker loop; provider build dominates; `max_build_minutes` now triggers remote cancellation attempts but is not a guaranteed provider billing cutoff |
 | Health retry polling | 10 second retry loop | ALREADY_ACCEPTABLE | Bounded by max health attempts; avoids request-path blocking |
 | Env detection source blobs | Blob fetches are sequential | MEASURE_LATER | Bounded by 15.4 file/byte limits; parallelizing may hit GitHub limits and is not needed before evidence |
 | Runtime env application | Secret bindings are applied sequentially to Vercel env API | MEASURE_LATER | V1 env counts are policy-bounded; avoids rate-limit bursts |

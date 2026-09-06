@@ -1,5 +1,6 @@
 import { task } from "@trigger.dev/sdk";
 import pg from "pg";
+import { recordRemoteBuildContainment } from "../src/vercel-deployment-cancellation.mjs";
 
 const { Client } = pg;
 const ABANDONABLE = new Set(["DRAFT","READY","QUEUED","ANALYZING","PROVISIONING","BUILDING","DEPLOYING","HEALTH_CHECKING"]);
@@ -14,7 +15,11 @@ export const abandonDeployment = task({
     try {
       await db.query("BEGIN");
       const result = await db.query(
-        `SELECT id, app_id, status, error_code FROM deployments WHERE id=$1 FOR UPDATE`,
+        `SELECT d.id, d.app_id, d.status, d.error_code, b.provider_deployment_id
+           FROM deployments d
+           LEFT JOIN deployment_builds b ON b.deployment_id=d.id
+          WHERE d.id=$1
+          FOR UPDATE OF d`,
         [payload.deploymentId],
       );
       if (result.rowCount === 0) throw new Error(`Deployment not found: ${payload.deploymentId}`);
@@ -22,11 +27,21 @@ export const abandonDeployment = task({
 
       if (["LIVE","FAILED","DELETED"].includes(row.status)) {
         await db.query("COMMIT");
+        let remoteContainment = null;
+        if (row.status === "FAILED" && row.error_code === "DEPLOYMENT_ABANDONED" && row.provider_deployment_id) {
+          remoteContainment = await recordRemoteBuildContainment(db, {
+            deploymentId: payload.deploymentId,
+            fromStatus: "FAILED",
+            providerDeploymentId: row.provider_deployment_id,
+            reason: "DEPLOYMENT_ABANDONED",
+          });
+        }
         return {
           result: "DEPLOYMENT_ABANDON_TERMINAL_NOOP",
           deploymentId: payload.deploymentId,
           status: row.status,
           errorCode: row.error_code,
+          remoteContainment: remoteContainment?.outcome ?? null,
         };
       }
       if (!ABANDONABLE.has(row.status)) throw new Error(`Deployment cannot be abandoned from status ${row.status}`);
@@ -46,14 +61,23 @@ export const abandonDeployment = task({
         await db.query(
           `INSERT INTO deployment_events
              (deployment_id,from_status,to_status,event_type,message,metadata)
-           VALUES ($1,$2,'FAILED','DEPLOYMENT_ABANDONED',$3,$4::jsonb)`,
-          [payload.deploymentId, row.status, reason, JSON.stringify({ operatorInitiated: true, providerResourcesDeleted: false })],
+          VALUES ($1,$2,'FAILED','DEPLOYMENT_ABANDONED',$3,$4::jsonb)`,
+          [payload.deploymentId, row.status, reason, JSON.stringify({ operatorInitiated: true, providerResourcesDeleted: false, providerDeploymentId: row.provider_deployment_id ?? null })],
         );
         await db.query("COMMIT");
       } catch (error) {
         await db.query("ROLLBACK");
         throw error;
       }
+
+      const remoteContainment = row.provider_deployment_id
+        ? await recordRemoteBuildContainment(db, {
+            deploymentId: payload.deploymentId,
+            fromStatus: "FAILED",
+            providerDeploymentId: row.provider_deployment_id,
+            reason: "DEPLOYMENT_ABANDONED",
+          })
+        : null;
 
       return {
         result: "DEPLOYMENT_ABANDONED",
@@ -63,6 +87,7 @@ export const abandonDeployment = task({
         status: "FAILED",
         errorCode: "DEPLOYMENT_ABANDONED",
         providerResourcesDeleted: false,
+        remoteContainment: remoteContainment?.outcome ?? null,
       };
     } catch (error) {
       try { await db.query("ROLLBACK"); } catch {}

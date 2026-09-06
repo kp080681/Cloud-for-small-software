@@ -42,7 +42,7 @@ Current evidence already proves:
 | Provider create succeeded but response lost | Operation is `CREATE_REQUESTED`; provider has SSC metadata | Replay searches provider deployments before create and returns pending/attach | Does not create a second deployment | Recovery pending or attached | `vercel-deployment-recovery.mjs`, tests | PASS |
 | Build attachment/recovery | `deployment_builds` recreated/updated; operation marked `OBSERVED` | Existing provider deployment attached locally | Unique build/provider constraints | `BUILD_RECOVERY_ATTACHED` event | `execute-build.ts`, tests | PASS |
 | Source mismatch | Build status `SOURCE_MISMATCH`; deployment `FAILED` | Non-retryable failure explaining immutable source mismatch | No duplicate create | `BUILD_SOURCE_MISMATCH` | `reconcile-build.ts`, diagnostics tests | PASS |
-| Build timeout | Build marked `POLICY_TIMEOUT`; deployment `FAILED` | Orchestrator stops and returns timeout | No provider duplicate | `BUILD_TIMEOUT` | `orchestrate-deployment.ts`, diagnostics tests | PASS |
+| Build timeout | Build marked `POLICY_TIMEOUT`; deployment `FAILED`; provider cancellation containment is recorded when an attached Vercel deployment exists | Orchestrator stops and returns timeout without claiming remote execution stopped unless cancellation/already-terminal evidence exists | No provider duplicate | `BUILD_TIMEOUT`, provider cancel events | `orchestrate-deployment.ts`, cancellation tests, diagnostics tests | PASS |
 | Provider quota/rate/auth failure | Deployment error code set; operation `FAILED`; event recorded | Quota/auth block is explicit; rate limit retryable later | No build row created blindly | `VERCEL_DAILY_DEPLOYMENT_QUOTA`, `VERCEL_RATE_LIMIT`, or `VERCEL_AUTH` | `execute-build.ts`, diagnostics tests | PASS |
 | Health exhaustion | Health attempts preserved; deployment `FAILED` transactionally | Orchestrator stops when terminal | No provider mutation | `HEALTH_CHECK_FAILED` | `health-check.ts`, tests | PASS |
 | Public access blocked | Deployment remains `HEALTH_CHECKING`; event recorded | Replay re-verifies until fixed or terminal | No provider mutation | `PUBLIC_ACCESS_BLOCKED` | `configure-public-access.ts`, diagnostics tests | PASS |
@@ -189,7 +189,7 @@ Recovery order after suspected interruption:
 | repeated queue | `QUEUED`/`ANALYZING` preserved | Trigger submit may repeat | yes | rerun queue/orchestrator | `queue-deployment.mjs` | PASS |
 | interrupted build create | provider deployment found or pending | no duplicate create | yes | provider metadata search and ledger | Node 04.18 tests | PASS |
 | build failure | deployment `FAILED` | no new provider resource | yes | diagnostic/build logs | diagnostics/reconcile tests | PASS |
-| build timeout | deployment `FAILED` with `BUILD_TIMEOUT` | no new provider resource | yes | orchestrator timeout path | diagnostics tests | PASS |
+| build timeout | deployment `FAILED` with `BUILD_TIMEOUT`; remote containment attempted for attached provider deployment | no new provider resource; cancellation event evidence | yes | orchestrator timeout path | cancellation and diagnostics tests | PASS |
 | health exhaustion | deployment `FAILED` with `HEALTH_CHECK_FAILED` | workload GET only | yes | health retry/exhaustion path | Node 04.18 tests | PASS |
 | public access blocked | remains `HEALTH_CHECKING` and actionable | workload GET only | yes | rerun public verification after external fix | diagnostics tests | PASS |
 | terminal replay | terminal no-op | no | yes | no-op | recovery-rule tests | PASS |
