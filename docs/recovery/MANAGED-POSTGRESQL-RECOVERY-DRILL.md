@@ -1,6 +1,41 @@
 # Managed PostgreSQL Recovery Drill
 
-Status: Node 15R.12B drill tooling prepared. Real disposable provider drill is pending an operator run with Neon credentials. No production control-plane database, customer database, workload, Vercel resource, Trigger worker, or Supabase project is touched by this drill.
+Status: Node 15R.12B drill tooling debugged after the first disposable provider attempt. A clean operator rerun is still required before managed PostgreSQL recovery can be marked proven. No production control-plane database, customer database, workload, Vercel resource, Trigger worker, or Supabase project is touched by this drill.
+
+## First Disposable Drill Attempt
+
+Observed attempt:
+
+```text
+provider: Neon
+disposableProjectId: young-art-46917057
+result: FAILED_BEFORE_RESTORE
+error: Destructive test mutation did not change probe data
+cleanupCompleted: true
+deleted: true
+plaintextDatabaseCredentialsPrinted: false
+```
+
+The attempt failed in the drill verifier before restore evidence was collected. Cleanup completed successfully and the disposable provider resource was deleted.
+
+Root cause:
+
+The original mutation deleted row `id=2` and inserted row `id=4`, so the probe digest changed but the row count remained `3`. The verifier required both digest and row count to change. That made the run fail even though the synthetic data had changed. This was a drill-tooling false negative, not evidence of a Neon restore failure, stale reads, or production data mutation.
+
+Corrective change:
+
+- Probe setup, mutation, and summary logic now live in a small deterministic helper.
+- The destructive mutation deletes all probe rows, making the post-mutation state unambiguous.
+- The digest is computed from freshly queried ordered `id`/`value` rows.
+- The verifier checks that mutation and post-mutation verification use the same database identity before restore.
+- The LSN is captured after original probe data is written and before destructive mutation.
+- The failure path still prints `cleanupRequired=true` when a disposable project exists, without printing credentials.
+
+Current status:
+
+```text
+MANAGED_POSTGRESQL_RECOVERY_DRILL_STATUS = CODE_FIXED_PENDING_CLEAN_OPERATOR_RERUN
+```
 
 ## Recovery Contract
 
@@ -158,4 +193,3 @@ The drill may reveal provider facts, but final provider configuration verificati
 - Cost/quota limits.
 - Credential rotation behavior.
 - TLS/pooling behavior.
-

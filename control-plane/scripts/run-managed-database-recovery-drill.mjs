@@ -15,6 +15,13 @@ import {
   isSscManagedDatabaseName,
   sscManagedDatabaseName,
 } from "../src/managed-database-lifecycle.mjs";
+import {
+  assertProbeMutationChanged,
+  initializeProbeData,
+  mutateProbeData,
+  normalizeConnectionIdentity,
+  readProbeSummary,
+} from "../src/managed-database-recovery-probe.mjs";
 
 const { Client } = pg;
 const REQUIRED_CONFIRMATION = "CREATE_DISPOSABLE_NEON_RECOVERY_DRILL";
@@ -28,10 +35,6 @@ function requireEnv(name) {
 
 function randomUuid() {
   return crypto.randomUUID();
-}
-
-function safeSha256(text) {
-  return crypto.createHash("sha256").update(text).digest("hex");
 }
 
 function redactHost(connectionUri) {
@@ -48,19 +51,6 @@ async function connect(connectionUri) {
   const db = new Client({ connectionString: ensureTlsConnectionString(connectionUri) });
   await db.connect();
   return db;
-}
-
-async function probeSummary(db) {
-  const result = await db.query(
-    `SELECT value
-       FROM ssc_recovery_probe
-      ORDER BY id ASC`,
-  );
-  const values = result.rows.map((row) => row.value);
-  return {
-    rowCount: values.length,
-    digest: safeSha256(values.join("\n")),
-  };
 }
 
 async function waitFromResponse(projectId, response) {
@@ -122,18 +112,18 @@ async function runDrill() {
 
     let db = await connect(safeConnectionUri);
     try {
-      await db.query(`CREATE TABLE IF NOT EXISTS ssc_recovery_probe (id integer PRIMARY KEY, value text NOT NULL, created_at timestamptz NOT NULL DEFAULT now())`);
-      await db.query(`TRUNCATE ssc_recovery_probe`);
-      await db.query(`INSERT INTO ssc_recovery_probe (id, value) VALUES (1,'alpha'),(2,'bravo'),(3,'charlie')`);
-      const original = await probeSummary(db);
+      const original = await initializeProbeData(db);
       const lsnResult = await db.query(`SELECT pg_current_wal_lsn()::text AS lsn`);
       const recoveryLsn = lsnResult.rows[0].lsn;
-
-      await db.query(`DELETE FROM ssc_recovery_probe WHERE id=2`);
-      await db.query(`INSERT INTO ssc_recovery_probe (id, value) VALUES (4,'delta-after-recovery-point')`);
-      const mutated = await probeSummary(db);
-      const destructiveTestMutationConfirmed = mutated.digest !== original.digest && mutated.rowCount !== original.rowCount;
-      if (!destructiveTestMutationConfirmed) throw new Error("Destructive test mutation did not change probe data");
+      const mutationDbIdentity = normalizeConnectionIdentity(safeConnectionUri);
+      const mutated = await mutateProbeData(db);
+      const postMutationVerifyDbIdentity = normalizeConnectionIdentity(safeConnectionUri);
+      const mutationCheck = assertProbeMutationChanged({
+        original,
+        mutated,
+        mutationDbIdentity,
+        verificationDbIdentity: postMutationVerifyDbIdentity,
+      });
 
       await db.end();
       db = null;
@@ -153,7 +143,7 @@ async function runDrill() {
       const recoveredDb = await connect(safeConnectionUri);
       let recovered;
       try {
-        recovered = await probeSummary(recoveredDb);
+        recovered = await readProbeSummary(recoveredDb);
       } finally {
         await recoveredDb.end();
       }
@@ -176,9 +166,11 @@ async function runDrill() {
         hostSuffix: redactHost(safeConnectionUri),
         originalRowCount: original.rowCount,
         originalDigest: original.digest,
-        destructiveTestMutationConfirmed,
+        destructiveTestMutationConfirmed: mutationCheck.mutationChangedState,
         mutatedRowCount: mutated.rowCount,
         mutatedDigest: mutated.digest,
+        mutationRowCountChanged: mutationCheck.rowCountChanged,
+        mutationDigestChanged: mutationCheck.digestChanged,
         recoveryCompleted: true,
         recoveredRowCount: recovered.rowCount,
         recoveredDigest: recovered.digest,

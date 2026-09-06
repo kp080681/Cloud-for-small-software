@@ -25,6 +25,14 @@ import {
   restoreNeonBranch,
   waitForNeonOperations,
 } from "../src/neon-managed-postgres.mjs";
+import {
+  assertProbeMutationChanged,
+  initializeProbeData,
+  mutateProbeData,
+  normalizeConnectionIdentity,
+  readProbeSummary,
+  summarizeProbeRows,
+} from "../src/managed-database-recovery-probe.mjs";
 
 const root = path.resolve(import.meta.dirname, "..");
 const workspaceId = "11111111-1111-4111-8111-111111111111";
@@ -100,6 +108,38 @@ function deleteDb(row) {
       }
       if (/UPDATE app_databases/.test(sql)) return { rowCount: 1, rows: [] };
       throw new Error(`Unexpected SQL in deleteDb: ${sql}`);
+    },
+  };
+}
+
+function probeDb() {
+  let rows = [];
+  const calls = [];
+  return {
+    calls,
+    async query(sql) {
+      calls.push(sql);
+      if (/CREATE TABLE IF NOT EXISTS ssc_recovery_probe/.test(sql)) return { rowCount: 0, rows: [] };
+      if (/TRUNCATE ssc_recovery_probe/.test(sql)) {
+        rows = [];
+        return { rowCount: 0, rows: [] };
+      }
+      if (/INSERT INTO ssc_recovery_probe \(id, value\) VALUES \(1,'alpha'\),\(2,'bravo'\),\(3,'charlie'\)/.test(sql)) {
+        rows = [
+          { id: 1, value: "alpha" },
+          { id: 2, value: "bravo" },
+          { id: 3, value: "charlie" },
+        ];
+        return { rowCount: 3, rows: [] };
+      }
+      if (/DELETE FROM ssc_recovery_probe/.test(sql)) {
+        rows = [];
+        return { rowCount: 3, rows: [] };
+      }
+      if (/SELECT id, value\s+FROM ssc_recovery_probe\s+ORDER BY id ASC/.test(sql)) {
+        return { rowCount: rows.length, rows: [...rows] };
+      }
+      throw new Error(`Unexpected probe SQL: ${sql}`);
     },
   };
 }
@@ -290,6 +330,70 @@ test("Neon operation polling waits for completion and fails closed on provider f
   );
 });
 
+test("recovery probe initial data has deterministic row count and digest", async () => {
+  const db = probeDb();
+  const original = await initializeProbeData(db);
+  const repeated = await readProbeSummary(db);
+
+  assert.equal(original.rowCount, 3);
+  assert.equal(repeated.rowCount, 3);
+  assert.equal(repeated.digest, original.digest);
+  assert.deepEqual(original, summarizeProbeRows([
+    { id: 1, value: "alpha" },
+    { id: 2, value: "bravo" },
+    { id: 3, value: "charlie" },
+  ]));
+});
+
+test("recovery probe destructive mutation changes row count and digest from a fresh query", async () => {
+  const db = probeDb();
+  const original = await initializeProbeData(db);
+  const mutated = await mutateProbeData(db);
+
+  assert.equal(mutated.rowCount, 0);
+  assert.notEqual(mutated.digest, original.digest);
+  assert.ok(db.calls.find((sql) => /DELETE FROM ssc_recovery_probe/.test(sql)));
+  assert.equal(db.calls.filter((sql) => /SELECT id, value\s+FROM ssc_recovery_probe\s+ORDER BY id ASC/.test(sql)).length, 2);
+});
+
+test("post-mutation verification cannot reuse original cached rows", async () => {
+  const original = summarizeProbeRows([{ id: 1, value: "alpha" }]);
+  const cached = summarizeProbeRows([{ id: 1, value: "alpha" }]);
+
+  assert.throws(
+    () => assertProbeMutationChanged({
+      original,
+      mutated: cached,
+      mutationDbIdentity: { host: "same", database: "db" },
+      verificationDbIdentity: { host: "same", database: "db" },
+    }),
+    /Destructive test mutation did not change probe data/,
+  );
+});
+
+test("mutation and verification database identity mismatch fails before restore", () => {
+  const original = summarizeProbeRows([{ id: 1, value: "alpha" }]);
+  const mutated = summarizeProbeRows([]);
+
+  assert.throws(
+    () => assertProbeMutationChanged({
+      original,
+      mutated,
+      mutationDbIdentity: normalizeConnectionIdentity("postgres://user:pass@one.neon.tech/db?sslmode=require"),
+      verificationDbIdentity: normalizeConnectionIdentity("postgres://user:pass@two.neon.tech/db?sslmode=require"),
+    }),
+    /different database identities/,
+  );
+});
+
+test("drill captures LSN before destructive mutation", () => {
+  const script = readControlPlaneFile("scripts/run-managed-database-recovery-drill.mjs");
+  const runSequence = script.slice(script.indexOf("const original = await initializeProbeData"));
+  assert.ok(runSequence.indexOf("initializeProbeData") < runSequence.indexOf("pg_current_wal_lsn"));
+  assert.ok(runSequence.indexOf("pg_current_wal_lsn") < runSequence.indexOf("mutateProbeData"));
+  assert.ok(runSequence.indexOf("mutateProbeData") < runSequence.indexOf("restoreNeonBranch"));
+});
+
 test("managed database recovery drill runner is guarded and never prints database URLs", () => {
   const script = readControlPlaneFile("scripts/run-managed-database-recovery-drill.mjs");
   assert.match(script, /SSC_MANAGED_DB_RECOVERY_DRILL_CONFIRM/);
@@ -299,6 +403,7 @@ test("managed database recovery drill runner is guarded and never prints databas
   assert.match(script, /plaintextDatabaseCredentialsPrinted: false/);
   assert.match(script, /sourceLsn: recoveryLsn/);
   assert.match(script, /preserveUnderName/);
+  assert.match(script, /cleanupRequired: Boolean\(resource\?\.providerProjectId\)/);
   assert.doesNotMatch(script, /connectionUri:/);
   assert.doesNotMatch(script, /safeConnectionUri:/);
   assert.doesNotMatch(script, /DATABASE_URL/);
