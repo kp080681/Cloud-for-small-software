@@ -326,7 +326,7 @@ Notes: current behavior is stronger than a blind HTTP 200 because it checks the 
 
 Reviewer claim: production secret bindings are sent to preview and production targets.
 
-Classification: `CONFIRMED`
+Classification: `CONFIRMED`; `RESOLVED_CODE_PENDING_LIVE_VERIFY_BY_15R_8`
 
 Exact files/functions:
 
@@ -334,17 +334,23 @@ Exact files/functions:
 
 Reproduction method: static production-path inspection.
 
-Observed result:
+Observed pre-15R.8 result:
 
 ```text
 SECRETS_TARGET_PREVIEW = true
 ```
 
-Concrete consequence: app production secrets are exposed to preview deployments/environments for that Vercel project.
+Concrete consequence: pre-15R.8 app production secrets were exposed to preview deployments/environments for that Vercel project.
 
-Required next node: `15R.8 Secret Environment Boundary`
+Resolution: Node 15R.8 changes runtime environment application so SSC app-secret bindings are written to Vercel with alpha target `["production"]` only. Existing production binding lookup, KMS decrypt behavior, tenant/runtime/provider identity checks, Git auto-deploy containment, plaintext redaction, and provider upsert behavior are preserved. Vercel provider-reported env upsert failures now throw before SSC can record `RUNTIME_ENV_APPLIED`.
 
-Provider verification required? No.
+Provider behavior verified from Vercel documentation: project environment variables are created through `POST /v10/projects/{idOrName}/env`; the request body includes `target`, and `upsert=true` updates existing variables instead of creating a duplicate. Vercel environment variables are scoped to environments including Production, Preview, Development, and custom environments.
+
+Regression evidence: `control-plane/test/vercel-env-boundary.test.mjs` covers new customer secrets, multiple secrets, legacy preview+production target reconciliation via production-only upsert payload, unrelated provider env non-cleanup, public `NEXT_PUBLIC_*` name classification, private secret naming, identity-before-decrypt ordering, provider failure refusal, and production deployment fixture compatibility.
+
+Required next node: none for secret environment target boundary; continue with `15R.9 Reproducible Dependencies / Lockfile`.
+
+Provider verification required? Yes. 15R.13 must inspect live DealUp/Vantage projects, confirm existing SSC-managed env targets no longer leave production secrets preview-accessible after approved reconciliation, confirm production builds receive production-target env vars, and confirm no Vercel team-level/shared control-plane credentials are inherited by customer projects.
 
 Notes: this is not a plaintext leak in logs, but it broadens runtime exposure.
 
@@ -535,7 +541,7 @@ Notes: this is a product-contract gap more than a hostile-code bug, but it is al
 | `15R-F07` | P1-D | `CONFIRMED_PROVIDER_DEPENDENT`; `RESOLVED_CODE_PENDING_LIVE_VERIFY_BY_15R_6` | `15R.6` | Production paths now verify/correct Git auto-deploy containment before runtime use, secret injection, and build creation; live Vercel project verification remains required |
 | `15R-F08` | P1-E | `CONFIRMED`; `RESOLVED_BY_15R_7` | `15R.7` | Build verification now requires provider-observed source identity matching the immutable build input |
 | `15R-F09` | P1-F | `CONFIRMED`; `RESOLVED_CODE_PENDING_LIVE_VERIFY_BY_15R_7` | `15R.7` | Public URL verification now requires provider alias/binding proof for the exact deployment before reachability can mark LIVE |
-| `15R-F10` | P1-G | `CONFIRMED` | `15R.8` | Production secrets are applied to preview and production targets |
+| `15R-F10` | P1-G | `CONFIRMED`; `RESOLVED_CODE_PENDING_LIVE_VERIFY_BY_15R_8` | `15R.8` | Runtime env application now targets production only; live project env/shared-env verification remains required |
 | `15R-F11` | P1-H | `CONFIRMED` | `15R.8` | Resource policy runs after runtime provisioning and secret injection |
 | `15R-F12` | P1-I | `CONFIRMED` | `15R.9` | Control-plane dependencies are not lockfile-pinned |
 | `15R-F13` | P1-J | `CONFIRMED` | `15R.10` | Restore guard uses raw connection string equality only |
@@ -567,7 +573,7 @@ No speculative remediation nodes were added beyond reproduced findings. The next
 
 `LIVE_IDENTITY_PROOF = RESOLVED_CODE_PENDING_LIVE_VERIFY`
 
-`SECRETS_TARGET_PREVIEW = true`
+`SECRETS_TARGET_PREVIEW = false`
 
 `RESOURCE_POLICY_BEFORE_SECRET_INJECTION = false`
 
@@ -589,7 +595,7 @@ No speculative remediation nodes were added beyond reproduced findings. The next
 
 `REJECTED_FINDING_COUNT = 0`
 
-`NEXT_NODE = 15R.8 Secret Environment Boundary`
+`NEXT_NODE = 15R.9 Reproducible Dependencies / Lockfile`
 
 `NODE_15R_0_COMPLETE = true`
 

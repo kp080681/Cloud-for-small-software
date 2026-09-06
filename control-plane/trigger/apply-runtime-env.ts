@@ -10,6 +10,12 @@ import {
   assertRemoteProjectMatchesSscApp,
 } from "../src/provider-project-identity.mjs";
 import { ensureGitAutoDeploymentsDisabled } from "../src/vercel-project-config.mjs";
+import {
+  SSC_ALPHA_ENV_TARGETS,
+  assertVercelEnvUpsertSucceeded,
+  providerEnvId as providerEnvIdFromResponse,
+  vercelProjectEnvPayload,
+} from "../src/vercel-env-boundary.mjs";
 
 const { Client } = pg;
 const API = "https://api.vercel.com";
@@ -149,7 +155,7 @@ export const applyRuntimeEnv = task({
 
       // Runtime env application remains a BUILDING-stage backstop; Node 04.17
       // verifies required configuration earlier while the deployment is ANALYZING.
-      const providerTargets = ["preview", "production"];
+      const providerTargets = [...SSC_ALPHA_ENV_TARGETS];
       const applied: Array<{ envKey: string; providerEnvId: string | null }> = [];
       for (const binding of bindingResult.rows) {
         assertSecretBindingBelongsToApp(binding, {
@@ -167,20 +173,18 @@ export const applyRuntimeEnv = task({
             `/v10/projects/${encodeURIComponent(deployment.provider_project_id)}/env${teamQuery({ upsert: "true" })}`,
             {
               method: "POST",
-              body: JSON.stringify({
-                key: binding.env_key,
-                value: plaintext,
-                type: "sensitive",
-                target: providerTargets,
-                comment: "Managed by Small Software Cloud",
-              }),
+              body: JSON.stringify(vercelProjectEnvPayload({
+                envKey: binding.env_key,
+                plaintext,
+              })),
             },
           );
+          assertVercelEnvUpsertSucceeded(response, binding.env_key);
         } finally {
           // plaintext is intentionally never logged or persisted by this worker.
         }
 
-        const providerEnvId = Array.isArray(response) ? (response[0]?.id ?? null) : (response?.id ?? response?.created?.id ?? null);
+        const providerEnvId = providerEnvIdFromResponse(response);
         await db.query(
           `INSERT INTO deployment_secret_applications
              (deployment_id, binding_id, secret_updated_at, provider_env_id, applied_at)
