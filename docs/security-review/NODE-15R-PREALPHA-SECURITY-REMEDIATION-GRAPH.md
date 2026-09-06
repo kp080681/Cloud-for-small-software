@@ -476,3 +476,68 @@ Do not build merely to close Gate 15R:
 **NEXT_NODE = 15R.0 Reproduce and Freeze Findings**
 
 No remediation code should be written before 15R.0 establishes the confirmed finding set and reproduction evidence.
+
+
+---
+
+## Current Remediation Status After 15R.13
+
+# Node 15R Pre-Alpha Security Remediation Graph
+
+Status: Node 15R.13 provider configuration verification is complete with documented limitations. This file is a concise remediation status graph, not a new evidence framework.
+
+## Completed Nodes
+
+| Node | Status | Result |
+| --- | --- | --- |
+| 15R.0 Reproduce and freeze findings | COMPLETE | Findings reproduced/falsified from repository evidence. |
+| 15R.1 Provider project identity / slug collision | COMPLETE | Workspace/app identity replaces slug-only provider identity. |
+| 15R.2 Tenant-safe operator targeting | COMPLETE | Mutating scripts require workspace-scoped or immutable deployment targeting. |
+| 15R.3 Production tenant-boundary wiring | COMPLETE | Tenant/resource assertions are wired into source, runtime, secret, build, and provider-resource paths. |
+| 15R.4 Provider mutation concurrency / fencing | COMPLETE | Atomic provider-operation claims and stale-result fencing prevent duplicate/non-terminal drift. |
+| 15R.5 Build timeout + remote cancellation | COMPLETE | Timeout/abandon paths attempt bounded provider containment and record evidence. |
+| 15R.6 Git auto-deploy containment | COMPLETE_CODE_PENDING_BEHAVIOR_TEST | Production code verifies/corrects auto-deploy containment and fails closed on unknown state. |
+| 15R.7 Source + live deployment identity | COMPLETE | Build and public access require independent provider/source/live identity proof. |
+| 15R.8 Secret environment boundary | COMPLETE_CODE_PENDING_LIVE_VERIFY | New SSC-managed secrets are applied to production only; live env inheritance review found no control-plane credential leakage. |
+| 15R.9 Reproducible dependencies / lockfile | COMPLETE | Control-plane dependency graph is locked and `npm ci` is validated. |
+| 15R.10 Recovery safety corrections | COMPLETE | Restore target equivalence guard, backup digest verification, and restored-secret decrypt call shape corrected. |
+| 15R.11 Workspace / economic guardrails | COMPLETE_CODE_PENDING_LIVE_VERIFY | Workspace active app/deployment/provider-operation and managed DB limits exist. |
+| 15R.12 Production PostgreSQL scope decision | COMPLETE | Explicit `NONE`, `EXTERNAL`, and `SSC_MANAGED` ownership modes selected. |
+| 15R.12A Production PostgreSQL provisioning | COMPLETE_CODE_PENDING_LIVE_VERIFY | Managed Neon provisioning/reconciliation/encrypted `DATABASE_URL`/deletion are production-wired. |
+| 15R.12B Managed PostgreSQL recovery proof | COMPLETE | Disposable Neon branch restore to captured LSN recovered deterministic data with row-count/digest parity and cleanup. |
+| 15R.13 Provider configuration verification | COMPLETE_WITH_DOCUMENTED_LIMITATIONS | GitHub, Vercel, AWS/KMS, Trigger.dev, Neon, economic ceilings, and remaining provider limitations recorded. |
+
+## Provider Configuration Decision
+
+```text
+GITHUB_PROVIDER_STATUS = PASS
+VERCEL_PROJECT_IDENTITY = PASS
+VERCEL_CREDENTIAL_LEAST_PRIVILEGE = PARTIAL
+VERCEL_GIT_AUTODEPLOY_LIVE = PENDING_DISPOSABLE_BEHAVIOR_TEST
+VERCEL_ENV_ISOLATION = PASS_VISUAL
+VERCEL_SPEND_CONTAINMENT = PLAN_LIMITED_ACCEPTED
+AWS_KMS_PROVIDER_STATUS = PASS
+TRIGGER_PROVIDER_STATUS = PASS_WITH_ROOT_KEY_LIMITATION
+NEON_PROVIDER_STATUS = PASS_WITH_ORG_WIDE_KEY_LIMITATION
+NEON_RECOVERY = PASS
+CONTROLLED_ALPHA_INFRA_BUDGET_USD = 100
+PROVIDER_PREEMPTIVE_UPGRADES_ALLOWED = false
+PROVIDER_CONFIGURATION_VERIFICATION = PASS_WITH_DOCUMENTED_LIMITATIONS
+```
+
+## Remaining Live Actions Before Independent Re-Review
+
+1. Vercel disposable Git auto-deploy behavioral verification.
+2. Trigger production dependency-resolution behavior from the committed lockfile if still provider-dependent.
+3. Install `NEON_API_KEY` into Trigger Production only when managed PostgreSQL live activation is approved.
+4. Apply pending control-plane migrations in reviewed order before exercising new production paths.
+5. Run one controlled live SSC-managed database provisioning proof after migrations and credential activation.
+6. Keep KMS production/non-production environment separation as a future hardening/provider policy question unless current restore design makes it necessary.
+
+## Next Node
+
+```text
+NEXT_NODE = PRE_15R_14_LIVE_ACTIVATION
+```
+
+Use `15R.14 Independent Adversarial Re-Review` after the remaining live activation checks are complete.

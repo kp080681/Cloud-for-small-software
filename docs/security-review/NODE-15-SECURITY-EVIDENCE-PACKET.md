@@ -503,11 +503,57 @@ Neon/provider credentials, if retained or reintroduced:
 
 `NODE_15_CODE_HARDENING = PASS`
 
-`NODE_15_PROVIDER_SCOPE_VERIFICATION = INCOMPLETE`
+`NODE_15_PROVIDER_SCOPE_VERIFICATION = PASS_WITH_DOCUMENTED_LIMITATIONS`
 
 `NODE_15_SPECIALIST_REVIEW = REQUIRED`
 
 `NODE_15_READY_FOR_SPECIALIST_REVIEW = true`
+
+## 14.5 Node 15R.13 Provider Configuration Verification
+
+Node 15R.13 records live provider configuration evidence from GitHub, Vercel, AWS IAM/KMS, Trigger.dev, Neon, existing 15R remediation tests, and the 15R.12B disposable Neon recovery drill. No production provider configuration, provider resources, databases, migrations, workloads, or Trigger deployments were changed while recording this evidence.
+
+Provider status:
+
+| Provider area | Status | Evidence |
+| --- | --- | --- |
+| GitHub App | PASS | Installation has read access to code and metadata, no observed write/admin permissions, and selected-repository scope only for `kp080681/dealupwebsite`, `kp080681/Vantage`, and `kp080681/Cloud-for-small-software`. |
+| Vercel project identity | PASS | Live SSC project bindings for `ssc-dealup-website` and `ssc-vantage` match the expected project ids, GitHub repositories, and `main` production branch. |
+| Vercel credential least privilege | PARTIAL | Current token is user-scoped for team `team_HxUKmwKrgjW0tCYyVUtYmBsA`; acceptable for founder-operated controlled alpha with SSC controls, not the final self-service credential model. |
+| Vercel Git auto-deploy live behavior | PENDING_DISPOSABLE_BEHAVIOR_TEST | 15R.6 code verifies/corrects `git.deploymentEnabled=false` and fails closed on unknown state, but live behavioral proof is still pending. |
+| Vercel environment isolation | PASS_VISUAL | Project env review found per-project grouping and no observed team-wide inheritance of SSC control-plane credentials into workload projects. |
+| Vercel spend containment | PLAN_LIMITED_ACCEPTED | Hobby plan; paid on-demand usage not enabled; spend management is unavailable on the current plan. |
+| AWS IAM/KMS | PASS | Runtime IAM policy allows `kms:GenerateDataKey` and `kms:Decrypt` on one specific SSC KMS key with no observed wildcard resource or runtime admin actions. |
+| Trigger.dev environment | PASS | Production runtime environment contains expected control-plane credentials, no observed customer workload secrets, no observed root API key, and `NEON_API_KEY` is absent. |
+| Trigger.dev credential least privilege | PARTIAL_ROOT_KEY | Root and project keys exist with unrestricted access; root credential remains operator-only and must not become a runtime dependency. |
+| Trigger.dev resource ceiling | PASS | Free plan supplies a concrete ceiling: $5/month free credits, 20 concurrent runs, 10 schedules, and 1 day log retention. |
+| Neon credential least privilege | PARTIAL_ORG_WIDE | Neon API key is organization-wide/admin-level; acceptable for founder-operated controlled alpha with SSC ownership/recovery controls, not ideal for public self-service. |
+| Neon resource ceiling | PASS | Free plan has no paid usage enabled and includes bounded per-project storage/compute/branch limits. |
+| Neon recovery | PASS | 15R.12B restored a disposable SSC-managed Neon PostgreSQL database to a captured LSN with exact row-count and digest parity and cleaned up the resource. |
+
+Controlled-alpha economic operating boundary:
+
+```text
+CONTROLLED_ALPHA_INFRA_BUDGET_USD = 100
+PROVIDER_PREEMPTIVE_UPGRADES_ALLOWED = false
+```
+
+This is an internal operating ceiling, not product pricing, public SLA, or RTO/RPO commitment. Provider upgrades must be earned by real usage, paying customers, required security or reliability capability, or an actual provider limit blocking controlled alpha.
+
+Remaining provider items:
+
+- Vercel disposable Git auto-deploy behavioral verification.
+- Trigger production dependency-resolution behavior from the committed lockfile if still provider-dependent.
+- Install `NEON_API_KEY` into Trigger Production only when managed PostgreSQL live activation is approved.
+- Apply pending control-plane migrations in reviewed order before exercising new production paths.
+- Run one controlled live SSC-managed database provisioning proof after migrations and credential activation.
+- Keep KMS production/non-production environment separation as a future hardening/provider policy question unless current restore design makes it necessary.
+
+`PROVIDER_CONFIGURATION_VERIFICATION = PASS_WITH_DOCUMENTED_LIMITATIONS`
+
+`NODE_15R_13_COMPLETE = true`
+
+`NODE_15_SPECIALIST_REVIEW = REQUIRED`
 
 ## 15. Specialist Review Questions
 

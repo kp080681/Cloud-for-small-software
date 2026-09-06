@@ -565,9 +565,9 @@ Concrete consequence before 15R.12A: a workload requiring SSC-provisioned Postgr
 
 Decision: Node 15R.12 selected explicit database ownership modes for controlled alpha. Node 15R.12A implements `NONE`, `EXTERNAL`, and `SSC_MANAGED` production wiring while preserving existing no-database and external-database workload safety.
 
-Resolution: Node 15R.12A adds explicit `NONE`, `EXTERNAL`, and `SSC_MANAGED` database modes, a managed database resource record, workspace managed database admission limit, durable create intent/claim, Neon provisioning/reconciliation, encrypted generated `DATABASE_URL`, production-only binding, ownership-aware deletion, and read-only managed database inventory/orphan classification. Node 15R.12B proves provider-native recovery for a disposable SSC-managed Neon PostgreSQL database using branch restore to a captured LSN, with exact row-count and digest parity after destructive mutation. Provider credential scope, live Neon account behavior, and account/plan recovery boundaries remain separate 15R.13 verification work.
+Resolution: Node 15R.12A adds explicit `NONE`, `EXTERNAL`, and `SSC_MANAGED` database modes, a managed database resource record, workspace managed database admission limit, durable create intent/claim, Neon provisioning/reconciliation, encrypted generated `DATABASE_URL`, production-only binding, ownership-aware deletion, and read-only managed database inventory/orphan classification. Node 15R.12B proves provider-native recovery for a disposable SSC-managed Neon PostgreSQL database using branch restore to a captured LSN, with exact row-count and digest parity after destructive mutation. Node 15R.13 records live provider configuration evidence and accepts remaining provider limitations for founder-operated controlled alpha.
 
-Required next node: `15R.13 Provider Configuration Verification`
+Required next node: `PRE_15R_14_LIVE_ACTIVATION`
 
 Provider verification required? Yes before external alpha, to validate current Neon API token scope, account/project limits, delete semantics, and backup/PITR behavior.
 
@@ -592,9 +592,9 @@ Notes: this is a product-contract gap more than a hostile-code bug, but it is al
 | `15R-F13` | P1-J | `CONFIRMED`; `RESOLVED_CODE_PENDING_NEW_DRILL_BY_15R_10` | none | Restore guard now requires independent disposable target identity, canonical same-database refusal, and backup SHA-256 verification before restore |
 | `15R-F14` | P1-K | `CONFIRMED`; `RESOLVED_BY_15R_10` | none | Optional restored-secret decrypt branch now calls `decryptAppSecret(db, { appId, name })` and fails digest mismatch without plaintext output |
 | `15R-F15` | P1-L | `PARTIALLY_CONFIRMED`; `RESOLVED_CODE_PENDING_LIVE_VERIFY_BY_15R_11` | none | Workspace active app, deployment, and provider-operation admission limits now exist; provider-account spend/resource controls remain live-verification dependent |
-| `15R-F16` | P1-M | `CONFIRMED`; `SCOPED_BY_15R_12`; `RESOLVED_CODE_PENDING_LIVE_VERIFY_BY_15R_12A`; `RECOVERY_PROOF_PASS_BY_15R_12B` | `15R.13` | Customer PostgreSQL provisioning is production-wired with explicit ownership; disposable provider-native recovery proof passed; live provider configuration verification remains |
+| `15R-F16` | P1-M | `CONFIRMED`; `SCOPED_BY_15R_12`; `RESOLVED_CODE_PENDING_LIVE_VERIFY_BY_15R_12A`; `RECOVERY_PROOF_PASS_BY_15R_12B`; `PROVIDER_CONFIG_PASS_WITH_LIMITATIONS_BY_15R_13` | `PRE_15R_14_LIVE_ACTIVATION` | Customer PostgreSQL provisioning is production-wired with explicit ownership; disposable provider-native recovery proof passed; provider configuration verified with documented limitations |
 
-No speculative remediation nodes were added beyond reproduced findings. The next node should start with the P0 class because provider project identity and slug targeting affect multiple downstream operations.
+No speculative remediation nodes were added beyond reproduced findings. The 15R remediation sequence is complete through provider configuration verification, with documented limitations and remaining live activation actions before independent adversarial re-review.
 
 ## Final Status
 
@@ -636,6 +636,24 @@ No speculative remediation nodes were added beyond reproduced findings. The next
 
 `SSC_MANAGED_DATABASE_RECOVERY_STATUS = PASS`
 
+`PROVIDER_CONFIGURATION_VERIFICATION = PASS_WITH_DOCUMENTED_LIMITATIONS`
+
+`GITHUB_PROVIDER_STATUS = PASS`
+
+`VERCEL_CREDENTIAL_LEAST_PRIVILEGE = PARTIAL`
+
+`VERCEL_GIT_AUTODEPLOY_LIVE = PENDING_DISPOSABLE_BEHAVIOR_TEST`
+
+`AWS_KMS_PROVIDER_STATUS = PASS`
+
+`TRIGGER_PROVIDER_STATUS = PASS_WITH_ROOT_KEY_LIMITATION`
+
+`NEON_PROVIDER_STATUS = PASS_WITH_ORG_WIDE_KEY_LIMITATION`
+
+`CONTROLLED_ALPHA_INFRA_BUDGET_USD = 100`
+
+`PROVIDER_PREEMPTIVE_UPGRADES_ALLOWED = false`
+
 `CONFIRMED_P0_COUNT = 2`
 
 `CONFIRMED_P1_COUNT = 11`
@@ -644,7 +662,9 @@ No speculative remediation nodes were added beyond reproduced findings. The next
 
 `REJECTED_FINDING_COUNT = 0`
 
-`NEXT_NODE = 15R.13 Provider Configuration Verification`
+`NEXT_NODE = PRE_15R_14_LIVE_ACTIVATION`
+
+`NODE_15R_13_COMPLETE = true`
 
 `NODE_15R_0_COMPLETE = true`
 
