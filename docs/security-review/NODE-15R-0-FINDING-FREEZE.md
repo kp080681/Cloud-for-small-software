@@ -388,7 +388,7 @@ Notes: Node 04.17 correctly blocks missing required configuration before provisi
 
 Reviewer claim: control-plane install/deploy dependencies are not frozen by a tracked lockfile.
 
-Classification: `CONFIRMED`
+Classification: `CONFIRMED`; `RESOLVED_BY_15R_9`
 
 Exact files/functions:
 
@@ -397,20 +397,24 @@ Exact files/functions:
 
 Reproduction method: repository file inventory.
 
-Observed result:
+Observed pre-15R.9 result:
 
 ```text
 LOCKFILE_TRACKED = false
 FROZEN_INSTALL_USED = false
 ```
 
-Concrete consequence: Trigger/control-plane deployments can resolve dependency versions differently over time.
+Concrete consequence: pre-15R.9 Trigger/control-plane deployments could resolve dependency versions differently over time.
 
-Required next node: `15R.9 Reproducible Control-Plane Dependencies`
+Resolution: Node 15R.9 adds a tracked npm lockfile at `control-plane/package-lock.json` using lockfile version 3 and validates `npm ci` as the frozen control-plane install command. `control-plane/package.json` dependency ranges were not changed. The repository ignore rules now exclude `node_modules/`, local `.env` files, and PEM private-key material while still allowing `.env.example` and `.env.sample`.
+
+Audit evidence: `npm ci` completes from the lockfile without rewriting it. The control-plane package has no first-party `preinstall`, `install`, `postinstall`, or `prepare` lifecycle scripts. `npm audit --omit=dev` reports no critical production/runtime findings and one high transitive `ws` finding through Trigger SDK/socket.io-client/OpenTelemetry. Full `npm audit` reports 25 total advisories, including a critical transitive `tar` path through the `trigger.dev` CLI/dev tooling. No package upgrades were made because the available npm audit fixes imply major Trigger package changes and should be handled as deliberate dependency modernization.
+
+Required next node: none for lockfile reproducibility; continue with `15R.10 Recovery Safety Corrections`.
 
 Provider verification required? No.
 
-Notes: no `control-plane/package-lock.json`, `pnpm-lock.yaml`, or `yarn.lock` is tracked.
+Notes: Trigger.dev dependency install behavior should still be verified during 15R.13 live provider/deploy review, but the repository now provides a deterministic npm dependency graph for tools that honor the committed lockfile.
 
 ### P1-J - Restore Target Protection Can Allow Production-Equivalent Connection Strings
 
@@ -543,7 +547,7 @@ Notes: this is a product-contract gap more than a hostile-code bug, but it is al
 | `15R-F09` | P1-F | `CONFIRMED`; `RESOLVED_CODE_PENDING_LIVE_VERIFY_BY_15R_7` | `15R.7` | Public URL verification now requires provider alias/binding proof for the exact deployment before reachability can mark LIVE |
 | `15R-F10` | P1-G | `CONFIRMED`; `RESOLVED_CODE_PENDING_LIVE_VERIFY_BY_15R_8` | `15R.8` | Runtime env application now targets production only; live project env/shared-env verification remains required |
 | `15R-F11` | P1-H | `CONFIRMED` | `15R.8` | Resource policy runs after runtime provisioning and secret injection |
-| `15R-F12` | P1-I | `CONFIRMED` | `15R.9` | Control-plane dependencies are not lockfile-pinned |
+| `15R-F12` | P1-I | `CONFIRMED`; `RESOLVED_BY_15R_9` | `15R.9` | Control-plane npm dependencies are locked by tracked `control-plane/package-lock.json`; audit findings remain for deliberate upgrade review |
 | `15R-F13` | P1-J | `CONFIRMED` | `15R.10` | Restore guard uses raw connection string equality only |
 | `15R-F14` | P1-K | `CONFIRMED` | `15R.10` | Optional restored-secret decrypt branch calls helper incorrectly |
 | `15R-F15` | P1-L | `PARTIALLY_CONFIRMED` | `15R.11` | Per-app policy exists, workspace/global economic limits do not |
@@ -577,7 +581,7 @@ No speculative remediation nodes were added beyond reproduced findings. The next
 
 `RESOURCE_POLICY_BEFORE_SECRET_INJECTION = false`
 
-`LOCKFILE_TRACKED = false`
+`LOCKFILE_TRACKED = true`
 
 `RESTORE_PRODUCTION_EQUIVALENCE_GUARD = FAIL`
 
@@ -595,7 +599,7 @@ No speculative remediation nodes were added beyond reproduced findings. The next
 
 `REJECTED_FINDING_COUNT = 0`
 
-`NEXT_NODE = 15R.9 Reproducible Dependencies / Lockfile`
+`NEXT_NODE = 15R.10 Recovery Safety Corrections`
 
 `NODE_15R_0_COMPLETE = true`
 

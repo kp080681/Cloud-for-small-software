@@ -1,1 +1,9 @@
+node_modules/
+control-plane/node_modules/
 control-plane/.ssc-backups/
+
+.env
+.env.*
+!.env.example
+!.env.sample
+*.pem
