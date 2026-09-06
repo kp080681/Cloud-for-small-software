@@ -12,8 +12,9 @@ export function healthAttemptAction({ existingAttemptCount, maxAttempts }) {
   return { action: "attempt", attemptNumber, attemptsRemaining: Number(maxAttempts) - attemptNumber };
 }
 
-export function buildReconciliationAction({ deploymentStatus, providerStatus }) {
+export function buildReconciliationAction({ deploymentStatus, providerStatus, sourceIdentityStatus = "SOURCE_IDENTITY_MATCH" }) {
   if (isRecoveryTerminalStatus(deploymentStatus)) return { action: "terminal-noop" };
+  if (providerStatus === "READY" && deploymentStatus === "BUILDING" && sourceIdentityStatus !== "SOURCE_IDENTITY_MATCH") return { action: "source-unverified" };
   if (providerStatus === "READY" && deploymentStatus === "BUILDING") return { action: "advance-deploying" };
   if ((providerStatus === "ERROR" || providerStatus === "CANCELED") && deploymentStatus === "BUILDING") return { action: "fail-build" };
   return { action: "pending" };

@@ -131,7 +131,7 @@ Notes: schema-enforced boundaries remain documented separately; no broad authori
 
 Reviewer claim: concurrent `execute-build` calls for the same deployment can create duplicate Vercel deployments.
 
-Classification: `CONFIRMED`
+Classification: `CONFIRMED`; `RESOLVED_BY_15R_4`
 
 Exact files/functions:
 
@@ -267,7 +267,7 @@ Notes: unknown provider Git state is no longer treated as disabled. Explicit dis
 
 Reviewer claim: provider build reconciliation can advance when no independent source SHA is observed.
 
-Classification: `CONFIRMED`
+Classification: `CONFIRMED`; `RESOLVED_BY_15R_7`
 
 Exact files/functions:
 
@@ -277,9 +277,13 @@ Reproduction method: mocked provider deployment has `readyState = READY` and no 
 
 Observed result: `observedSha = null`; source mismatch block is skipped; `buildReconciliationAction({ providerStatus: "READY" })` advances to `DEPLOYING`; return reports `sourceIdentityMatches = null`.
 
-Concrete consequence: `BUILD_VERIFIED` / `BUILD_SUCCEEDED` can occur without independently proving provider source identity.
+Concrete consequence: pre-15R.7 `BUILD_VERIFIED` / `BUILD_SUCCEEDED` could occur without independently proving provider source identity.
 
-Required next node: `15R.5 Build Source Identity Must Be Proven`
+Resolution: Node 15R.7 introduces `control-plane/src/vercel-deployment-identity.mjs`, separates SSC-submitted metadata from provider-observed Git/source facts, and changes build reconciliation so provider `READY` plus missing independent source evidence records `SOURCE_IDENTITY_UNAVAILABLE` / `BUILD_SOURCE_UNVERIFIED` instead of advancing. Wrong source remains `BUILD_SOURCE_MISMATCH`. Provider deployment id, project id, and SSC deployment id must also match before build reconciliation can verify.
+
+Regression evidence: `control-plane/test/vercel-deployment-identity.test.mjs` covers expected source SHA, wrong source SHA, missing independent source SHA, self-submitted-only metadata, wrong provider project, wrong SSC deployment id, and unknown identity fail-closed behavior. `control-plane/test/deployment-recovery-rules.test.mjs` covers the source-unverified recovery decision.
+
+Required next node: none for source/live identity; continue with `15R.8 Secret Environment Boundary`.
 
 Provider verification required? No for fail-open reproduction; provider docs may help choose the strongest observed identity field.
 
@@ -289,7 +293,7 @@ Notes: SSC-submitted metadata exists at create time, but reconciliation should n
 
 Reviewer claim: public verification proves URL reachability but not exact deployment identity.
 
-Classification: `CONFIRMED`
+Classification: `CONFIRMED`; `RESOLVED_CODE_PENDING_LIVE_VERIFY_BY_15R_7`
 
 Exact files/functions:
 
@@ -304,9 +308,15 @@ LIVE_VERIFICATION_PROVES = REACHABILITY_ONLY plus provider deployment READY targ
 DEPLOYMENT_IDENTITY_AND_REACHABILITY_PROVEN = false
 ```
 
-Concrete consequence: SSC can mark `LIVE` when the canonical host is reachable but not proven to serve the exact provider deployment id being marked live.
+Concrete consequence: pre-15R.7 SSC could mark `LIVE` when the canonical host was reachable but not proven to serve the exact provider deployment id being marked live.
 
-Required next node: `15R.6 Live URL Deployment Identity Proof`
+Resolution: Node 15R.7 changes `control-plane/trigger/configure-public-access.ts` so `LIVE` requires a verified build row, matching provider deployment identity, provider-observed source identity, Vercel alias/deployment-alias binding to the exact provider deployment, and anonymous reachability. A stale canonical URL returning HTTP 200 now records `PUBLIC_BINDING_UNVERIFIED` and does not mark the new deployment `LIVE`.
+
+Provider proof used: Vercel alias APIs expose alias-to-deployment/project identity and deployment alias listings. SSC uses `GET /v4/aliases/{alias}` plus `GET /v2/deployments/{id}/aliases` as code-level proof before the public HTTP check.
+
+Regression evidence: `control-plane/test/vercel-deployment-identity.test.mjs` covers canonical alias match, stale alias to an old deployment, correct binding with failing public health, HTTP 200 without binding proof, omitted provider fields, and a DealUp-style complete mocked provider flow.
+
+Required next node: none for source/live identity; continue with `15R.8 Secret Environment Boundary`.
 
 Provider verification required? Yes, to identify the correct Vercel alias/production deployment proof API.
 
@@ -332,7 +342,7 @@ SECRETS_TARGET_PREVIEW = true
 
 Concrete consequence: app production secrets are exposed to preview deployments/environments for that Vercel project.
 
-Required next node: `15R.7 Secret Environment Target Reduction`
+Required next node: `15R.8 Secret Environment Boundary`
 
 Provider verification required? No.
 
@@ -523,9 +533,9 @@ Notes: this is a product-contract gap more than a hostile-code bug, but it is al
 | `15R-F05` | P1-B | `CONFIRMED`; `STATE_SAFETY_RESOLVED_BY_15R_4`; `REMOTE_CANCELLATION_RESOLVED_BY_15R_5` | `15R.5` | Delete/provision and abandon/build races cannot revive active state; abandoned in-flight provider deployments now receive remote containment attempts |
 | `15R-F06` | P1-C | `CONFIRMED`; `RESOLVED_BY_15R_5` | `15R.5` | Timeout/abandon now requests and records provider build containment instead of only marking local state |
 | `15R-F07` | P1-D | `CONFIRMED_PROVIDER_DEPENDENT`; `RESOLVED_CODE_PENDING_LIVE_VERIFY_BY_15R_6` | `15R.6` | Production paths now verify/correct Git auto-deploy containment before runtime use, secret injection, and build creation; live Vercel project verification remains required |
-| `15R-F08` | P1-E | `CONFIRMED` | `15R.5` | Build can advance with missing independently observed source SHA |
-| `15R-F09` | P1-F | `CONFIRMED` | `15R.6` | Public URL check proves reachability, not exact deployment identity |
-| `15R-F10` | P1-G | `CONFIRMED` | `15R.7` | Production secrets are applied to preview and production targets |
+| `15R-F08` | P1-E | `CONFIRMED`; `RESOLVED_BY_15R_7` | `15R.7` | Build verification now requires provider-observed source identity matching the immutable build input |
+| `15R-F09` | P1-F | `CONFIRMED`; `RESOLVED_CODE_PENDING_LIVE_VERIFY_BY_15R_7` | `15R.7` | Public URL verification now requires provider alias/binding proof for the exact deployment before reachability can mark LIVE |
+| `15R-F10` | P1-G | `CONFIRMED` | `15R.8` | Production secrets are applied to preview and production targets |
 | `15R-F11` | P1-H | `CONFIRMED` | `15R.8` | Resource policy runs after runtime provisioning and secret injection |
 | `15R-F12` | P1-I | `CONFIRMED` | `15R.9` | Control-plane dependencies are not lockfile-pinned |
 | `15R-F13` | P1-J | `CONFIRMED` | `15R.10` | Restore guard uses raw connection string equality only |
@@ -553,9 +563,9 @@ No speculative remediation nodes were added beyond reproduced findings. The next
 
 `GIT_AUTODEPLOY_CONTAINMENT = RESOLVED_CODE_PENDING_LIVE_VERIFY`
 
-`SOURCE_IDENTITY_FAIL_OPEN = CONFIRMED`
+`SOURCE_IDENTITY_FAIL_OPEN = RESOLVED_BY_15R_7`
 
-`LIVE_IDENTITY_PROOF = PARTIAL`
+`LIVE_IDENTITY_PROOF = RESOLVED_CODE_PENDING_LIVE_VERIFY`
 
 `SECRETS_TARGET_PREVIEW = true`
 
@@ -579,7 +589,7 @@ No speculative remediation nodes were added beyond reproduced findings. The next
 
 `REJECTED_FINDING_COUNT = 0`
 
-`NEXT_NODE = 15R.7 Source + LIVE Deployment Identity`
+`NEXT_NODE = 15R.8 Secret Environment Boundary`
 
 `NODE_15R_0_COMPLETE = true`
 

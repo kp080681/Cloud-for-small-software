@@ -5,6 +5,12 @@ import {
   assertProviderBuildBelongsToDeployment,
   assertSscProviderResourceIdentity,
 } from "../src/tenant-boundary.mjs";
+import {
+  ProviderDeploymentIdentityStatus,
+  SourceIdentityStatus,
+  verifyProviderDeploymentIdentity,
+  verifyProviderSourceIdentity,
+} from "../src/vercel-deployment-identity.mjs";
 
 const { Client } = pg;
 const API = "https://api.vercel.com";
@@ -22,14 +28,6 @@ async function getVercelDeployment(id: string) {
   return response.json();
 }
 
-function providerCommitSha(deployment: any) {
-  return deployment?.meta?.githubCommitSha
-    ?? deployment?.gitSource?.sha
-    ?? deployment?.gitSource?.ref
-    ?? deployment?.meta?.sscSourceCommitSha
-    ?? null;
-}
-
 export const reconcileBuild = task({
   id: "ssc-control-plane-reconcile-build",
   retry: { maxAttempts: 3, minTimeoutInMs: 2000, maxTimeoutInMs: 10000, factor: 2, randomize: false },
@@ -42,9 +40,11 @@ export const reconcileBuild = task({
         `SELECT d.id AS deployment_id, d.workspace_id, d.app_id,
                 d.source_commit_sha AS deployment_source_commit_sha,
                 d.status AS deployment_status, b.provider_deployment_id, b.provider_deployment_url,
-                b.source_commit_sha, b.status AS build_status
+                b.source_commit_sha, b.status AS build_status,
+                rt.provider_project_id
            FROM deployment_builds b
            JOIN deployments d ON d.id=b.deployment_id
+           JOIN app_runtimes rt ON rt.app_id=d.app_id
           WHERE b.deployment_id=$1`,
         [payload.deploymentId],
       );
@@ -63,15 +63,24 @@ export const reconcileBuild = task({
         return { result: "NODE_04_18_TERMINAL_NOOP", deploymentId: payload.deploymentId, status: build.deployment_status };
       }
       const provider = await getVercelDeployment(build.provider_deployment_id);
+      const deploymentIdentity = verifyProviderDeploymentIdentity(provider, {
+        deploymentId: build.deployment_id,
+        providerDeploymentId: build.provider_deployment_id,
+        providerProjectId: build.provider_project_id,
+      });
+      if (deploymentIdentity.status !== ProviderDeploymentIdentityStatus.MATCH) {
+        throw new Error(`Provider deployment identity could not be verified: ${deploymentIdentity.status}`);
+      }
       assertSscProviderResourceIdentity(provider, {
         id: build.deployment_id,
         source_commit_sha: build.source_commit_sha,
       });
       const providerStatus = provider?.readyState ?? provider?.status ?? "UNKNOWN";
-      const observedSha = providerCommitSha(provider);
-      const sourceIdentityMatches = observedSha === build.source_commit_sha;
+      const sourceIdentity = verifyProviderSourceIdentity(provider, build.source_commit_sha);
+      const observedSha = sourceIdentity.observedCommitSha;
+      const sourceIdentityMatches = sourceIdentity.status === SourceIdentityStatus.MATCH;
 
-      if (observedSha && !sourceIdentityMatches) {
+      if (sourceIdentity.status === SourceIdentityStatus.MISMATCH) {
         await db.query("BEGIN");
         try {
           await db.query(`UPDATE deployment_builds SET status='SOURCE_MISMATCH', updated_at=now() WHERE deployment_id=$1`, [payload.deploymentId]);
@@ -89,9 +98,10 @@ export const reconcileBuild = task({
         return { result: "NODE_04_10_SOURCE_MISMATCH", deploymentId: payload.deploymentId, expectedCommitSha: build.source_commit_sha, observedCommitSha: observedSha };
       }
 
-      const action = buildReconciliationAction({ deploymentStatus: build.deployment_status, providerStatus });
+      const action = buildReconciliationAction({ deploymentStatus: build.deployment_status, providerStatus, sourceIdentityStatus: sourceIdentity.status });
       const terminalSuccess = action.action === "advance-deploying";
       const terminalFailure = action.action === "fail-build";
+      const sourceUnverified = action.action === "source-unverified";
       await db.query("BEGIN");
       try {
         await db.query(`UPDATE deployment_builds SET status=$1, provider_deployment_url=COALESCE($2,provider_deployment_url), updated_at=now() WHERE deployment_id=$3`, [providerStatus, provider?.url ? `https://${provider.url}` : null, payload.deploymentId]);
@@ -101,14 +111,22 @@ export const reconcileBuild = task({
           if (advanced.rowCount === 1) await db.query(
             `INSERT INTO deployment_events (deployment_id,from_status,to_status,event_type,message,metadata)
              VALUES ($1,'BUILDING','DEPLOYING','BUILD_SUCCEEDED','Immutable provider build completed',$2::jsonb)`,
-            [payload.deploymentId, JSON.stringify({ providerDeploymentId: build.provider_deployment_id, providerStatus, sourceCommitSha: build.source_commit_sha, sourceIdentityMatches })],
+            [payload.deploymentId, JSON.stringify({ providerDeploymentId: build.provider_deployment_id, providerProjectId: build.provider_project_id, providerStatus, sourceCommitSha: build.source_commit_sha, observedCommitSha: observedSha, sourceIdentityStatus: sourceIdentity.status, sourceIdentityMatches })],
           );
         } else if (terminalFailure) {
           const failed = await db.query(`UPDATE deployments SET status='FAILED', error_code='BUILD_FAILED', error_message='Application build failed at the deployment provider.', finished_at=now(), updated_at=now() WHERE id=$1 AND status='BUILDING' RETURNING id`, [payload.deploymentId]);
           if (failed.rowCount === 1) await db.query(
             `INSERT INTO deployment_events (deployment_id,from_status,to_status,event_type,message,metadata)
              VALUES ($1,'BUILDING','FAILED','BUILD_FAILED','Provider build failed',$2::jsonb)`,
-            [payload.deploymentId, JSON.stringify({ providerDeploymentId: build.provider_deployment_id, providerStatus, sourceCommitSha: build.source_commit_sha, sourceIdentityMatches })],
+            [payload.deploymentId, JSON.stringify({ providerDeploymentId: build.provider_deployment_id, providerProjectId: build.provider_project_id, providerStatus, sourceCommitSha: build.source_commit_sha, observedCommitSha: observedSha, sourceIdentityStatus: sourceIdentity.status, sourceIdentityMatches })],
+          );
+        } else if (sourceUnverified) {
+          await db.query(`UPDATE deployment_builds SET status='SOURCE_IDENTITY_UNVERIFIED', updated_at=now() WHERE deployment_id=$1`, [payload.deploymentId]);
+          const failed = await db.query(`UPDATE deployments SET status='FAILED', error_code='SOURCE_IDENTITY_UNAVAILABLE', error_message='Provider build source identity could not be independently verified.', finished_at=now(), updated_at=now() WHERE id=$1 AND status='BUILDING' RETURNING id`, [payload.deploymentId]);
+          if (failed.rowCount === 1) await db.query(
+            `INSERT INTO deployment_events (deployment_id,from_status,to_status,event_type,message,metadata)
+             VALUES ($1,'BUILDING','FAILED','BUILD_SOURCE_UNVERIFIED','Provider build source identity was unavailable',$2::jsonb)`,
+            [payload.deploymentId, JSON.stringify({ providerDeploymentId: build.provider_deployment_id, providerProjectId: build.provider_project_id, providerStatus, sourceCommitSha: build.source_commit_sha, observedCommitSha: observedSha, sourceIdentityStatus: sourceIdentity.status, sourceIdentityMatches: false })],
           );
         }
         await db.query("COMMIT");
@@ -118,15 +136,16 @@ export const reconcileBuild = task({
       }
 
       return {
-        result: terminalSuccess ? "NODE_04_10_BUILD_VERIFIED" : terminalFailure ? "NODE_04_10_BUILD_FAILED" : "NODE_04_10_BUILD_PENDING",
+        result: terminalSuccess ? "NODE_04_10_BUILD_VERIFIED" : terminalFailure ? "NODE_04_10_BUILD_FAILED" : sourceUnverified ? "NODE_15R_7_SOURCE_IDENTITY_UNVERIFIED" : "NODE_04_10_BUILD_PENDING",
         deploymentId: payload.deploymentId,
         providerDeploymentId: build.provider_deployment_id,
         providerDeploymentUrl: provider?.url ? `https://${provider.url}` : build.provider_deployment_url,
         providerStatus,
         expectedCommitSha: build.source_commit_sha,
         observedCommitSha: observedSha,
-        sourceIdentityMatches: observedSha ? sourceIdentityMatches : null,
-        nextDeploymentStatus: terminalSuccess ? "DEPLOYING" : terminalFailure ? "FAILED" : build.deployment_status,
+        sourceIdentityStatus: sourceIdentity.status,
+        sourceIdentityMatches,
+        nextDeploymentStatus: terminalSuccess ? "DEPLOYING" : terminalFailure || sourceUnverified ? "FAILED" : build.deployment_status,
       };
     } finally {
       await db.end();

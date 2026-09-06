@@ -81,6 +81,14 @@ test("provider build READY while local deployment is BUILDING advances once", ()
     { action: "advance-deploying" },
   );
   assert.deepEqual(
+    buildReconciliationAction({
+      deploymentStatus: "BUILDING",
+      providerStatus: "READY",
+      sourceIdentityStatus: "SOURCE_IDENTITY_UNAVAILABLE",
+    }),
+    { action: "source-unverified" },
+  );
+  assert.deepEqual(
     buildReconciliationAction({ deploymentStatus: "DEPLOYING", providerStatus: "READY" }),
     { action: "pending" },
   );
