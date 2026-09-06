@@ -123,7 +123,7 @@ Concrete consequence: controlled-alpha production paths now fail before GitHub s
 
 Required next node: `15R.4 Provider Mutation Concurrency / Fencing`.
 
-Provider verification required? No.
+Provider verification required? Yes for any CPU, memory, storage, build/runtime, or account-spend limits that must be enforced by Vercel/provider settings rather than SSC database admission checks.
 
 Notes: schema-enforced boundaries remain documented separately; no broad authorization framework or PostgreSQL RLS was added.
 
@@ -358,7 +358,7 @@ Notes: this is not a plaintext leak in logs, but it broadens runtime exposure.
 
 Reviewer claim: a deployment that ultimately fails resource policy may already have provider mutations and secret injection.
 
-Classification: `CONFIRMED`
+Classification: `CONFIRMED`; `RESOLVED_BY_15R_11`
 
 Exact files/functions:
 
@@ -378,9 +378,11 @@ RESOURCE_POLICY_BEFORE_SECRET_INJECTION = false
 
 Concrete consequence: policy-blocked deployments may already have created/reconciled a provider project and applied secrets before policy enforcement blocks build execution.
 
-Required next node: `15R.8 Resource Policy Ordering`
+Resolution: Node 15R.11 moves resource policy verification before runtime secret application and provider build creation in `orchestrate-deployment.ts`. The V1 policy that is actually enforceable in SSC now blocks before decrypting/applying runtime secrets. Runtime provisioning still precedes policy verification because Vercel project/resource-limit enforcement remains provider-dependent; SSC does not pretend to enforce CPU, memory, or storage settings that are not established in the current provider abstraction.
 
-Provider verification required? No.
+Required next node: none for secret-injection/build ordering; provider resource-limit verification remains part of 15R.13 live provider review.
+
+Provider verification required? Yes for any CPU, memory, storage, build/runtime, or account-spend limits that must be enforced by Vercel/provider settings rather than SSC database admission checks.
 
 Notes: Node 04.17 correctly blocks missing required configuration before provisioning; this finding is about resource policy order, not env requirement verification.
 
@@ -481,17 +483,23 @@ Notes: Node 18 drill reported `SECRET_RECOVERY = METADATA_ONLY`, so this did not
 
 Reviewer claim: one workspace can multiply per-app limits by creating many apps.
 
-Classification: `PARTIALLY_CONFIRMED`
+Classification: `PARTIALLY_CONFIRMED`; `RESOLVED_CODE_PENDING_LIVE_VERIFY_BY_15R_11`
 
 Exact files/functions:
 
 - `control-plane/db/010_app_resource_policies.sql`
+- `control-plane/db/015_workspace_resource_policies.sql`
+- `control-plane/src/workspace-resource-policy.mjs`
 - `control-plane/trigger/enforce-resource-policy.ts`
+- `control-plane/trigger/create-redeployment.ts`
+- `control-plane/trigger/execute-build.ts`
+- `control-plane/trigger/orchestrate-deployment.ts`
 - `control-plane/scripts/create-app-deployment.mjs`
+- `control-plane/scripts/set-workspace-resource-policy.mjs`
 
 Reproduction method: static schema/flow inspection.
 
-Observed result:
+Observed pre-15R.11 result:
 
 | Level | Enforcement |
 | --- | --- |
@@ -502,11 +510,29 @@ Observed result:
 
 Concrete consequence: under any future public entrypoint, one workspace could create many apps and multiply per-app deployment/provider usage limits.
 
-Required next node: `15R.11 Workspace Admission / Economic Limits`
+Resolution: Node 15R.11 adds a small `workspace_resource_policies` table and shared enforcement module. Controlled-alpha defaults are `maxActiveApps=3`, `maxActiveDeployments=3`, `maxActiveDeploymentsPerApp=1`, and `maxConcurrentProviderOperations=2`. Active deployment states are `DRAFT`, `READY`, `QUEUED`, `ANALYZING`, `PROVISIONING`, `BUILDING`, `DEPLOYING`, `HEALTH_CHECKING`, and `DELETING`; terminal/historical `LIVE`, `FAILED`, and `DELETED` deployments do not consume active-deployment concurrency. Deleted apps do not consume active-app quota.
 
-Provider verification required? No.
+SSC-enforced limits:
 
-Notes: current founder/operator scripts reduce immediate abuse exposure, but the economic control is not present.
+- app creation is refused before app insert when the workspace active-app limit is reached
+- initial deployment creation and redeploy are refused before deployment insert when app/workspace active-deployment limits are reached
+- new Vercel deployment operation intent creation is refused before provider deployment creation when the workspace provider-operation limit is reached
+- existing provider-operation recovery/replay can continue while the workspace is at the provider-operation limit
+- resource policy verification now runs before runtime secret application and provider build creation in the orchestrator
+- explicit founder override is available through `set-workspace-resource-policy.mjs` with workspace-id targeting and numeric validation
+
+Provider-dependent limits still requiring live verification:
+
+- Vercel account/team spend controls, build/runtime limits, and project-level usage controls
+- Trigger.dev task concurrency/usage controls
+- AWS KMS usage/cost controls
+- Neon/customer database project/storage limits once 15R.12 resolves PostgreSQL lifecycle scope
+
+Required next node: none for workspace admission/economic guardrail code; continue with `15R.12 Production PostgreSQL Scope Decision`.
+
+Provider verification required? Yes for provider-account spend and runtime resource controls. SSC now enforces bounded workspace admission/concurrency in code, but it does not claim CPU, memory, storage, or provider-account spend ceilings that are not directly enforced by this control plane.
+
+Notes: this is not billing, pricing, or usage metering. It is a founder-controlled alpha safety boundary.
 
 ### P1-M - Customer PostgreSQL Provisioning Is Not Implemented In Production Lifecycle
 
@@ -552,11 +578,11 @@ Notes: this is a product-contract gap more than a hostile-code bug, but it is al
 | `15R-F08` | P1-E | `CONFIRMED`; `RESOLVED_BY_15R_7` | `15R.7` | Build verification now requires provider-observed source identity matching the immutable build input |
 | `15R-F09` | P1-F | `CONFIRMED`; `RESOLVED_CODE_PENDING_LIVE_VERIFY_BY_15R_7` | `15R.7` | Public URL verification now requires provider alias/binding proof for the exact deployment before reachability can mark LIVE |
 | `15R-F10` | P1-G | `CONFIRMED`; `RESOLVED_CODE_PENDING_LIVE_VERIFY_BY_15R_8` | `15R.8` | Runtime env application now targets production only; live project env/shared-env verification remains required |
-| `15R-F11` | P1-H | `CONFIRMED` | `15R.8` | Resource policy runs after runtime provisioning and secret injection |
+| `15R-F11` | P1-H | `CONFIRMED`; `RESOLVED_BY_15R_11` | none | Enforceable resource policy now runs before runtime secret application and provider build creation; provider CPU/memory/storage controls remain live-verification dependent |
 | `15R-F12` | P1-I | `CONFIRMED`; `RESOLVED_BY_15R_9` | `15R.9` | Control-plane npm dependencies are locked by tracked `control-plane/package-lock.json`; audit findings remain for deliberate upgrade review |
 | `15R-F13` | P1-J | `CONFIRMED`; `RESOLVED_CODE_PENDING_NEW_DRILL_BY_15R_10` | none | Restore guard now requires independent disposable target identity, canonical same-database refusal, and backup SHA-256 verification before restore |
 | `15R-F14` | P1-K | `CONFIRMED`; `RESOLVED_BY_15R_10` | none | Optional restored-secret decrypt branch now calls `decryptAppSecret(db, { appId, name })` and fails digest mismatch without plaintext output |
-| `15R-F15` | P1-L | `PARTIALLY_CONFIRMED` | `15R.11` | Per-app policy exists, workspace/global economic limits do not |
+| `15R-F15` | P1-L | `PARTIALLY_CONFIRMED`; `RESOLVED_CODE_PENDING_LIVE_VERIFY_BY_15R_11` | none | Workspace active app, deployment, and provider-operation admission limits now exist; provider-account spend/resource controls remain live-verification dependent |
 | `15R-F16` | P1-M | `CONFIRMED` | `15R.12` | Customer PostgreSQL provisioning is spike/schema only |
 
 No speculative remediation nodes were added beyond reproduced findings. The next node should start with the P0 class because provider project identity and slug targeting affect multiple downstream operations.
@@ -585,7 +611,7 @@ No speculative remediation nodes were added beyond reproduced findings. The next
 
 `SECRETS_TARGET_PREVIEW = false`
 
-`RESOURCE_POLICY_BEFORE_SECRET_INJECTION = false`
+`RESOURCE_POLICY_BEFORE_SECRET_INJECTION = true`
 
 `LOCKFILE_TRACKED = true`
 
@@ -593,7 +619,7 @@ No speculative remediation nodes were added beyond reproduced findings. The next
 
 `RESTORED_SECRET_DECRYPT_CALL = VALID`
 
-`WORKSPACE_RESOURCE_LIMIT = ABSENT`
+`WORKSPACE_RESOURCE_LIMIT = RESOLVED_CODE_PENDING_LIVE_VERIFY`
 
 `CUSTOMER_POSTGRESQL_PROVISIONING = SPIKE_ONLY`
 
@@ -605,7 +631,7 @@ No speculative remediation nodes were added beyond reproduced findings. The next
 
 `REJECTED_FINDING_COUNT = 0`
 
-`NEXT_NODE = 15R.11 Workspace / Economic Guardrails`
+`NEXT_NODE = 15R.12 Production PostgreSQL Scope Decision`
 
 `NODE_15R_0_COMPLETE = true`
 

@@ -23,6 +23,7 @@ export const REQUIRED_CONTROL_PLANE_TABLES = Object.freeze([
   "deployment_env_detection_snapshots",
   "deployment_env_requirement_detections",
   "deployment_provider_operations",
+  "workspace_resource_policies",
 ]);
 
 export const REQUIRED_CONTROL_PLANE_COLUMNS = Object.freeze({
@@ -44,6 +45,7 @@ export const REQUIRED_CONTROL_PLANE_COLUMNS = Object.freeze({
   deployment_build_inputs: ["deployment_id", "repository_full_name", "commit_sha", "git_tree_sha", "root_directory"],
   deployment_builds: ["deployment_id", "provider", "provider_deployment_id", "source_commit_sha", "status"],
   deployment_provider_operations: ["deployment_id", "operation_type", "provider", "idempotency_key", "status"],
+  workspace_resource_policies: ["workspace_id", "max_active_apps", "max_active_deployments", "max_active_deployments_per_app", "max_concurrent_provider_operations"],
 });
 
 export const REQUIRED_CONTROL_PLANE_UNIQUE_CONSTRAINTS = Object.freeze([
@@ -68,6 +70,7 @@ export const REQUIRED_CONTROL_PLANE_UNIQUE_CONSTRAINTS = Object.freeze([
   { table: "deployment_env_requirement_detections", columns: ["deployment_id", "env_key"] },
   { table: "deployment_provider_operations", columns: ["idempotency_key"] },
   { table: "deployment_provider_operations", columns: ["deployment_id", "operation_type"] },
+  { table: "workspace_resource_policies", columns: ["workspace_id"] },
 ]);
 
 export function publicTableIdentifier(table) {

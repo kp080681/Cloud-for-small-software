@@ -1,6 +1,10 @@
 import crypto from "node:crypto";
 import pg from "pg";
 import { requireWorkspaceId } from "../src/operator-targeting.mjs";
+import {
+  enforceActiveAppLimit,
+  enforceDeploymentCreationLimit,
+} from "../src/workspace-resource-policy.mjs";
 
 const required = ["DATABASE_URL", "CONTROL_PLANE_WORKSPACE_ID", "CONTROL_PLANE_REPOSITORY", "CONTROL_PLANE_COMMIT_SHA"];
 for (const name of required) {
@@ -42,7 +46,7 @@ try {
   const repository = repoResult.rows[0];
 
   const existingApp = await db.query(
-    `SELECT id, workspace_id, repository_id, name, slug, framework, runtime, database_required
+    `SELECT id, workspace_id, repository_id, name, slug, framework, runtime, database_required, deleted_at
        FROM apps
       WHERE workspace_id = $1 AND slug = $2
       LIMIT 1
@@ -52,6 +56,9 @@ try {
 
   let app;
   if (existingApp.rowCount > 0) {
+    if (existingApp.rows[0].deleted_at) {
+      throw new Error(`App slug belongs to a deleted app and requires explicit recovery before reuse: ${slug}`);
+    }
     if (existingApp.rows[0].repository_id !== repository.id) {
       throw new Error(`App slug already belongs to another repository: ${slug}`);
     }
@@ -68,6 +75,7 @@ try {
     );
     app = updated.rows[0];
   } else {
+    await enforceActiveAppLimit(db, { workspaceId: repository.workspace_id });
     const created = await db.query(
       `INSERT INTO apps
          (workspace_id, repository_id, name, slug, framework, runtime, database_required)
@@ -95,6 +103,10 @@ try {
   if (existingDeployment.rowCount > 0) {
     deployment = existingDeployment.rows[0];
   } else {
+    await enforceDeploymentCreationLimit(db, {
+      workspaceId: repository.workspace_id,
+      appId: app.id,
+    });
     const deploymentKey = `dep_${crypto.randomUUID().replaceAll("-", "")}`;
     const created = await db.query(
       `INSERT INTO deployments

@@ -22,6 +22,7 @@ import {
   providerCreateClaimDecision,
 } from "../src/provider-mutation-fencing.mjs";
 import { ensureGitAutoDeploymentsDisabled } from "../src/vercel-project-config.mjs";
+import { ensureBuildOperationWithinWorkspaceLimit } from "../src/workspace-resource-policy.mjs";
 
 const { Client } = pg;
 const API = "https://api.vercel.com";
@@ -93,23 +94,8 @@ async function enforceGitAutoDeployments(project: any) {
 
 async function ensureBuildOperation(db: pg.Client, deployment: any) {
   const idempotencyKey = sscBuildOperationKey({ deploymentId: deployment.id, sourceCommitSha: deployment.commit_sha });
-  const result = await db.query(
-    `INSERT INTO deployment_provider_operations
-       (deployment_id, operation_type, provider, idempotency_key, source_commit_sha,
-        provider_project_id, status, metadata)
-     VALUES ($1,'vercel-create-deployment','vercel',$2,$3,$4,'INTENT_RECORDED',$5::jsonb)
-     ON CONFLICT (deployment_id, operation_type) DO UPDATE SET
-       updated_at = deployment_provider_operations.updated_at
-     RETURNING id, deployment_id, status, provider_resource_id, source_commit_sha`,
-    [
-      deployment.id,
-      idempotencyKey,
-      deployment.commit_sha,
-      deployment.provider_project_id,
-      JSON.stringify({ target: "production", providerProjectId: deployment.provider_project_id }),
-    ],
-  );
-  return result.rows[0];
+  const result = await ensureBuildOperationWithinWorkspaceLimit(db, { ...deployment, idempotency_key: idempotencyKey });
+  return result;
 }
 
 async function attachProviderDeployment(db: pg.Client, deployment: any, providerDeployment: any, operationId: string, eventType: string) {
@@ -229,7 +215,11 @@ export const executeBuild=task({id:"ssc-control-plane-execute-build",retry:{maxA
   const remoteProject=await getVercelProject(deployment.provider_project_id);
   assertRemoteProjectMatchesSscApp(remoteProject,{workspaceId:deployment.workspace_id,appId:deployment.app_id,slug:deployment.slug,storedProjectName:deployment.provider_project_name,allowLegacyStoredBinding:true});
   await enforceGitAutoDeployments(remoteProject);
-  const operation=await ensureBuildOperation(db,deployment);
+  const operationResult=await ensureBuildOperation(db,deployment);
+  if(operationResult.allowed!==true){
+    return{result:"NODE_15R_11_PROVIDER_OPERATION_LIMIT_REACHED",deploymentId:payload.deploymentId,status:"BUILDING",createdNewDeployment:false,errorCode:operationResult.decision.code,message:operationResult.decision.message,observed:operationResult.decision.observed,limit:operationResult.decision.limit};
+  }
+  const operation=operationResult.operation;
   assertProviderOperationBelongsToDeployment(operation,{id:deployment.id,source_commit_sha:deployment.commit_sha});
 
   const matches=matchingSscDeployments(await listCandidateDeployments(deployment.provider_project_id),{deploymentId:deployment.id,sourceCommitSha:deployment.commit_sha});

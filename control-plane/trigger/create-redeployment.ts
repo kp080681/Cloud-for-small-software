@@ -3,6 +3,7 @@ import { createAppAuth } from "@octokit/auth-app";
 import { Octokit } from "@octokit/rest";
 import { task } from "@trigger.dev/sdk";
 import pg from "pg";
+import { enforceDeploymentCreationLimit } from "../src/workspace-resource-policy.mjs";
 
 const { Client } = pg;
 
@@ -21,6 +22,7 @@ export const createRedeployment = task({
         await db.query(`SELECT id FROM apps WHERE id=$1 FOR UPDATE`,[app.id]);
         const active=await db.query(`SELECT id,deployment_key,source_commit_sha,status FROM deployments WHERE app_id=$1 AND status IN ('DRAFT','READY','QUEUED','ANALYZING','PROVISIONING','BUILDING','DEPLOYING','HEALTH_CHECKING','DELETING') ORDER BY created_at DESC LIMIT 1`,[app.id]);
         if(active.rowCount>0){await db.query("COMMIT");return{result:"NODE_04_16_REDEPLOY_ALREADY_IN_PROGRESS",appId:app.id,deploymentId:active.rows[0].id,deploymentKey:active.rows[0].deployment_key,commitSha:active.rows[0].source_commit_sha,status:active.rows[0].status}}
+        await enforceDeploymentCreationLimit(db,{workspaceId:app.workspace_id,appId:app.id});
         const deploymentKey=`dep_${crypto.randomUUID().replaceAll("-","")}`;const created=await db.query(`INSERT INTO deployments (deployment_key,workspace_id,app_id,source_commit_sha,source_branch,status,parent_deployment_id,deployment_reason,runtime_project_id) SELECT $1,$2,$3,$4,$5,'ANALYZING',$6,'redeploy',rt.provider_project_id FROM app_runtimes rt WHERE rt.app_id=$3 RETURNING id,deployment_key,source_commit_sha,source_branch,status,parent_deployment_id,deployment_reason`,[deploymentKey,app.workspace_id,app.id,commitSha,branch,app.previous_deployment_id]);if(created.rowCount!==1)throw new Error("App runtime is missing; cannot redeploy");const deployment=created.rows[0];
         await db.query(`INSERT INTO deployment_events (deployment_id,from_status,to_status,event_type,message,metadata) VALUES ($1,'READY','ANALYZING','REDEPLOY_CREATED','Redeployment created from current repository head',$2::jsonb)`,[deployment.id,JSON.stringify({parentDeploymentId:app.previous_deployment_id,previousCommitSha:app.previous_commit_sha,commitSha,branch})]);await db.query("COMMIT");
         return{result:"NODE_04_16_REDEPLOY_CREATED",appId:app.id,deploymentId:deployment.id,deploymentKey:deployment.deployment_key,parentDeploymentId:deployment.parent_deployment_id,previousCommitSha:app.previous_commit_sha,commitSha:deployment.source_commit_sha,branch:deployment.source_branch,status:deployment.status,sourceChanged:app.previous_commit_sha!==deployment.source_commit_sha,installationTokenPrinted:false,privateKeyPrinted:false};

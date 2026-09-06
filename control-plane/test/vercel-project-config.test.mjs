@@ -141,7 +141,7 @@ test("SSC production paths enforce Git auto-deploy containment before secrets an
 
   assert.match(executeBuild, /ensureGitAutoDeploymentsDisabled/);
   assert.ok(
-    executeBuild.indexOf("enforceGitAutoDeployments") < executeBuild.indexOf("ensureBuildOperation"),
+    executeBuild.indexOf("await enforceGitAutoDeployments(remoteProject)") < executeBuild.indexOf("const operationResult=await ensureBuildOperation"),
     "build execution must verify Git auto-deploy containment before provider deployment intent/create",
   );
   assert.match(executeBuild, /vercelRequest\(`\/v13\/deployments/);
