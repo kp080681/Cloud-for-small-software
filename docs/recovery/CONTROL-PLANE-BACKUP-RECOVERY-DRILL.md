@@ -53,6 +53,14 @@ Restored `encrypted_secrets` rows must preserve:
 
 Restored ciphertext remains decryptable only if the same KMS key and encryption context remain available. If a decrypt proof is needed, use an explicitly disposable SSC test secret in a disposable restored database and return only a boolean/hash comparison result, never plaintext.
 
+Node 15R.10 corrected the optional decrypt proof path. The functional verifier now calls the production secret helper with the valid `{ appId, name }` argument shape and supports only these safe modes:
+
+- `METADATA_ONLY`: default when no deterministic backup/restore/recovery test secret and expected digest are supplied
+- `VERIFIED`: controlled decrypt succeeded for the explicit test secret and its SHA-256 matched the expected digest
+- `DIGEST_MISMATCH`: controlled decrypt succeeded but the digest did not match; the verifier exits nonzero and does not print plaintext
+
+Do not attempt decrypt proof against arbitrary production/customer secrets.
+
 ## Guarded Local Drill
 
 Prerequisites:
@@ -61,6 +69,8 @@ Prerequisites:
 - `DATABASE_URL` pointing to the active SSC control-plane database
 - `RESTORE_DATABASE_URL` pointing to a disposable non-production PostgreSQL database
 - `CONFIRM_DISPOSABLE_RESTORE=SSC_DISPOSABLE_RESTORE_TARGET`
+- `CONTROL_PLANE_BACKUP_SHA256` set to the SHA-256 printed by the backup script
+- `CONTROL_PLANE_RESTORE_TARGET_IDENTITY` set to the password-free identity of the approved disposable restore target, in the form `host=<host>;port=<port>;database=<database>;user=<user>`
 - Optional `CONTROL_PLANE_BACKUP_DIR`, defaulting to `control-plane/.ssc-backups`
 
 Create a local disposable backup:
@@ -85,6 +95,8 @@ Restore into the disposable target only:
 ```powershell
 cd "C:\Users\Dealup Admin\OneDrive - Dealup Strategies Private Limited\Documents\ChatGPT\Cloud for small Software\control-plane"
 $env:CONTROL_PLANE_BACKUP_FILE = "<path returned by backup script>"
+$env:CONTROL_PLANE_BACKUP_SHA256 = "<sha256 returned by backup script>"
+$env:CONTROL_PLANE_RESTORE_TARGET_IDENTITY = "host=<restore host>;port=<restore port>;database=<restore database>;user=<restore user>"
 $env:CONFIRM_DISPOSABLE_RESTORE = "SSC_DISPOSABLE_RESTORE_TARGET"
 node scripts\restore-control-plane-db-disposable.mjs
 ```
@@ -93,9 +105,13 @@ The restore script refuses to run if:
 
 - `RESTORE_DATABASE_URL` is missing
 - `CONTROL_PLANE_BACKUP_FILE` is missing
+- `CONTROL_PLANE_BACKUP_SHA256` is missing, malformed, or does not match the backup file
+- `CONTROL_PLANE_RESTORE_TARGET_IDENTITY` is missing or does not match the derived password-free identity of `RESTORE_DATABASE_URL`
 - confirmation is not exact
-- `RESTORE_DATABASE_URL` exactly matches `DATABASE_URL`
+- `RESTORE_DATABASE_URL` identifies the same database target as `DATABASE_URL`, including textually different query strings and common Neon pooled/direct endpoint variants
 - the backup file does not exist
+
+The restore target identity is intentionally supplied separately from the connection URL so an operator must positively name the disposable target before any restore can begin. It is not a secret and must not include passwords or tokens.
 
 Verify source/restored metadata parity:
 
@@ -133,6 +149,9 @@ Minimum successful proof:
 - app/runtime/build/deployment/provider-operation rows remain joinable by IDs
 - no plaintext secret values are printed
 - no provider resources are created, deleted, or modified
+- backup SHA-256 is verified before restore
+- restore target identity is independently approved before restore
+- mandatory schema/table/row-count/constraint verifier failures exit nonzero
 
 ## Disaster Model
 
@@ -152,13 +171,15 @@ Manual operator action: restore database, verify schema/row counts/secret metada
 
 Unrecoverable boundary: writes after the selected backup/PITR point may be absent and must be reconstructed from provider evidence where possible.
 
+Recovery safety rule: the restored database is evidence to inspect, not permission to mutate providers. Before any provider reconciliation, an operator must run read-only diagnostics, timelines, inventory, and orphan detection. Provider mutation after restore must be fenced by the existing deployment/provider-operation identity checks and should start with the smallest targeted reconciliation path, not broad reruns.
+
 ### C. Provider resources still exist but DB restored to an older point
 
 Expected behavior: provider resources are evidence, not control-plane truth. Node 04.18 deployment recovery and Node 04.19 orphan detection help identify deployments/projects that exist remotely but are missing or stale locally.
 
 Manual operator action: run read-only inventory/orphan detection first. Repair only through approved reconciliation paths. Do not blindly recreate or delete provider resources.
 
-Unrecoverable boundary: provider resources without SSC metadata or local lineage may not be safely attributable.
+Unrecoverable boundary: provider resources without SSC metadata or local lineage may not be safely attributable. Node 04.19 orphan inventory is intentionally bounded to positively SSC-owned resources; foreign or metadata-free provider resources are ignored rather than guessed into SSC ownership.
 
 ### D. KMS key unavailable
 
@@ -167,6 +188,8 @@ Expected behavior: encrypted secret ciphertext remains backed up but cannot be d
 Manual operator action: restore/enable the KMS key and worker IAM permissions, then verify with a disposable test secret.
 
 Unrecoverable boundary: if the KMS key material is permanently gone, existing encrypted app secrets are unrecoverable and must be re-entered by authorized operators/customers.
+
+Environment separation note: backup metadata can prove encrypted rows and KMS identifiers survived the restore, but it cannot prove decryptability in another runtime environment unless the correct KMS key, region, IAM role, and encryption-context permissions are available there. Provider/IAM verification remains required before relying on restored secret injection.
 
 ### E. Trigger state unavailable
 
@@ -274,6 +297,21 @@ Node 18 result:
 - `NODE_18_BACKUP_RECOVERY_PROOF = PASS`
 - `NODE_18_TECHNICAL_EVIDENCE_COMPLETE = true`
 - `GATE_12_COMPLETE = false`
+
+Node 15R.10 recovery safety corrections:
+
+- `RESTORE_PRODUCTION_EQUIVALENCE_GUARD = RESOLVED_CODE_PENDING_NEW_DRILL`
+- `RESTORE_REQUIRES_INDEPENDENT_TARGET_IDENTITY = true`
+- `BACKUP_DIGEST_VERIFIED_BEFORE_RESTORE = true`
+- `RESTORED_SECRET_DECRYPT_CALL = VALID`
+- `SECRET_RECOVERY_MODES = METADATA_ONLY | VERIFIED | DIGEST_MISMATCH`
+- `REQUIRED_SCHEMA_VERIFICATION = REQUIRED_TABLES_AND_COLUMNS_AND_UNIQUE_CONSTRAINTS`
+- `MANDATORY_VERIFICATION_FAILURE_EXITS_NONZERO = true`
+- `ORPHAN_INVENTORY_LIMITATION_DOCUMENTED = true`
+- `KMS_ENVIRONMENT_SEPARATION_PROVIDER_VERIFY_REQUIRED = true`
+- `NEW_REAL_DISPOSABLE_RESTORE_DRILL_REQUIRED = true`
+
+The real Node 18 drill remains valid for backup, restore, parity, functional timeline/diagnostic recovery, and metadata-only secret recovery. A new disposable restore drill is required to prove the stricter Node 15R.10 guard against live infrastructure.
 
 ## Cleanup
 

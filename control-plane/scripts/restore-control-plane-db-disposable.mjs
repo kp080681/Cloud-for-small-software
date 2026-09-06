@@ -1,5 +1,9 @@
 import fs from "node:fs";
 import { spawnSync } from "node:child_process";
+import {
+  assertBackupDigestMatches,
+  assertDisposableRestoreTarget,
+} from "../src/recovery-safety.mjs";
 
 const REQUIRED_CONFIRMATION = "SSC_DISPOSABLE_RESTORE_TARGET";
 
@@ -30,17 +34,25 @@ function assertToolAvailable(tool) {
 
 const restoreDatabaseUrl = requireEnv("RESTORE_DATABASE_URL");
 const backupFile = requireEnv("CONTROL_PLANE_BACKUP_FILE");
+const backupSha256 = requireEnv("CONTROL_PLANE_BACKUP_SHA256");
 const confirmation = requireEnv("CONFIRM_DISPOSABLE_RESTORE");
+const expectedRestoreTargetIdentity = requireEnv("CONTROL_PLANE_RESTORE_TARGET_IDENTITY");
 
 if (confirmation !== REQUIRED_CONFIRMATION) {
   throw new Error(`Refusing restore without CONFIRM_DISPOSABLE_RESTORE=${REQUIRED_CONFIRMATION}`);
 }
-if (process.env.DATABASE_URL && process.env.DATABASE_URL === restoreDatabaseUrl) {
-  throw new Error("Refusing restore because RESTORE_DATABASE_URL matches DATABASE_URL");
-}
 if (!fs.existsSync(backupFile)) {
   throw new Error(`Backup file not found: ${backupFile}`);
 }
+const restoreTarget = assertDisposableRestoreTarget({
+  sourceDatabaseUrl: process.env.DATABASE_URL,
+  restoreDatabaseUrl,
+  expectedRestoreTargetIdentity,
+});
+const verifiedBackupSha256 = assertBackupDigestMatches({
+  backupFile,
+  expectedSha256: backupSha256,
+});
 
 assertToolAvailable("pg_restore");
 
@@ -62,6 +74,11 @@ if (restore.status !== 0) {
 console.log(JSON.stringify({
   result: "DISPOSABLE_CONTROL_PLANE_RESTORE_COMPLETED",
   restoreTargetConfirmedDisposable: true,
+  restoreTargetIdentityVerified: true,
+  restoreTargetIdentity: restoreTarget.restoreTargetIdentity,
+  sourceTargetCompared: restoreTarget.sourceCompared,
+  backupSha256Verified: true,
+  backupSha256: verifiedBackupSha256,
   observedRestoreDurationMs: Date.now() - started,
   plaintextSecretsPrinted: false,
 }, null, 2));

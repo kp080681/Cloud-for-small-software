@@ -1,39 +1,13 @@
 import pg from "pg";
+import {
+  REQUIRED_CONTROL_PLANE_COLUMNS,
+  REQUIRED_CONTROL_PLANE_TABLES,
+  REQUIRED_CONTROL_PLANE_UNIQUE_CONSTRAINTS,
+  publicTableIdentifier,
+  restoreVerificationFailures,
+} from "../src/recovery-safety.mjs";
 
 const { Client } = pg;
-
-const IMPORTANT_TABLES = [
-  "workspaces",
-  "github_installations",
-  "github_repositories",
-  "apps",
-  "deployments",
-  "deployment_events",
-  "encrypted_secrets",
-  "app_secret_bindings",
-  "deployment_secret_applications",
-  "app_databases",
-  "app_runtimes",
-  "deployment_build_inputs",
-  "deployment_builds",
-  "deployment_health_checks",
-  "deployment_logs",
-  "app_deletions",
-  "app_resource_policies",
-  "deployment_env_detection_snapshots",
-  "deployment_env_requirement_detections",
-  "deployment_provider_operations",
-];
-
-function publicTableIdentifier(table) {
-  if (!IMPORTANT_TABLES.includes(table) && table !== "encrypted_secrets") {
-    throw new Error(`Unexpected table identifier: ${table}`);
-  }
-  if (!/^[a-z_][a-z0-9_]*$/.test(table)) {
-    throw new Error(`Unsafe table identifier: ${table}`);
-  }
-  return `public.${table}`;
-}
 
 function requireEnv(name) {
   const value = process.env[name];
@@ -108,13 +82,54 @@ async function secretMetadataSummary(db) {
   };
 }
 
+async function missingRequiredColumns(db) {
+  const missing = [];
+  for (const [table, columns] of Object.entries(REQUIRED_CONTROL_PLANE_COLUMNS)) {
+    for (const column of columns) {
+      const result = await db.query(
+        `SELECT true AS exists
+           FROM information_schema.columns
+          WHERE table_schema = 'public'
+            AND table_name = $1
+            AND column_name = $2`,
+        [table, column],
+      );
+      if (result.rowCount !== 1) missing.push({ table, column });
+    }
+  }
+  return missing;
+}
+
+async function missingRequiredUniqueConstraints(db) {
+  const missing = [];
+  for (const constraint of REQUIRED_CONTROL_PLANE_UNIQUE_CONSTRAINTS) {
+    const result = await db.query(
+      `SELECT true AS exists
+         FROM pg_index i
+         JOIN pg_class t ON t.oid = i.indrelid
+         JOIN pg_namespace n ON n.oid = t.relnamespace
+        WHERE n.nspname = 'public'
+          AND t.relname = $1
+          AND i.indisunique
+          AND (
+            SELECT array_agg(a.attname::text ORDER BY u.ord)
+              FROM unnest(i.indkey) WITH ORDINALITY AS u(attnum, ord)
+              JOIN pg_attribute a ON a.attrelid = t.oid AND a.attnum = u.attnum
+          ) = $2::text[]`,
+      [constraint.table, constraint.columns],
+    );
+    if (result.rowCount !== 1) missing.push(constraint);
+  }
+  return missing;
+}
+
 const source = await connect("DATABASE_URL");
 const restored = await connect("RESTORE_DATABASE_URL");
 
 try {
   const sourceTables = [];
   const restoredTables = [];
-  for (const table of IMPORTANT_TABLES) {
+  for (const table of REQUIRED_CONTROL_PLANE_TABLES) {
     sourceTables.push(await tableSummary(source, table));
     restoredTables.push(await tableSummary(restored, table));
   }
@@ -135,13 +150,28 @@ try {
   const schemaRestored = comparisons.every((item) => item.sourceExists === item.restoredExists);
   const rowCountParity = comparisons.every((item) => item.rowCountMatches);
   const secretRecovery = await secretMetadataSummary(restored);
+  const missingColumns = await missingRequiredColumns(restored);
+  const missingUniqueConstraints = await missingRequiredUniqueConstraints(restored);
+  const failures = restoreVerificationFailures({
+    comparisons,
+    missingRequiredColumns: missingColumns,
+    missingRequiredUniqueConstraints: missingUniqueConstraints,
+    secretRecovery,
+  });
+  if (failures.length > 0) process.exitCode = 1;
 
   console.log(JSON.stringify({
-    result: "CONTROL_PLANE_RESTORE_VERIFIED_READ_ONLY",
+    result: failures.length === 0 ? "CONTROL_PLANE_RESTORE_VERIFIED_READ_ONLY" : "CONTROL_PLANE_RESTORE_VERIFICATION_FAILED_READ_ONLY",
     schemaRestored,
     rowCountParity,
     tableCount: comparisons.filter((item) => item.restoredExists).length,
     comparisons,
+    requiredSchemaVerification: {
+      missingColumns,
+      missingUniqueConstraints,
+      mandatoryFailures: failures,
+      passed: failures.length === 0,
+    },
     secretRecovery: {
       rowCount: secretRecovery.rowCount,
       completeMetadataCount: secretRecovery.completeMetadataCount,

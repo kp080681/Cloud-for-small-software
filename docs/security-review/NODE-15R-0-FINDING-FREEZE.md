@@ -420,7 +420,7 @@ Notes: Trigger.dev dependency install behavior should still be verified during 1
 
 Reviewer claim: disposable restore guard compares raw connection strings and can miss equivalent source/restore targets.
 
-Classification: `CONFIRMED`
+Classification: `CONFIRMED`; `RESOLVED_CODE_PENDING_NEW_DRILL_BY_15R_10`
 
 Exact files/functions:
 
@@ -428,7 +428,7 @@ Exact files/functions:
 
 Reproduction method: string-only guard inspection.
 
-Observed result:
+Observed pre-15R.10 result:
 
 - The guard refuses only when `process.env.DATABASE_URL === restoreDatabaseUrl`.
 - `DATABASE_URL` absent is allowed and no source/restore comparison occurs.
@@ -436,7 +436,11 @@ Observed result:
 
 Concrete consequence: operator error could restore over a production-equivalent target despite the disposable confirmation phrase.
 
-Required next node: `15R.10 Restore Target Equivalence Guard`
+Resolution: Node 15R.10 adds a canonical restore target guard and requires an independently supplied `CONTROL_PLANE_RESTORE_TARGET_IDENTITY` that must match the password-free identity derived from `RESTORE_DATABASE_URL`. The guard refuses textually different same-database targets, including reordered query parameters and common Neon pooled/direct host variants for the same endpoint/database/user. The restore script now also requires `CONTROL_PLANE_BACKUP_SHA256` and verifies the backup digest before invoking `pg_restore`.
+
+New drill requirement: because this node did not rerun a real disposable restore, the next operator drill must use the new identity/digest guard and record that it refused a production-equivalent target and accepted only the approved disposable target.
+
+Required next node: none for code-level restore target equivalence; continue with `15R.11 Workspace / Economic Guardrails`.
 
 Provider verification required? No, though Neon endpoint equivalence may need operator/provider confirmation for robust checks.
 
@@ -446,7 +450,7 @@ Notes: the restore script is already confirmation-gated; this finding is about t
 
 Reviewer claim: functional restore verifier uses the wrong `decryptAppSecret` call shape.
 
-Classification: `CONFIRMED`
+Classification: `CONFIRMED`; `RESOLVED_BY_15R_10`
 
 Exact files/functions:
 
@@ -455,7 +459,7 @@ Exact files/functions:
 
 Reproduction method: static signature comparison.
 
-Observed result:
+Observed pre-15R.10 result:
 
 ```text
 decryptAppSecret signature = decryptAppSecret(db, { appId, name })
@@ -465,7 +469,9 @@ DECRYPT_TEST_CALL_VALID = false
 
 Concrete consequence: if the optional decrypt branch is enabled with a deterministic test secret and expected digest, it will not call the helper correctly.
 
-Required next node: `15R.10 Restore Target Equivalence Guard`
+Resolution: Node 15R.10 changes the verifier to call `decryptAppSecret(db, { appId: row.app_id, name: row.name })`. The optional decrypt branch remains gated to an explicitly named backup/restore/recovery test secret plus an expected SHA-256 digest. If no safe expected digest is supplied, the verifier reports metadata-only recovery rather than inventing a plaintext proof. If a digest check is attempted and mismatches, the verifier exits nonzero without printing plaintext.
+
+Required next node: none for restored-secret decrypt helper correctness; continue with `15R.11 Workspace / Economic Guardrails`.
 
 Provider verification required? No.
 
@@ -548,8 +554,8 @@ Notes: this is a product-contract gap more than a hostile-code bug, but it is al
 | `15R-F10` | P1-G | `CONFIRMED`; `RESOLVED_CODE_PENDING_LIVE_VERIFY_BY_15R_8` | `15R.8` | Runtime env application now targets production only; live project env/shared-env verification remains required |
 | `15R-F11` | P1-H | `CONFIRMED` | `15R.8` | Resource policy runs after runtime provisioning and secret injection |
 | `15R-F12` | P1-I | `CONFIRMED`; `RESOLVED_BY_15R_9` | `15R.9` | Control-plane npm dependencies are locked by tracked `control-plane/package-lock.json`; audit findings remain for deliberate upgrade review |
-| `15R-F13` | P1-J | `CONFIRMED` | `15R.10` | Restore guard uses raw connection string equality only |
-| `15R-F14` | P1-K | `CONFIRMED` | `15R.10` | Optional restored-secret decrypt branch calls helper incorrectly |
+| `15R-F13` | P1-J | `CONFIRMED`; `RESOLVED_CODE_PENDING_NEW_DRILL_BY_15R_10` | none | Restore guard now requires independent disposable target identity, canonical same-database refusal, and backup SHA-256 verification before restore |
+| `15R-F14` | P1-K | `CONFIRMED`; `RESOLVED_BY_15R_10` | none | Optional restored-secret decrypt branch now calls `decryptAppSecret(db, { appId, name })` and fails digest mismatch without plaintext output |
 | `15R-F15` | P1-L | `PARTIALLY_CONFIRMED` | `15R.11` | Per-app policy exists, workspace/global economic limits do not |
 | `15R-F16` | P1-M | `CONFIRMED` | `15R.12` | Customer PostgreSQL provisioning is spike/schema only |
 
@@ -583,9 +589,9 @@ No speculative remediation nodes were added beyond reproduced findings. The next
 
 `LOCKFILE_TRACKED = true`
 
-`RESTORE_PRODUCTION_EQUIVALENCE_GUARD = FAIL`
+`RESTORE_PRODUCTION_EQUIVALENCE_GUARD = RESOLVED_CODE_PENDING_NEW_DRILL`
 
-`RESTORED_SECRET_DECRYPT_CALL = INVALID`
+`RESTORED_SECRET_DECRYPT_CALL = VALID`
 
 `WORKSPACE_RESOURCE_LIMIT = ABSENT`
 
@@ -599,7 +605,7 @@ No speculative remediation nodes were added beyond reproduced findings. The next
 
 `REJECTED_FINDING_COUNT = 0`
 
-`NEXT_NODE = 15R.10 Recovery Safety Corrections`
+`NEXT_NODE = 15R.11 Workspace / Economic Guardrails`
 
 `NODE_15R_0_COMPLETE = true`
 

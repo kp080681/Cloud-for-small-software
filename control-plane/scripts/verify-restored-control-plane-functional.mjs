@@ -3,6 +3,7 @@ import pg from "pg";
 import { loadDeploymentDiagnosticContext } from "../src/deployment-diagnostic-context.mjs";
 import { normalizeDeploymentDiagnostic } from "../src/deployment-diagnostics.mjs";
 import { normalizeDeploymentTimeline } from "../src/deployment-timeline.mjs";
+import { secretRecoveryMode } from "../src/recovery-safety.mjs";
 import { decryptAppSecret } from "../src/secret-store.mjs";
 
 const { Client } = pg;
@@ -68,10 +69,13 @@ async function verifyDeployment(db, deploymentId) {
 async function secretRecoverySummary(db) {
   const testSecretName = process.env.CONTROL_PLANE_RESTORE_TEST_SECRET_NAME;
   const expectedDigest = process.env.CONTROL_PLANE_RESTORE_TEST_SECRET_SHA256;
-  if (!testSecretName) {
+  const initialMode = secretRecoveryMode({ testSecretName, expectedDigest });
+  if (!initialMode.requiresDecrypt) {
     return {
-      status: "METADATA_ONLY",
-      reason: "No deterministic test secret name provided",
+      status: initialMode.status,
+      reason: !testSecretName
+        ? "No deterministic test secret name provided"
+        : "Expected digest or clearly marked backup/restore test secret was not provided",
       decryptOperationSucceeded: false,
       plaintextPrinted: false,
     };
@@ -109,10 +113,17 @@ async function secretRecoverySummary(db) {
     row.encryption_context,
   );
 
-  if (!expectedDigest) {
+  const selectedMode = secretRecoveryMode({
+    testSecretName,
+    expectedDigest,
+    matchingRows: result.rowCount,
+  });
+  if (!selectedMode.requiresDecrypt) {
     return {
-      status: "METADATA_ONLY",
-      reason: "Deterministic test secret row exists, but no expected digest was provided",
+      status: selectedMode.status,
+      reason: result.rowCount !== 1
+        ? `Expected exactly one deterministic test secret row, found ${result.rowCount}`
+        : "Deterministic test secret row exists, but no expected digest was provided",
       secretId: row.id,
       metadataComplete,
       decryptOperationSucceeded: false,
@@ -120,22 +131,19 @@ async function secretRecoverySummary(db) {
     };
   }
 
-  if (!/^[A-Z0-9_]*(BACKUP|RESTORE|RECOVERY)_TEST[A-Z0-9_]*$/.test(testSecretName)) {
-    return {
-      status: "METADATA_ONLY",
-      reason: "Secret name is not clearly marked as a backup/restore test secret",
-      secretId: row.id,
-      metadataComplete,
-      decryptOperationSucceeded: false,
-      plaintextPrinted: false,
-    };
-  }
-
-  const plaintext = await decryptAppSecret(db, row.app_id, row.name);
-  const digestMatches = createHash("sha256").update(plaintext).digest("hex") === expectedDigest;
+  const plaintext = await decryptAppSecret(db, { appId: row.app_id, name: row.name });
+  const digestMatches = createHash("sha256").update(plaintext).digest("hex") === expectedDigest.toLowerCase();
+  const finalMode = secretRecoveryMode({
+    testSecretName,
+    expectedDigest,
+    matchingRows: result.rowCount,
+    decryptOperationSucceeded: true,
+    digestMatches,
+  });
+  if (!digestMatches) process.exitCode = 1;
 
   return {
-    status: digestMatches ? "VERIFIED" : "DIGEST_MISMATCH",
+    status: finalMode.status,
     secretId: row.id,
     metadataComplete,
     decryptOperationSucceeded: true,
