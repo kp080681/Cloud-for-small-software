@@ -231,13 +231,16 @@ Notes: app deletion still deletes the whole Vercel project. If deletion wins the
 
 Reviewer claim: SSC does not actually prove Git auto-deploys are disabled for production runtimes.
 
-Classification: `CONFIRMED_PROVIDER_DEPENDENT`
+Classification: `CONFIRMED_PROVIDER_DEPENDENT`; `RESOLVED_CODE_PENDING_LIVE_VERIFY_BY_15R_6`
 
 Exact files/functions:
 
 - `control-plane/src/vercel-project-config.mjs`
 - `control-plane/trigger/provision-runtime.ts`
+- `control-plane/trigger/apply-runtime-env.ts`
+- `control-plane/trigger/execute-build.ts`
 - `control-plane/test/deployment-recovery-rules.test.mjs`
+- `control-plane/test/vercel-project-config.test.mjs`
 
 Reproduction method: static production-call inspection.
 
@@ -250,11 +253,15 @@ Observed result:
 
 Concrete consequence: whether Git auto-deploys are prevented depends on Vercel semantics and actual project settings, not a repository-proven production invariant.
 
-Required next node: `15R.4 Git Auto-Deploy Containment`
+Resolution: Node 15R.6 establishes a code-level invariant for controlled-alpha production paths. SSC verifies project identity first, then requires Vercel Git auto-deploy containment before runtime adoption/attachment, before secret decryption/env injection, and before provider deployment creation. Enabled or unknown Git state is corrected with a bounded provider project update and re-fetch; if verification still cannot prove `git.deploymentEnabled === false` or explicit disconnected state, SSC fails closed.
 
-Provider verification required? Yes.
+Provider behavior verified from Vercel documentation: `git.deploymentEnabled: false` turns off automatic deployments for all branches, while deprecated `skipGitConnectDuringLink` only opts out of the CLI prompt to connect Git during `vercel link`. The project REST API supports project updates through `PATCH /v9/projects/{idOrName}`; live provider verification is still required to confirm current DealUp/Vantage settings and token permissions in the actual Vercel team.
 
-Notes: existing tests prove the helper's desired classification, not production enforcement.
+Required next node: none for code-level Git auto-deploy containment; continue with `15R.7 Source + LIVE Deployment Identity`.
+
+Provider verification required? Yes, live DealUp/Vantage projects must still be inspected/corrected by an operator after review. This Codex node did not mutate Vercel.
+
+Notes: unknown provider Git state is no longer treated as disabled. Explicit disconnected projects (`git: null`, `link: null`) and projects with `git.deploymentEnabled === false` are safe; connected/enabled or omitted state must be corrected and verified before use.
 
 ### P1-E - Build/Source Reconciliation Can Pass With Missing Independently Observed Source Identity
 
@@ -515,7 +522,7 @@ Notes: this is a product-contract gap more than a hostile-code bug, but it is al
 | `15R-F04` | P1-A | `CONFIRMED`; `RESOLVED_BY_15R_4` | `15R.4` | Atomic provider-operation claim prevents duplicate Vercel deployment creation for one logical operation |
 | `15R-F05` | P1-B | `CONFIRMED`; `STATE_SAFETY_RESOLVED_BY_15R_4`; `REMOTE_CANCELLATION_RESOLVED_BY_15R_5` | `15R.5` | Delete/provision and abandon/build races cannot revive active state; abandoned in-flight provider deployments now receive remote containment attempts |
 | `15R-F06` | P1-C | `CONFIRMED`; `RESOLVED_BY_15R_5` | `15R.5` | Timeout/abandon now requests and records provider build containment instead of only marking local state |
-| `15R-F07` | P1-D | `CONFIRMED_PROVIDER_DEPENDENT` | `15R.4` | Git auto-deploy containment is not production-proven |
+| `15R-F07` | P1-D | `CONFIRMED_PROVIDER_DEPENDENT`; `RESOLVED_CODE_PENDING_LIVE_VERIFY_BY_15R_6` | `15R.6` | Production paths now verify/correct Git auto-deploy containment before runtime use, secret injection, and build creation; live Vercel project verification remains required |
 | `15R-F08` | P1-E | `CONFIRMED` | `15R.5` | Build can advance with missing independently observed source SHA |
 | `15R-F09` | P1-F | `CONFIRMED` | `15R.6` | Public URL check proves reachability, not exact deployment identity |
 | `15R-F10` | P1-G | `CONFIRMED` | `15R.7` | Production secrets are applied to preview and production targets |
@@ -544,7 +551,7 @@ No speculative remediation nodes were added beyond reproduced findings. The next
 
 `REMOTE_BUILD_CANCELLATION = RESOLVED_BY_15R_5`
 
-`GIT_AUTODEPLOY_CONTAINMENT = PROVIDER_DEPENDENT`
+`GIT_AUTODEPLOY_CONTAINMENT = RESOLVED_CODE_PENDING_LIVE_VERIFY`
 
 `SOURCE_IDENTITY_FAIL_OPEN = CONFIRMED`
 
@@ -572,7 +579,7 @@ No speculative remediation nodes were added beyond reproduced findings. The next
 
 `REJECTED_FINDING_COUNT = 0`
 
-`NEXT_NODE = 15R.6 Git Auto-Deploy Containment`
+`NEXT_NODE = 15R.7 Source + LIVE Deployment Identity`
 
 `NODE_15R_0_COMPLETE = true`
 

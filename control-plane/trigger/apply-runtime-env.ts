@@ -9,6 +9,7 @@ import {
   assertProviderProjectNotOwnedByAnotherApp,
   assertRemoteProjectMatchesSscApp,
 } from "../src/provider-project-identity.mjs";
+import { ensureGitAutoDeploymentsDisabled } from "../src/vercel-project-config.mjs";
 
 const { Client } = pg;
 const API = "https://api.vercel.com";
@@ -55,6 +56,24 @@ async function getVercelProject(projectId: string) {
   return vercelRequest(`/v9/projects/${encodeURIComponent(projectId)}${teamQuery()}`);
 }
 
+async function updateVercelProject(projectId: string, body: any) {
+  return vercelRequest(`/v9/projects/${encodeURIComponent(projectId)}${teamQuery()}`, {
+    method: "PATCH",
+    body: JSON.stringify(body),
+  });
+}
+
+async function enforceGitAutoDeployments(project: any) {
+  const result = await ensureGitAutoDeploymentsDisabled({
+    project,
+    projectId: project?.id,
+    getProject: getVercelProject,
+    updateProject: updateVercelProject,
+  });
+  if (!result.ok) throw new Error(`Vercel Git auto-deploy containment failed: ${result.result}`);
+  return result;
+}
+
 export const applyRuntimeEnv = task({
   id: "ssc-control-plane-apply-runtime-env",
   retry: { maxAttempts: 3, minTimeoutInMs: 2000, maxTimeoutInMs: 10000, factor: 2, randomize: false },
@@ -92,13 +111,15 @@ export const applyRuntimeEnv = task({
         appId: deployment.app_id,
         providerProjectId: deployment.provider_project_id,
       });
-      assertRemoteProjectMatchesSscApp(await getVercelProject(deployment.provider_project_id), {
+      const remoteProject = await getVercelProject(deployment.provider_project_id);
+      assertRemoteProjectMatchesSscApp(remoteProject, {
         workspaceId: deployment.workspace_id,
         appId: deployment.app_id,
         slug: deployment.slug,
         storedProjectName: deployment.provider_project_name,
         allowLegacyStoredBinding: true,
       });
+      const gitAutoDeploy = await enforceGitAutoDeployments(remoteProject);
 
       const bindingResult = await db.query(
         `SELECT b.id AS binding_id, b.workspace_id AS binding_workspace_id,
@@ -184,6 +205,7 @@ export const applyRuntimeEnv = task({
           appliedKeys: applied.map((item) => item.envKey),
           appliedCount: applied.length,
           providerTargets,
+          gitAutoDeploy,
           plaintextPrinted: false,
           plaintextPersisted: false,
         })],
@@ -197,6 +219,7 @@ export const applyRuntimeEnv = task({
         appliedCount: applied.length,
         appliedKeys: applied.map((item) => item.envKey),
         providerTargets,
+        gitAutoDeploy,
         providerEnvIdsPresent: applied.filter((item) => item.providerEnvId).length,
         deploymentStatus: deployment.status,
         plaintextPrinted: false,

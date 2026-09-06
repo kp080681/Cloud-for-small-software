@@ -14,6 +14,7 @@ import {
 } from "../src/vercel-deployment-recovery.mjs";
 import {
   disableGitAutoDeploymentsBody,
+  gitAutoDeploymentState,
   gitAutoDeploymentsDisabled,
 } from "../src/vercel-project-config.mjs";
 import { runtimeRecoveryAction } from "../src/vercel-runtime-recovery.mjs";
@@ -102,7 +103,8 @@ test("SSC-managed Vercel projects disable Git automatic deployments", () => {
     },
   });
   assert.equal(gitAutoDeploymentsDisabled({ git: null, link: null }), true);
-  assert.equal(gitAutoDeploymentsDisabled({}), true);
+  assert.equal(gitAutoDeploymentState({}), "unknown");
+  assert.equal(gitAutoDeploymentsDisabled({}), false);
   assert.equal(gitAutoDeploymentsDisabled({ git: { deploymentEnabled: false } }), true);
   assert.equal(gitAutoDeploymentsDisabled({ git: { deploymentEnabled: true }, link: { type: "github" } }), false);
 });

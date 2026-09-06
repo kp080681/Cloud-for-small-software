@@ -21,6 +21,7 @@ import {
   claimProviderCreateOperation,
   providerCreateClaimDecision,
 } from "../src/provider-mutation-fencing.mjs";
+import { ensureGitAutoDeploymentsDisabled } from "../src/vercel-project-config.mjs";
 
 const { Client } = pg;
 const API = "https://api.vercel.com";
@@ -70,6 +71,24 @@ async function listCandidateDeployments(projectId: string) {
 
 async function getVercelProject(projectId: string) {
   return vercelRequest(`/v9/projects/${encodeURIComponent(projectId)}${teamQuery()}`);
+}
+
+async function updateVercelProject(projectId: string, body: any) {
+  return vercelRequest(`/v9/projects/${encodeURIComponent(projectId)}${teamQuery()}`, {
+    method: "PATCH",
+    body: JSON.stringify(body),
+  });
+}
+
+async function enforceGitAutoDeployments(project: any) {
+  const result = await ensureGitAutoDeploymentsDisabled({
+    project,
+    projectId: project?.id,
+    getProject: getVercelProject,
+    updateProject: updateVercelProject,
+  });
+  if (!result.ok) throw new Error(`Vercel Git auto-deploy containment failed: ${result.result}`);
+  return result;
 }
 
 async function ensureBuildOperation(db: pg.Client, deployment: any) {
@@ -207,7 +226,9 @@ export const executeBuild=task({id:"ssc-control-plane-execute-build",retry:{maxA
   assertRuntimeMatchesDeployment({workspace_id:deployment.workspace_id,app_id:deployment.app_id,provider_project_id:deployment.provider_project_id},deployment);
   const localOwners=await db.query(`SELECT app_id,provider_project_id FROM app_runtimes WHERE provider=$1 AND provider_project_id=$2`,[deployment.provider,deployment.provider_project_id]);
   assertProviderProjectNotOwnedByAnotherApp(localOwners.rows,{appId:deployment.app_id,providerProjectId:deployment.provider_project_id});
-  assertRemoteProjectMatchesSscApp(await getVercelProject(deployment.provider_project_id),{workspaceId:deployment.workspace_id,appId:deployment.app_id,slug:deployment.slug,storedProjectName:deployment.provider_project_name,allowLegacyStoredBinding:true});
+  const remoteProject=await getVercelProject(deployment.provider_project_id);
+  assertRemoteProjectMatchesSscApp(remoteProject,{workspaceId:deployment.workspace_id,appId:deployment.app_id,slug:deployment.slug,storedProjectName:deployment.provider_project_name,allowLegacyStoredBinding:true});
+  await enforceGitAutoDeployments(remoteProject);
   const operation=await ensureBuildOperation(db,deployment);
   assertProviderOperationBelongsToDeployment(operation,{id:deployment.id,source_commit_sha:deployment.commit_sha});
 
