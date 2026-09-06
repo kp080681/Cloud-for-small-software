@@ -23,9 +23,12 @@ const slug = (process.env.CONTROL_PLANE_APP_SLUG || appName)
 const framework = process.env.CONTROL_PLANE_FRAMEWORK || "nextjs";
 const runtime = process.env.CONTROL_PLANE_RUNTIME || "nodejs";
 const databaseRequired = (process.env.CONTROL_PLANE_DATABASE_REQUIRED || "false").toLowerCase() === "true";
+const databaseMode = process.env.CONTROL_PLANE_DATABASE_MODE || (databaseRequired ? "EXTERNAL" : "NONE");
 
 if (!/^[0-9a-f]{40}$/i.test(commitSha)) throw new Error("CONTROL_PLANE_COMMIT_SHA must be a 40-character Git SHA");
 if (!slug) throw new Error("App slug resolved to an empty value");
+if (!["NONE", "EXTERNAL", "SSC_MANAGED"].includes(databaseMode)) throw new Error("CONTROL_PLANE_DATABASE_MODE must be NONE, EXTERNAL, or SSC_MANAGED");
+if (!databaseRequired && databaseMode !== "NONE") throw new Error("CONTROL_PLANE_DATABASE_MODE requires CONTROL_PLANE_DATABASE_REQUIRED=true unless mode is NONE");
 
 const { Client } = pg;
 const db = new Client({ connectionString: process.env.DATABASE_URL });
@@ -46,7 +49,7 @@ try {
   const repository = repoResult.rows[0];
 
   const existingApp = await db.query(
-    `SELECT id, workspace_id, repository_id, name, slug, framework, runtime, database_required, deleted_at
+    `SELECT id, workspace_id, repository_id, name, slug, framework, runtime, database_required, database_mode, deleted_at
        FROM apps
       WHERE workspace_id = $1 AND slug = $2
       LIMIT 1
@@ -68,20 +71,21 @@ try {
               framework = $2,
               runtime = $3,
               database_required = $4,
+              database_mode = $5,
               updated_at = now()
-        WHERE id = $5
-        RETURNING id, workspace_id, repository_id, name, slug, framework, runtime, database_required`,
-      [appName, framework, runtime, databaseRequired, existingApp.rows[0].id],
+        WHERE id = $6
+        RETURNING id, workspace_id, repository_id, name, slug, framework, runtime, database_required, database_mode`,
+      [appName, framework, runtime, databaseRequired, databaseMode, existingApp.rows[0].id],
     );
     app = updated.rows[0];
   } else {
     await enforceActiveAppLimit(db, { workspaceId: repository.workspace_id });
     const created = await db.query(
       `INSERT INTO apps
-         (workspace_id, repository_id, name, slug, framework, runtime, database_required)
-       VALUES ($1, $2, $3, $4, $5, $6, $7)
-       RETURNING id, workspace_id, repository_id, name, slug, framework, runtime, database_required`,
-      [repository.workspace_id, repository.id, appName, slug, framework, runtime, databaseRequired],
+         (workspace_id, repository_id, name, slug, framework, runtime, database_required, database_mode)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+       RETURNING id, workspace_id, repository_id, name, slug, framework, runtime, database_required, database_mode`,
+      [repository.workspace_id, repository.id, appName, slug, framework, runtime, databaseRequired, databaseMode],
     );
     app = created.rows[0];
   }
@@ -143,6 +147,7 @@ try {
       framework: app.framework,
       runtime: app.runtime,
       databaseRequired: app.database_required,
+      databaseMode: app.database_mode,
     },
     deployment: {
       id: deployment.id,

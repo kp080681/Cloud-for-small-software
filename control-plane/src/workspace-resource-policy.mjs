@@ -20,6 +20,7 @@ export const DEFAULT_WORKSPACE_RESOURCE_POLICY = Object.freeze({
   maxActiveDeployments: 3,
   maxActiveDeploymentsPerApp: 1,
   maxConcurrentProviderOperations: 2,
+  maxManagedDatabases: 3,
 });
 
 export class WorkspaceResourcePolicyError extends Error {
@@ -38,6 +39,7 @@ export function validateWorkspaceResourcePolicy(policy) {
     ["maxActiveDeployments", 0, 100],
     ["maxActiveDeploymentsPerApp", 0, 20],
     ["maxConcurrentProviderOperations", 0, 20],
+    ["maxManagedDatabases", 0, 50],
   ];
   for (const [field, min, max] of constraints) {
     const value = normalized[field];
@@ -99,6 +101,17 @@ export function providerOperationLimitDecision({ activeProviderOperationCount, p
   });
 }
 
+export function managedDatabaseLimitDecision({ managedDatabaseCount, policy }) {
+  const limit = normalizePolicy(policy).maxManagedDatabases;
+  return limitDecision({
+    code: "WORKSPACE_MANAGED_DATABASE_LIMIT_REACHED",
+    allowed: Number(managedDatabaseCount) < limit,
+    observed: Number(managedDatabaseCount),
+    limit,
+    message: `Workspace managed database limit reached: ${managedDatabaseCount}/${limit}.`,
+  });
+}
+
 export async function lockWorkspacePolicy(db, workspaceId) {
   const workspace = await db.query(
     `SELECT id FROM workspaces WHERE id=$1 FOR UPDATE`,
@@ -108,8 +121,8 @@ export async function lockWorkspacePolicy(db, workspaceId) {
 
   await db.query(
     `INSERT INTO workspace_resource_policies
-       (workspace_id, max_active_apps, max_active_deployments, max_active_deployments_per_app, max_concurrent_provider_operations)
-     VALUES ($1,$2,$3,$4,$5)
+       (workspace_id, max_active_apps, max_active_deployments, max_active_deployments_per_app, max_concurrent_provider_operations, max_managed_databases)
+     VALUES ($1,$2,$3,$4,$5,$6)
      ON CONFLICT (workspace_id) DO NOTHING`,
     [
       workspaceId,
@@ -117,6 +130,7 @@ export async function lockWorkspacePolicy(db, workspaceId) {
       DEFAULT_WORKSPACE_RESOURCE_POLICY.maxActiveDeployments,
       DEFAULT_WORKSPACE_RESOURCE_POLICY.maxActiveDeploymentsPerApp,
       DEFAULT_WORKSPACE_RESOURCE_POLICY.maxConcurrentProviderOperations,
+      DEFAULT_WORKSPACE_RESOURCE_POLICY.maxManagedDatabases,
     ],
   );
 
@@ -125,7 +139,8 @@ export async function lockWorkspacePolicy(db, workspaceId) {
             max_active_apps,
             max_active_deployments,
             max_active_deployments_per_app,
-            max_concurrent_provider_operations
+            max_concurrent_provider_operations,
+            max_managed_databases
        FROM workspace_resource_policies
       WHERE workspace_id=$1
       FOR UPDATE`,
@@ -249,6 +264,7 @@ function normalizePolicy(policy = {}) {
     maxActiveDeployments: Number(policy.maxActiveDeployments ?? policy.max_active_deployments ?? DEFAULT_WORKSPACE_RESOURCE_POLICY.maxActiveDeployments),
     maxActiveDeploymentsPerApp: Number(policy.maxActiveDeploymentsPerApp ?? policy.max_active_deployments_per_app ?? DEFAULT_WORKSPACE_RESOURCE_POLICY.maxActiveDeploymentsPerApp),
     maxConcurrentProviderOperations: Number(policy.maxConcurrentProviderOperations ?? policy.max_concurrent_provider_operations ?? DEFAULT_WORKSPACE_RESOURCE_POLICY.maxConcurrentProviderOperations),
+    maxManagedDatabases: Number(policy.maxManagedDatabases ?? policy.max_managed_databases ?? DEFAULT_WORKSPACE_RESOURCE_POLICY.maxManagedDatabases),
   };
 }
 

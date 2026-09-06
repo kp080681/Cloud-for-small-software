@@ -4,6 +4,8 @@ import {
   assertProviderProjectNotOwnedByAnotherApp,
   assertRemoteProjectMatchesSscApp,
 } from "../src/provider-project-identity.mjs";
+import { deleteManagedDatabaseForApp } from "../src/managed-database-lifecycle.mjs";
+import { deleteNeonProject, getNeonProject } from "../src/neon-managed-postgres.mjs";
 
 const { Client } = pg;
 const API = "https://api.vercel.com";
@@ -110,6 +112,13 @@ export const deleteApp = task({
         await deleteVercelProject(deletion.provider_project_id);
       }
 
+      const databaseDeletion = await deleteManagedDatabaseForApp(db, {
+        workspaceId: payload.workspaceId,
+        appId: payload.appId,
+        getProject: getNeonProject,
+        deleteProject: deleteNeonProject,
+      });
+
       await db.query(`UPDATE app_deletions SET status='PROVIDER_DELETED', provider_deleted_at=COALESCE(provider_deleted_at,now()), updated_at=now() WHERE app_id=$1`, [payload.appId]);
 
       await db.query("BEGIN");
@@ -118,6 +127,7 @@ export const deleteApp = task({
         // so deleting the app-scoped bindings safely removes their application records too.
         await db.query(`DELETE FROM app_secret_bindings WHERE app_id=$1`, [payload.appId]);
         await db.query(`DELETE FROM app_runtimes WHERE app_id=$1`, [payload.appId]);
+        await db.query(`UPDATE app_databases SET connection_secret_id=NULL, updated_at=now() WHERE app_id=$1`, [payload.appId]);
         await db.query(`DELETE FROM encrypted_secrets WHERE app_id=$1`, [payload.appId]);
         await db.query(`UPDATE deployments SET status='DELETED', live_url=NULL, finished_at=COALESCE(finished_at,now()), updated_at=now() WHERE app_id=$1`, [payload.appId]);
         await db.query(`UPDATE apps SET deleted_at=COALESCE(deleted_at,now()), updated_at=now() WHERE id=$1`, [payload.appId]);
@@ -136,6 +146,7 @@ export const deleteApp = task({
         provider: deletion.provider,
         providerProjectId: deletion.provider_project_id,
         providerDeleted: Boolean(deletion.provider_project_id),
+        databaseDeletion,
         secretsDeleted: true,
         runtimeBindingDeleted: true,
         status: "COMPLETED",

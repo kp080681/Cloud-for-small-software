@@ -27,6 +27,7 @@ const policy = validateWorkspaceResourcePolicy({
   maxActiveDeployments: optionalIntegerEnv("CONTROL_PLANE_MAX_ACTIVE_DEPLOYMENTS", DEFAULT_WORKSPACE_RESOURCE_POLICY.maxActiveDeployments),
   maxActiveDeploymentsPerApp: optionalIntegerEnv("CONTROL_PLANE_MAX_ACTIVE_DEPLOYMENTS_PER_APP", DEFAULT_WORKSPACE_RESOURCE_POLICY.maxActiveDeploymentsPerApp),
   maxConcurrentProviderOperations: optionalIntegerEnv("CONTROL_PLANE_MAX_CONCURRENT_PROVIDER_OPERATIONS", DEFAULT_WORKSPACE_RESOURCE_POLICY.maxConcurrentProviderOperations),
+  maxManagedDatabases: optionalIntegerEnv("CONTROL_PLANE_MAX_MANAGED_DATABASES", DEFAULT_WORKSPACE_RESOURCE_POLICY.maxManagedDatabases),
 });
 
 const db = new Client({ connectionString: process.env.DATABASE_URL });
@@ -42,21 +43,23 @@ try {
 
   const result = await db.query(
     `INSERT INTO workspace_resource_policies
-       (workspace_id, max_active_apps, max_active_deployments, max_active_deployments_per_app, max_concurrent_provider_operations)
-     VALUES ($1,$2,$3,$4,$5)
+       (workspace_id, max_active_apps, max_active_deployments, max_active_deployments_per_app, max_concurrent_provider_operations, max_managed_databases)
+     VALUES ($1,$2,$3,$4,$5,$6)
      ON CONFLICT (workspace_id) DO UPDATE SET
        max_active_apps = EXCLUDED.max_active_apps,
        max_active_deployments = EXCLUDED.max_active_deployments,
        max_active_deployments_per_app = EXCLUDED.max_active_deployments_per_app,
        max_concurrent_provider_operations = EXCLUDED.max_concurrent_provider_operations,
+       max_managed_databases = EXCLUDED.max_managed_databases,
        updated_at = now()
-     RETURNING workspace_id, max_active_apps, max_active_deployments, max_active_deployments_per_app, max_concurrent_provider_operations, updated_at`,
+     RETURNING workspace_id, max_active_apps, max_active_deployments, max_active_deployments_per_app, max_concurrent_provider_operations, max_managed_databases, updated_at`,
     [
       workspaceId,
       policy.maxActiveApps,
       policy.maxActiveDeployments,
       policy.maxActiveDeploymentsPerApp,
       policy.maxConcurrentProviderOperations,
+      policy.maxManagedDatabases,
     ],
   );
   await db.query("COMMIT");
@@ -71,6 +74,7 @@ try {
       maxActiveDeployments: updated.max_active_deployments,
       maxActiveDeploymentsPerApp: updated.max_active_deployments_per_app,
       maxConcurrentProviderOperations: updated.max_concurrent_provider_operations,
+      maxManagedDatabases: updated.max_managed_databases,
     },
     updatedAt: updated.updated_at,
     secretsPrinted: false,

@@ -27,7 +27,7 @@ export const REQUIRED_CONTROL_PLANE_TABLES = Object.freeze([
 ]);
 
 export const REQUIRED_CONTROL_PLANE_COLUMNS = Object.freeze({
-  apps: ["id", "workspace_id", "repository_id", "slug", "deleted_at"],
+  apps: ["id", "workspace_id", "repository_id", "slug", "database_mode", "deleted_at"],
   deployments: ["id", "workspace_id", "app_id", "source_commit_sha", "status", "error_code", "live_url"],
   deployment_events: ["deployment_id", "event_type", "metadata", "created_at"],
   encrypted_secrets: [
@@ -42,10 +42,11 @@ export const REQUIRED_CONTROL_PLANE_COLUMNS = Object.freeze({
     "encryption_context",
   ],
   app_runtimes: ["workspace_id", "app_id", "provider", "provider_project_id", "reconciliation_key"],
+  app_databases: ["workspace_id", "app_id", "database_mode", "provider", "provider_project_id", "reconciliation_key", "status"],
   deployment_build_inputs: ["deployment_id", "repository_full_name", "commit_sha", "git_tree_sha", "root_directory"],
   deployment_builds: ["deployment_id", "provider", "provider_deployment_id", "source_commit_sha", "status"],
   deployment_provider_operations: ["deployment_id", "operation_type", "provider", "idempotency_key", "status"],
-  workspace_resource_policies: ["workspace_id", "max_active_apps", "max_active_deployments", "max_active_deployments_per_app", "max_concurrent_provider_operations"],
+  workspace_resource_policies: ["workspace_id", "max_active_apps", "max_active_deployments", "max_active_deployments_per_app", "max_concurrent_provider_operations", "max_managed_databases"],
 });
 
 export const REQUIRED_CONTROL_PLANE_UNIQUE_CONSTRAINTS = Object.freeze([
@@ -58,6 +59,9 @@ export const REQUIRED_CONTROL_PLANE_UNIQUE_CONSTRAINTS = Object.freeze([
   { table: "app_runtimes", columns: ["app_id"] },
   { table: "app_runtimes", columns: ["reconciliation_key"] },
   { table: "app_runtimes", columns: ["provider", "provider_project_id"] },
+  { table: "app_databases", columns: ["app_id"] },
+  { table: "app_databases", columns: ["reconciliation_key"] },
+  { table: "app_databases", columns: ["provider", "provider_project_id"] },
   { table: "deployment_build_inputs", columns: ["deployment_id"] },
   { table: "app_secret_bindings", columns: ["app_id", "env_key", "target_environment"] },
   { table: "deployment_builds", columns: ["deployment_id"] },

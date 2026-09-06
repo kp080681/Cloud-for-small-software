@@ -42,6 +42,7 @@ function buildOperationDb({ existingOperation = null, activeOperations = 0, work
             max_active_deployments: 3,
             max_active_deployments_per_app: 1,
             max_concurrent_provider_operations: 1,
+            max_managed_databases: 3,
           }],
         };
       }
@@ -76,6 +77,7 @@ test("controlled-alpha workspace defaults are conservative and explicit", () => 
     maxActiveDeployments: 3,
     maxActiveDeploymentsPerApp: 1,
     maxConcurrentProviderOperations: 2,
+    maxManagedDatabases: 3,
   });
   assert.deepEqual(ACTIVE_DEPLOYMENT_STATES, [
     "DRAFT",
@@ -209,11 +211,13 @@ test("founder policy override validates negative and unbounded values", () => {
     maxActiveDeployments: 6,
     maxActiveDeploymentsPerApp: 2,
     maxConcurrentProviderOperations: 3,
+    maxManagedDatabases: 4,
   }), {
     maxActiveApps: 5,
     maxActiveDeployments: 6,
     maxActiveDeploymentsPerApp: 2,
     maxConcurrentProviderOperations: 3,
+    maxManagedDatabases: 4,
   });
   assert.throws(
     () => validateWorkspaceResourcePolicy({ maxActiveApps: -1 }),
@@ -262,13 +266,15 @@ test("resource policy is verified before secret injection and provider build cre
   );
 });
 
-test("workspace resource policy migration has no billing tiers or speculative database quota columns", () => {
+test("workspace resource policy migration has no billing tiers and the managed database quota is explicit", () => {
   const migration = readControlPlaneFile("db/015_workspace_resource_policies.sql");
+  const databaseMigration = readControlPlaneFile("db/016_managed_customer_databases.sql");
 
   assert.match(migration, /CREATE TABLE workspace_resource_policies/);
   assert.match(migration, /max_active_apps integer NOT NULL DEFAULT 3/);
   assert.match(migration, /max_active_deployments integer NOT NULL DEFAULT 3/);
   assert.match(migration, /max_active_deployments_per_app integer NOT NULL DEFAULT 1/);
   assert.match(migration, /max_concurrent_provider_operations integer NOT NULL DEFAULT 2/);
-  assert.doesNotMatch(migration, /policy_tier|tier|price|billing|max_databases|max_database_storage/i);
+  assert.match(databaseMigration, /max_managed_databases integer NOT NULL DEFAULT 3/);
+  assert.doesNotMatch(migration + databaseMigration, /policy_tier|tier|price|billing|max_database_storage/i);
 });

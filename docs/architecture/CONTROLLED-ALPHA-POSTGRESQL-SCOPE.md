@@ -1,6 +1,6 @@
 # Controlled Alpha PostgreSQL Scope
 
-Status: Node 15R.12 decision complete. This document records the production PostgreSQL scope decision for controlled alpha. No provider resources, databases, migrations, Trigger workers, customer workloads, or secrets were changed for this node.
+Status: Node 15R.12A implementation complete pending live provider verification. This document records the production PostgreSQL scope decision and the smallest managed PostgreSQL production wiring for controlled alpha. No provider resources, databases, Trigger deployments, customer workloads, or secrets were changed while updating this document.
 
 ## Boundary
 
@@ -19,28 +19,28 @@ Node 15R.12 concerns only customer workload PostgreSQL. Node 18 backup/recovery 
 | Environment requirement detection for `DATABASE_URL` | `PRODUCTION_WIRED` | Source-aware env detection records observed env references; required verification blocks only known-required config before provisioning. |
 | Encrypted customer database credentials | `PRODUCTION_WIRED` | Existing app secret path stores workload credentials encrypted and injects them as runtime env bindings. |
 | Runtime env binding | `PRODUCTION_WIRED` | `control-plane/trigger/apply-runtime-env.ts` applies app secret bindings to the production runtime environment. |
-| PostgreSQL provider abstraction | `SPIKE_ONLY` | Spike C proved the `PostgresProvider` direction, but no active production lifecycle task provisions customer databases. |
-| Neon project/database creation | `SPIKE_ONLY` | `docs/03-architecture-spike/SPIKE-C-RESULTS.md` proved disposable Neon provisioning and cleanup outside the current production lifecycle. |
-| SSC-generated `DATABASE_URL` for customer apps | `SPIKE_ONLY` | Spike C obtained and bound a pooled Neon connection URI; production code currently relies on supplied encrypted app secrets. |
-| Customer database deployment association | `DOCUMENTED_ONLY` | `app_databases` exists as a placeholder schema table, but ownership/mode/lifecycle semantics are not production-wired. |
-| Customer database inventory | `ABSENT` | Current inventory traces apps, runtimes, builds, env bindings, and provider deployments, not managed customer databases. |
-| Customer database deletion | `ABSENT` | Production delete flow deletes SSC runtime resources and app secrets; it does not own or delete customer databases. |
-| Customer database retry/idempotency | `ABSENT` | Provider-operation ledger covers runtime/build operations, not managed database create/delete operations. |
-| Customer database orphan reconciliation | `ABSENT` | Orphan detection is currently implemented for SSC-owned Vercel resources, not managed database resources. |
+| PostgreSQL provider abstraction | `PRODUCTION_WIRED` | `control-plane/src/neon-managed-postgres.mjs` contains the bounded Neon API adapter used by the production provisioning/deletion paths. |
+| Neon project/database creation | `PRODUCTION_WIRED` | `control-plane/trigger/provision-database.ts` records intent, reconciles by deterministic SSC identity, creates Neon only after claim, and stores provider identity. |
+| SSC-generated `DATABASE_URL` for customer apps | `PRODUCTION_WIRED` | Managed provisioning obtains a provider connection URI, enforces TLS query parameters, encrypts it through the app secret path, and binds `DATABASE_URL` to production. |
+| Customer database deployment association | `PRODUCTION_WIRED` | `control-plane/db/016_managed_customer_databases.sql` adds explicit app database mode, provider identity, reconciliation key, status, and secret association. |
+| Customer database inventory | `PRODUCTION_WIRED` | `control-plane/scripts/list-app-inventory.mjs` includes managed database mode/provider/status fields. |
+| Customer database deletion | `PRODUCTION_WIRED` | `control-plane/trigger/delete-app.ts` calls ownership-aware managed DB deletion; `EXTERNAL`/`NONE` skip provider deletion and `UNKNOWN` fails closed. |
+| Customer database retry/idempotency | `PRODUCTION_WIRED` | `app_databases` intent/status plus deterministic reconciliation key prevent duplicate create on replay and allow retry/reconcile. |
+| Customer database orphan reconciliation | `PARTIALLY_PRODUCTION_WIRED` | `control-plane/trigger/detect-orphan-resources.ts` can read-only classify SSC-looking Neon projects when a Neon token is present; live provider-wide completeness remains 15R.13. |
 | Customer database backup/restore proof | `ABSENT` | Node 18 proves control-plane backup/restore only. External customer database backups remain externally owned. |
-| Customer database resource limits | `ABSENT` | Workspace economic guardrails do not yet include managed database count/storage/compute limits. |
-| Customer database tenant ownership | `DOCUMENTED_ONLY` | Placeholder schema has workspace/app columns, but production ownership enforcement is not wired. |
+| Customer database resource limits | `PRODUCTION_WIRED` | Workspace policy now includes `max_managed_databases` with controlled-alpha default `3`; provider storage/compute/spend controls remain provider-verification items. |
+| Customer database tenant ownership | `PRODUCTION_WIRED` | Managed DB records bind workspace/app/provider identity and deletion/provisioning helpers assert ownership before mutation. |
 | External database configuration diagnostics | `PRODUCTION_WIRED` | Missing required `DATABASE_URL` or Supabase env names can produce actionable environment diagnostics. |
-| SSC-managed database lifecycle diagnostics | `ABSENT` | Managed database create/reconcile/delete/failure diagnostics do not exist yet. |
-| Customer database audit events | `ABSENT` | No production managed database create/delete/reconcile events exist. |
+| SSC-managed database lifecycle diagnostics | `PRODUCTION_WIRED` | Managed provisioning records safe database lifecycle events and failure/reconciliation evidence without plaintext connection strings. |
+| Customer database audit events | `PRODUCTION_WIRED` | Provisioning records `DATABASE_PROVISIONING`, `DATABASE_READY`, `DATABASE_PROVISIONING_FAILED`, and `DATABASE_RECONCILIATION_REQUIRED`; deletion records durable resource status. |
 
 Conclusion:
 
 ```text
-CUSTOMER_POSTGRESQL_PROVISIONING = SPIKE_ONLY
+CUSTOMER_POSTGRESQL_PROVISIONING = PRODUCTION_WIRED_PENDING_LIVE_VERIFY
 ```
 
-SSC can safely deploy no-database workloads and workloads that bring an existing external PostgreSQL/Supabase database through encrypted configuration. SSC cannot yet honestly claim production lifecycle ownership of customer PostgreSQL provisioning.
+SSC can safely deploy no-database workloads, workloads that bring an existing external PostgreSQL/Supabase database through encrypted configuration, and explicitly `SSC_MANAGED` PostgreSQL workloads through the managed Neon production path once migration 016 is applied and live provider settings are verified.
 
 ## Workload Database Modes
 
@@ -85,36 +85,36 @@ For controlled alpha:
 - No-database workloads are supported.
 - Existing external PostgreSQL/Supabase workloads are supported through encrypted app secrets and normal env requirement verification.
 - SSC must not delete, modify, migrate, back up, or restore external customer databases.
-- SSC-managed PostgreSQL is not implemented in the production lifecycle yet.
-- A dedicated `15R.12A Production PostgreSQL Provisioning` node is required before SSC claims managed customer PostgreSQL support for database-backed alpha workloads.
+- SSC-managed PostgreSQL is now production-wired in code and schema, pending migration application and live provider verification.
+- Managed customer database backup/restore proof remains separate and is tracked as `15R.12B Managed PostgreSQL Recovery Proof`.
 
-This does not remove PostgreSQL from the V1 thesis. It prevents the platform from overstating a spike as a production capability.
+This does not remove PostgreSQL from the V1 thesis. It also prevents the platform from inferring ownership from `DATABASE_URL` or provider hostnames.
 
-## Required 15R.12A Scope
+## Implemented 15R.12A Scope
 
-The smallest implementation that would satisfy SSC-managed PostgreSQL for V1 is:
+Node 15R.12A implements:
 
-- Add explicit database ownership/mode: `EXTERNAL`, `SSC_MANAGED`, and fail-closed `UNKNOWN`.
+- Add explicit database ownership/mode: `NONE`, `EXTERNAL`, `SSC_MANAGED`, and fail-closed unknown/null behavior for destructive DB operations.
 - Keep deletion semantics ownership-aware: SSC never deletes `EXTERNAL`; `SSC_MANAGED` deletion requires provider identity; `UNKNOWN` refuses destructive database operations.
 - Provision one isolated managed PostgreSQL database per app when required and requested as `SSC_MANAGED`.
 - Persist provider database identity, branch/endpoint/database/role metadata, ownership, workspace/app/deployment association, and lifecycle status.
 - Generate and encrypt the workload connection string without printing plaintext.
 - Bind the generated connection secret as production-only runtime configuration.
 - Add idempotent create/reconcile/delete behavior backed by provider-operation intent or equivalent fenced state.
-- Add workspace database admission limits such as maximum SSC-managed databases per workspace.
+- Add workspace database admission limit `max_managed_databases` with default `3`.
 - Extend inventory/orphan detection to SSC-owned database resources.
 - Add audit events and diagnostics for managed database create/reconcile/delete/failure states.
-- Document provider backup/PITR responsibility and run a separate restore proof for SSC-managed customer database recovery.
-- Verify Neon provider API semantics, token scope, delete behavior, backup/PITR availability, project quotas, and cost controls before live use.
+- Document provider backup/PITR responsibility and keep customer database restore proof separate.
+- Record live Neon token scope, backup/PITR, quota, and cost controls as provider-dependent verification items.
 
 ## Current Safe Destructive Boundary
 
 The current production delete flow must be treated as safe for external databases because no production customer database deletion path exists. It may remove encrypted SSC-held workload secrets, which revokes SSC's copy of the credential, but it does not delete the external provider database.
 
-Future managed database deletion must be fail-closed:
+Managed database deletion is fail-closed:
 
 - `EXTERNAL`: never delete provider DB.
-- `SSC_MANAGED`: delete only when provider identity and tenant ownership match the persisted SSC record.
+- `SSC_MANAGED`: delete only when provider identity and tenant ownership match the persisted SSC record and provider evidence.
 - `UNKNOWN`: refuse destructive operation and require explicit recovery classification.
 
 ## Backup Responsibility
@@ -140,3 +140,72 @@ Before `SSC_MANAGED` customer PostgreSQL goes live, verify:
 - Connection TLS/pooling behavior and credential rotation path.
 - Workspace-level managed database count, storage, compute, and spend guardrails.
 - Orphan/recovery behavior when SSC state is restored behind existing provider database resources.
+
+## Neon Spike Audit
+
+Spike files:
+
+- `docs/03-architecture-spike/SPIKE-C-RESULTS.md`
+- `docs/03-architecture-spike/SPIKE-PLAN.md`
+- `docs/03-architecture-spike/ARCHITECTURE-DECISIONS.md`
+
+Spike provider API:
+
+- Create Neon project through the Neon API.
+- Obtain pooled PostgreSQL connection URI.
+- Delete the disposable Neon project after verification.
+
+Spike resource model:
+
+- One disposable Neon project/database for the test app.
+- Provider IDs were observed and the resource was deleted after the spike.
+
+Spike credential model:
+
+- Connection URI was injected into runtime env as `DATABASE_URL`.
+- The URI was not printed, but full production KMS envelope encryption was deferred to Spike E.
+
+Spike create flow:
+
+```text
+Create Neon project
+-> obtain pooled connection URI
+-> create Vercel runtime
+-> inject DATABASE_URL
+-> deploy app
+-> verify application read/write
+```
+
+Spike delete flow:
+
+```text
+delete Vercel runtime
+-> delete Neon project
+```
+
+Spike retry behavior:
+
+- Provider interaction was proven manually at spike level.
+- Durable intent, replay convergence, and ambiguous-resource handling were not production-wired until Node 15R.12A.
+
+Spike identity evidence:
+
+- Provider project/database metadata was observed.
+- Durable workspace/app identity was not part of the production control-plane lifecycle in the spike.
+
+Spike security gaps closed by 15R.12A:
+
+- Explicit ownership mode.
+- Deterministic workspace/app-based provider name and reconciliation key.
+- Provider create intent before external create call.
+- Encrypted generated `DATABASE_URL` through the existing KMS secret path.
+- Production-only runtime secret binding.
+- Ownership-aware deletion and fail-closed unknown mode.
+- Workspace managed database admission limit.
+
+Remaining provider-dependent gaps:
+
+- Live Neon token scope and account permissions.
+- Provider backup/PITR behavior.
+- Project/storage/compute/spend limits.
+- Live provider orphan inventory completeness.

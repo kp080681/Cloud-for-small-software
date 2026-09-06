@@ -15,10 +15,16 @@ try {
            rt.provider_project_id,
            rt.provider_project_name,
            rt.status AS runtime_status,
+           db.database_mode,
+           db.provider AS database_provider,
+           db.provider_project_id AS database_provider_project_id,
+           db.provider_project_name AS database_provider_project_name,
+           db.status AS database_status,
            (SELECT d.status FROM deployments d WHERE d.app_id=a.id ORDER BY d.created_at DESC LIMIT 1) AS latest_deployment_status,
            (SELECT d.id FROM deployments d WHERE d.app_id=a.id ORDER BY d.created_at DESC LIMIT 1) AS latest_deployment_id
       FROM apps a
       LEFT JOIN app_runtimes rt ON rt.app_id=a.id
+      LEFT JOIN app_databases db ON db.app_id=a.id
      ORDER BY a.created_at ASC
   `);
 
