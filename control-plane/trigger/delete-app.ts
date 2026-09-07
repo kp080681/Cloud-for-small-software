@@ -5,7 +5,7 @@ import {
   assertRemoteProjectMatchesSscApp,
 } from "../src/provider-project-identity.mjs";
 import { deleteManagedDatabaseForApp } from "../src/managed-database-lifecycle.mjs";
-import { deleteNeonProject, getNeonProject } from "../src/neon-managed-postgres.mjs";
+import { deleteNeonProject, getNeonProject, listNeonProjectsByName } from "../src/neon-managed-postgres.mjs";
 
 const { Client } = pg;
 const API = "https://api.vercel.com";
@@ -97,6 +97,14 @@ export const deleteApp = task({
       await db.query(`UPDATE deployments SET status='DELETING', updated_at=now() WHERE app_id=$1 AND status <> 'DELETED'`, [payload.appId]);
       await db.query("COMMIT");
 
+      const databaseDeletion = await deleteManagedDatabaseForApp(db, {
+        workspaceId: payload.workspaceId,
+        appId: payload.appId,
+        getProject: getNeonProject,
+        deleteProject: deleteNeonProject,
+        listProjectsByName: listNeonProjectsByName,
+      });
+
       if (deletion.provider_project_id) {
         if (deletion.provider !== "vercel") throw new Error(`Unsupported deletion provider: ${deletion.provider}`);
         const remoteProject = await getVercelProject(deletion.provider_project_id);
@@ -111,13 +119,6 @@ export const deleteApp = task({
         }
         await deleteVercelProject(deletion.provider_project_id);
       }
-
-      const databaseDeletion = await deleteManagedDatabaseForApp(db, {
-        workspaceId: payload.workspaceId,
-        appId: payload.appId,
-        getProject: getNeonProject,
-        deleteProject: deleteNeonProject,
-      });
 
       await db.query(`UPDATE app_deletions SET status='PROVIDER_DELETED', provider_deleted_at=COALESCE(provider_deleted_at,now()), updated_at=now() WHERE app_id=$1`, [payload.appId]);
 

@@ -190,6 +190,26 @@ export async function persistManagedDatabaseReady(db, { deployment, row, resourc
     const decision = managedDatabaseProviderResultAttachmentDecision(current);
     if (decision.action !== "attach") {
       if (current) {
+        if (resource.providerProjectId) {
+          await db.query(
+            `UPDATE app_databases
+                SET provider_project_id=COALESCE(provider_project_id,$1),
+                    provider_project_name=COALESCE(provider_project_name,$2),
+                    metadata=metadata || $3::jsonb,
+                    updated_at=now()
+              WHERE id=$4
+                AND (provider_project_id IS NULL OR provider_project_id=$1)`,
+            [resource.providerProjectId, resource.providerProjectName, JSON.stringify({
+              DATABASE_PROVIDER_RESULT_STALE: true,
+              staleReason: decision.reason,
+              providerProjectId: resource.providerProjectId,
+              providerProjectName: resource.providerProjectName,
+              providerResourceTraceable: true,
+              plaintextPrinted: false,
+              plaintextPersistedOutsideEncryptedSecret: false,
+            }), row.id],
+          );
+        }
         await db.query(
           `INSERT INTO deployment_events
              (deployment_id, from_status, to_status, event_type, message, metadata)
@@ -310,7 +330,14 @@ export async function markManagedDatabaseReconciliationRequired(db, { deployment
   });
 }
 
-export async function deleteManagedDatabaseForApp(db, { workspaceId, appId, getProject, deleteProject }) {
+function normalizeProviderProjectMatch(project) {
+  return {
+    id: project?.project?.id ?? project?.id ?? null,
+    name: project?.project?.name ?? project?.name ?? null,
+  };
+}
+
+export async function deleteManagedDatabaseForApp(db, { workspaceId, appId, getProject, deleteProject, listProjectsByName = null }) {
   const result = await db.query(
     `SELECT *
        FROM app_databases
@@ -328,7 +355,78 @@ export async function deleteManagedDatabaseForApp(db, { workspaceId, appId, getP
     return { action: "noop", databaseMode: DatabaseMode.SSC_MANAGED, providerDeleted: false, status: ManagedDatabaseStatus.DELETED };
   }
   if (row.provider !== "neon") throw new Error(`Unsupported managed database provider: ${row.provider}`);
-  if (!row.provider_project_id || !row.provider_project_name) throw new Error("Managed database deletion requires provider identity");
+  if (!row.provider_project_id || !row.provider_project_name) {
+    if (row.status === ManagedDatabaseStatus.INTENT_RECORDED && !row.provider_project_id) {
+      await db.query(
+        `UPDATE app_databases
+            SET status='DELETED',
+                deleted_at=COALESCE(deleted_at,now()),
+                delete_error_code=NULL,
+                delete_error_message=NULL,
+                updated_at=now()
+          WHERE id=$1`,
+        [row.id],
+      );
+      return { action: "deleted", databaseMode: DatabaseMode.SSC_MANAGED, providerDeleted: false, providerNotFound: true };
+    }
+    if (!row.provider_project_name || typeof listProjectsByName !== "function") {
+      throw new Error("Managed database deletion requires provider identity");
+    }
+    const matches = (await listProjectsByName(row.provider_project_name))
+      .map(normalizeProviderProjectMatch)
+      .filter((project) => project.id && project.name === row.provider_project_name);
+    if (matches.length > 1) {
+      await db.query(
+        `UPDATE app_databases
+            SET status='DELETE_FAILED',
+                delete_error_code='DATABASE_DELETE_AMBIGUOUS_PROVIDER_IDENTITY',
+                delete_error_message='Multiple provider projects match managed database name',
+                updated_at=now()
+          WHERE id=$1`,
+        [row.id],
+      );
+      throw new Error("Managed database deletion found ambiguous provider identity");
+    }
+    if (matches.length === 0 && row.status === ManagedDatabaseStatus.INTENT_RECORDED) {
+      await db.query(
+        `UPDATE app_databases
+            SET status='DELETED',
+                deleted_at=COALESCE(deleted_at,now()),
+                delete_error_code=NULL,
+                delete_error_message=NULL,
+                updated_at=now()
+          WHERE id=$1`,
+        [row.id],
+      );
+      return { action: "deleted", databaseMode: DatabaseMode.SSC_MANAGED, providerDeleted: false, providerNotFound: true, reconciledMissingProvider: true };
+    }
+    if (matches.length === 0) {
+      await db.query(
+        `UPDATE app_databases
+            SET status='DELETE_FAILED',
+                delete_error_code='DATABASE_DELETE_RECONCILIATION_REQUIRED',
+                delete_error_message='Managed database provider identity is not yet resolved for deletion',
+                updated_at=now()
+          WHERE id=$1`,
+        [row.id],
+      );
+      throw new Error("Managed database deletion requires provider reconciliation");
+    }
+    row.provider_project_id = matches[0].id;
+    row.provider_project_name = matches[0].name;
+    await db.query(
+      `UPDATE app_databases
+          SET provider_project_id=$1,
+              provider_project_name=$2,
+              status='DELETING',
+              delete_error_code=NULL,
+              delete_error_message=NULL,
+              metadata=metadata || $3::jsonb,
+              updated_at=now()
+        WHERE id=$4`,
+      [row.provider_project_id, row.provider_project_name, JSON.stringify({ reconciledForDeletion: true }), row.id],
+    );
+  }
 
   await db.query(
     `UPDATE app_databases

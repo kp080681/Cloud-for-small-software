@@ -15,9 +15,22 @@ export const abandonDeployment = task({
     try {
       await db.query("BEGIN");
       const result = await db.query(
-        `SELECT d.id, d.app_id, d.status, d.error_code, b.provider_deployment_id
+        `SELECT d.id, d.app_id, d.status, d.error_code,
+                COALESCE(b.provider_deployment_id, o.provider_resource_id) AS provider_deployment_id,
+                o.provider_resource_id AS operation_provider_deployment_id
            FROM deployments d
            LEFT JOIN deployment_builds b ON b.deployment_id=d.id
+           LEFT JOIN LATERAL (
+             SELECT provider_resource_id
+               FROM deployment_provider_operations
+              WHERE deployment_id=d.id
+                AND operation_type='vercel-create-deployment'
+                AND provider='vercel'
+                AND status IN ('OBSERVED_STALE','OBSERVED')
+                AND provider_resource_id IS NOT NULL
+              ORDER BY updated_at DESC, id DESC
+              LIMIT 1
+           ) o ON true
           WHERE d.id=$1
           FOR UPDATE OF d`,
         [payload.deploymentId],

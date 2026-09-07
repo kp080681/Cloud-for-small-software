@@ -99,17 +99,44 @@ function intentDb({ existing = null, activeManagedDatabases = 0, maxManagedDatab
   };
 }
 
-function deleteDb(row) {
+function deleteDb(row, { providerMatches = [] } = {}) {
   const calls = [];
+  const state = {
+    row: row ? { ...row } : null,
+    deletedProviderIds: [],
+  };
   return {
     calls,
+    state,
     async query(sql, params) {
       calls.push({ sql, params });
       if (/SELECT \*\s+FROM app_databases\s+WHERE app_id=\$1\s+FOR UPDATE/.test(sql)) {
-        return row ? { rowCount: 1, rows: [row] } : { rowCount: 0, rows: [] };
+        return state.row ? { rowCount: 1, rows: [{ ...state.row }] } : { rowCount: 0, rows: [] };
+      }
+      if (/UPDATE app_databases[\s\S]+provider_project_id=\$1/.test(sql)) {
+        state.row.provider_project_id = params[0];
+        state.row.provider_project_name = params[1];
+        state.row.status = ManagedDatabaseStatus.DELETING;
+        return { rowCount: 1, rows: [{ ...state.row }] };
+      }
+      if (/UPDATE app_databases[\s\S]+status='DELETING'/.test(sql)) {
+        state.row.status = ManagedDatabaseStatus.DELETING;
+        return { rowCount: 1, rows: [] };
+      }
+      if (/UPDATE app_databases[\s\S]+status='DELETED'/.test(sql)) {
+        state.row.status = ManagedDatabaseStatus.DELETED;
+        return { rowCount: 1, rows: [] };
+      }
+      if (/UPDATE app_databases[\s\S]+status='DELETE_FAILED'/.test(sql)) {
+        state.row.status = ManagedDatabaseStatus.DELETE_FAILED;
+        return { rowCount: 1, rows: [] };
       }
       if (/UPDATE app_databases/.test(sql)) return { rowCount: 1, rows: [] };
       throw new Error(`Unexpected SQL in deleteDb: ${sql}`);
+    },
+    async listProjectsByName(name) {
+      calls.push({ provider: "listProjectsByName", name });
+      return providerMatches;
     },
   };
 }
@@ -198,6 +225,11 @@ function readyAttachmentDb({ deploymentStatus = "PROVISIONING", appDeletedAt = n
             status: state.appDatabaseStatus,
           }],
         };
+      }
+      if (/UPDATE app_databases[\s\S]+provider_project_id=COALESCE\(provider_project_id,\$1\)/.test(sql)) {
+        state.providerProjectId = params[0];
+        state.providerProjectName = params[1];
+        return { rowCount: 1, rows: [] };
       }
       if (/UPDATE deployments[\s\S]+SET database_provider_id=\$1/.test(sql)) {
         state.deploymentProviderId = params[0];
@@ -303,6 +335,87 @@ test("UNKNOWN ownership fails closed for destructive database action", async () 
     }),
     /Unknown database ownership mode/,
   );
+});
+
+test("managed database deletion succeeds for untouched intent with no provider resource", async () => {
+  const row = {
+    id: "db-row",
+    workspace_id: workspaceId,
+    app_id: appId,
+    database_mode: DatabaseMode.SSC_MANAGED,
+    provider: "neon",
+    provider_project_id: null,
+    provider_project_name: sscManagedDatabaseName({ workspaceId, appId }),
+    status: ManagedDatabaseStatus.INTENT_RECORDED,
+  };
+  const db = deleteDb(row);
+  const result = await deleteManagedDatabaseForApp(db, {
+    workspaceId,
+    appId,
+    getProject: async () => { throw new Error("must not look up a missing provider id"); },
+    deleteProject: async () => { throw new Error("must not delete without provider identity"); },
+  });
+
+  assert.equal(result.action, "deleted");
+  assert.equal(result.providerDeleted, false);
+  assert.equal(db.state.row.status, ManagedDatabaseStatus.DELETED);
+});
+
+test("managed database deletion reconciles an unbound reconciliation-required provider by SSC name before delete", async () => {
+  const providerProjectName = sscManagedDatabaseName({ workspaceId, appId });
+  const row = {
+    id: "db-row",
+    workspace_id: workspaceId,
+    app_id: appId,
+    database_mode: DatabaseMode.SSC_MANAGED,
+    provider: "neon",
+    provider_project_id: null,
+    provider_project_name: providerProjectName,
+    status: ManagedDatabaseStatus.RECONCILIATION_REQUIRED,
+  };
+  const db = deleteDb(row, { providerMatches: [{ id: "neon-reconciled", name: providerProjectName }] });
+  const deletedIds = [];
+  const result = await deleteManagedDatabaseForApp(db, {
+    workspaceId,
+    appId,
+    listProjectsByName: db.listProjectsByName,
+    getProject: async (id) => ({ id, name: providerProjectName }),
+    deleteProject: async (id) => {
+      deletedIds.push(id);
+      return { deleted: true, notFound: false };
+    },
+  });
+
+  assert.equal(result.action, "deleted");
+  assert.deepEqual(deletedIds, ["neon-reconciled"]);
+  assert.equal(db.state.row.provider_project_id, "neon-reconciled");
+  assert.equal(db.state.row.status, ManagedDatabaseStatus.DELETED);
+});
+
+test("managed database deletion fails closed when create was requested but provider identity is unresolved", async () => {
+  const row = {
+    id: "db-row",
+    workspace_id: workspaceId,
+    app_id: appId,
+    database_mode: DatabaseMode.SSC_MANAGED,
+    provider: "neon",
+    provider_project_id: null,
+    provider_project_name: sscManagedDatabaseName({ workspaceId, appId }),
+    status: ManagedDatabaseStatus.CREATE_REQUESTED,
+  };
+  const db = deleteDb(row, { providerMatches: [] });
+
+  await assert.rejects(
+    () => deleteManagedDatabaseForApp(db, {
+      workspaceId,
+      appId,
+      listProjectsByName: db.listProjectsByName,
+      getProject: async () => { throw new Error("must not look up a missing provider id"); },
+      deleteProject: async () => { throw new Error("must not delete without provider identity"); },
+    }),
+    /requires provider reconciliation/,
+  );
+  assert.equal(db.state.row.status, ManagedDatabaseStatus.DELETE_FAILED);
 });
 
 test("managed database deletion verifies tenant and provider identity before delete", async () => {
@@ -445,6 +558,46 @@ test("stale managed database provider result must not attach while deletion is i
   assert.equal(db.state.deploymentProviderId, null);
   assert.equal(db.state.events.some((event) => event.eventType === "DATABASE_READY"), false);
   assert.equal(db.state.events.some((event) => event.eventType === "DATABASE_PROVIDER_RESULT_STALE"), true);
+});
+
+test("stale managed database provider result records bounded cleanup identity without becoming ready", async (t) => {
+  mockKmsForTest(t);
+  const db = readyAttachmentDb({
+    deploymentStatus: "DELETING",
+    databaseStatus: ManagedDatabaseStatus.DELETING,
+  });
+  const row = {
+    id: "db-row",
+    workspace_id: workspaceId,
+    app_id: appId,
+    database_mode: DatabaseMode.SSC_MANAGED,
+    provider: "neon",
+    provider_project_id: null,
+    provider_project_name: sscManagedDatabaseName({ workspaceId, appId }),
+    status: ManagedDatabaseStatus.CREATE_REQUESTED,
+  };
+
+  const result = await persistManagedDatabaseReady(db, {
+    deployment,
+    row,
+    resource: {
+      providerProjectId: "neon-project-created-before-delete",
+      providerProjectName: row.provider_project_name,
+      providerBranchId: "branch-id",
+      providerEndpointId: "endpoint-id",
+      providerDatabaseId: "database-id",
+      providerDatabaseName: "neondb",
+      providerRoleName: "neondb_owner",
+    },
+    connectionUri: "postgres://user:pass@example.neon.tech/neondb",
+  });
+
+  assert.equal(result.result, "DATABASE_PROVIDER_RESULT_STALE");
+  assert.equal(db.state.providerProjectId, "neon-project-created-before-delete");
+  assert.equal(db.state.appDatabaseStatus, ManagedDatabaseStatus.DELETING);
+  assert.equal(db.state.encryptedSecretWrites, 0);
+  assert.equal(db.state.bindingWrites, 0);
+  assert.equal(db.state.events.some((event) => event.eventType === "DATABASE_READY"), false);
 });
 
 test("stale managed database provider result must not attach after deployment is deleted", async (t) => {
@@ -684,6 +837,19 @@ test("app deletion clears managed database secret reference before deleting encr
     deleteApp.indexOf("UPDATE app_databases SET connection_secret_id=NULL") < deleteApp.indexOf("DELETE FROM encrypted_secrets"),
     "database secret reference must be cleared before app-scoped encrypted secrets are deleted",
   );
+});
+
+test("app deletion attempts managed database cleanup before Vercel project deletion", () => {
+  const deleteApp = readControlPlaneFile("trigger/delete-app.ts");
+  const databaseCleanup = deleteApp.indexOf("const databaseDeletion = await deleteManagedDatabaseForApp");
+  const runtimeDeletion = deleteApp.indexOf("await deleteVercelProject");
+  assert.ok(databaseCleanup > 0);
+  assert.ok(runtimeDeletion > 0);
+  assert.ok(
+    databaseCleanup < runtimeDeletion,
+    "managed database cleanup should run before irreversible Vercel project deletion",
+  );
+  assert.match(deleteApp, /listNeonProjectsByName/);
 });
 
 test("provisioning path encrypts DATABASE_URL before durable binding and does not print plaintext", () => {

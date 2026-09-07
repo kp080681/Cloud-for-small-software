@@ -293,3 +293,12 @@ test("abandon path attempts remote containment for attached provider deployments
   assert.match(source, /DEPLOYMENT_ABANDON_TERMINAL_NOOP/);
   assert.match(source, /provider_deployment_id/);
 });
+
+test("abandon replay can contain a late stale provider operation without a local build row", () => {
+  const source = fs.readFileSync(path.join(root, "trigger/abandon-deployment.ts"), "utf8");
+
+  assert.match(source, /deployment_provider_operations/);
+  assert.match(source, /operation_provider_deployment_id/);
+  assert.match(source, /OBSERVED_STALE/);
+  assert.match(source, /COALESCE\(b\.provider_deployment_id,\s*o\.provider_resource_id\)/);
+});
