@@ -9,7 +9,7 @@ Status: provider configuration verification is `PASS_WITH_DOCUMENTED_LIMITATIONS
 | GitHub security/least privilege | PASS |
 | Vercel project identity | PASS |
 | Vercel credential least privilege | PARTIAL |
-| Vercel Git auto-deploy live behavior | FAIL_CLOSED_CONNECTED_GIT_REQUIRES_DISCONNECT |
+| Vercel Git auto-deploy live behavior | PASS_DISCONNECTED_NO_AUTODEPLOY_OBSERVED |
 | Vercel environment isolation | PASS_VISUAL |
 | Vercel spend containment | PLAN_LIMITED_ACCEPTED |
 | AWS IAM/KMS | PASS |
@@ -96,15 +96,17 @@ The review found no observed workload-project inheritance of `VERCEL_TOKEN`, `NE
 Git auto-deploy:
 
 ```text
-VERCEL_GIT_REPOSITORY_CONNECTED = true
+VERCEL_GIT_REPOSITORY_CONNECTED = false
 VERCEL_GIT_AUTODEPLOY_CODE_CONTROL = PASS
 VERCEL_GIT_AUTODEPLOY_LIVE_SETTING_VISIBLE = false
-VERCEL_GIT_AUTODEPLOY_LIVE = FAIL_CLOSED_CONNECTED_GIT_REQUIRES_DISCONNECT
+VERCEL_GIT_AUTODEPLOY_LIVE = PASS_DISCONNECTED_NO_AUTODEPLOY_OBSERVED
 ```
 
 Live disposable verification showed Vercel can report a connected GitHub project as `git=null` with `link` present. It also showed that `PATCH /v9/projects/{id}` with `{ "git": { "deploymentEnabled": false } }` returns HTTP 400 through SSC's current REST path. SSC therefore no longer treats `git.deploymentEnabled=false` as a successful containment mechanism for controlled alpha.
 
 15R.6 now treats only absent/disconnected project Git linkage as safe. Connected or unknown state fails closed before runtime attachment, secret injection, or provider build creation. Production projects must not be silently disconnected by this node; a supported provider disconnect operation must be separately reviewed before automation.
+
+Live behavioral verification then manually disconnected only the disposable project `ssc-ssc-recovery-test` (`prj_vVfWE0VMyYvABEUkQFa3X8oEYOhj`) from `kp080681/ssc-lifecycle-test`. The Vercel project API returned `git:null` and `link:null`. Before a harmless empty commit to `kp080681/ssc-lifecycle-test` `main`, the provider deployment count was 3 and the latest deployment was `dpl_231x5RiipsGgzEqaVG7NmdnD47Sm`. After waiting and re-reading deployments, the API returned status 200, deployment count 3, and latest deployment `dpl_231x5RiipsGgzEqaVG7NmdnD47Sm`. The Git push created zero out-of-band Vercel deployments.
 
 Spend:
 
@@ -210,31 +212,29 @@ Short-lived disposable proof resources may temporarily consume incremental usage
 
 ## Remaining Live Actions
 
-1. Vercel disposable Git auto-deploy behavioral verification after manual disconnect.
-2. Trigger production dependency-resolution behavior from the committed lockfile if still provider-dependent.
-3. Install `NEON_API_KEY` into Trigger Production only when managed PostgreSQL live activation is approved.
-4. Apply pending control-plane migrations in reviewed order before exercising new production paths.
-5. Run one controlled live SSC-managed database provisioning proof after migrations and credential activation.
-6. Keep KMS production/non-production environment separation as a future hardening/provider policy question unless current restore design makes it necessary.
+1. Trigger production dependency-resolution behavior from the committed lockfile if still provider-dependent.
+2. Install `NEON_API_KEY` into Trigger Production only when managed PostgreSQL live activation is approved.
+3. Apply pending control-plane migrations in reviewed order before exercising new production paths.
+4. Run one controlled live SSC-managed database provisioning proof after migrations and credential activation.
+5. Keep KMS production/non-production environment separation as a future hardening/provider policy question unless current restore design makes it necessary.
 
-## Disposable Vercel Git Auto-Deploy Verification Plan
+## Disposable Vercel Git Auto-Deploy Verification Result
 
 Use only the disposable recovery-test/lifecycle-test project. Do not use DealUp, Vantage, or DealOS.
 
-1. Manually disconnect the disposable Vercel recovery-test project from Git in the Vercel dashboard.
-2. Verify the project API response reports `git: null` and `link: null`.
-3. Record the baseline provider deployment count for the disposable project.
-4. Make a harmless commit to `kp080681/ssc-lifecycle-test`.
-5. Wait long enough for any provider Git automation to appear.
-6. Re-read the provider deployment list and verify the count did not increase from the Git commit.
-7. Trigger one normal SSC/API-owned deployment for the disposable workload and verify it still creates the expected deployment.
-8. Clean up the disposable SSC/Vercel resources through the reviewed deletion path.
+1. Manually disconnected the disposable Vercel recovery-test project from Git in the Vercel dashboard.
+2. Verified the project API response reported `git: null` and `link: null`.
+3. Recorded the baseline provider deployment count for the disposable project: 3.
+4. Recorded the baseline latest deployment: `dpl_231x5RiipsGgzEqaVG7NmdnD47Sm`.
+5. Made a harmless empty commit to `kp080681/ssc-lifecycle-test` on `main`.
+6. Waited long enough for provider Git automation to appear if still active.
+7. Re-read the provider deployment list and observed status 200, deployment count 3, and latest deployment `dpl_231x5RiipsGgzEqaVG7NmdnD47Sm`.
 
-Expected result:
+Observed result:
 
 ```text
 VERCEL_GIT_AUTODEPLOY_LIVE = DISCONNECTED_NO_AUTODEPLOY_OBSERVED
-SSC_API_TRIGGERED_DEPLOYMENT_STILL_WORKS = true
+GIT_PUSH_CREATED_OUT_OF_BAND_DEPLOYMENTS = 0
 ```
 
 ## Decision
@@ -250,7 +250,6 @@ Known limitations remain:
 - Vercel user-scoped token.
 - Trigger unrestricted Root key exists operator-side.
 - Neon org-wide API key.
-- Disposable Vercel Git auto-deploy behavioral proof pending after manual disconnect.
 - Neon production credential not yet installed.
 - Pending database migrations.
 

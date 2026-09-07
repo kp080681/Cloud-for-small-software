@@ -231,7 +231,7 @@ Notes: app deletion still deletes the whole Vercel project. If deletion wins the
 
 Reviewer claim: SSC does not actually prove Git auto-deploys are disabled for production runtimes.
 
-Classification: `CONFIRMED_PROVIDER_DEPENDENT`; `RESOLVED_CODE_PENDING_LIVE_VERIFY_BY_15R_6`
+Classification: `CONFIRMED_PROVIDER_DEPENDENT`; `RESOLVED_BY_15R_6`
 
 Exact files/functions:
 
@@ -259,7 +259,7 @@ Provider behavior verified live: SSC's attempted project PATCH path cannot corre
 
 Required next node: none for code-level Git auto-deploy containment; continue with `15R.7 Source + LIVE Deployment Identity`.
 
-Provider verification required? Yes. A disposable project must be manually disconnected, API-verified as `git:null` and `link:null`, then tested with a harmless Git commit to prove no provider deployment count increase. This Codex node did not mutate Vercel.
+Provider verification required? Complete for controlled alpha. The disposable `ssc-ssc-recovery-test` Vercel project (`prj_vVfWE0VMyYvABEUkQFa3X8oEYOhj`) was manually disconnected from `kp080681/ssc-lifecycle-test`, then API-verified as `git:null` and `link:null`. Baseline provider deployment count was 3 and latest deployment was `dpl_231x5RiipsGgzEqaVG7NmdnD47Sm`. After a harmless empty commit to `kp080681/ssc-lifecycle-test` `main`, the provider deployment list remained status 200, count 3, latest deployment `dpl_231x5RiipsGgzEqaVG7NmdnD47Sm`. The Git push created zero out-of-band Vercel deployments.
 
 Notes: unknown provider Git state is not treated as safe. Explicit disconnected projects (`git: null`, `link: null`) are safe; connected or omitted state must be manually disconnected or blocked before use.
 
@@ -583,7 +583,7 @@ Notes: this is a product-contract gap more than a hostile-code bug, but it is al
 | `15R-F04` | P1-A | `CONFIRMED`; `RESOLVED_BY_15R_4` | `15R.4` | Atomic provider-operation claim prevents duplicate Vercel deployment creation for one logical operation |
 | `15R-F05` | P1-B | `CONFIRMED`; `STATE_SAFETY_RESOLVED_BY_15R_4`; `REMOTE_CANCELLATION_RESOLVED_BY_15R_5` | `15R.5` | Delete/provision and abandon/build races cannot revive active state; abandoned in-flight provider deployments now receive remote containment attempts |
 | `15R-F06` | P1-C | `CONFIRMED`; `RESOLVED_BY_15R_5` | `15R.5` | Timeout/abandon now requests and records provider build containment instead of only marking local state |
-| `15R-F07` | P1-D | `CONFIRMED_PROVIDER_DEPENDENT`; `FAIL_CLOSED_CONNECTED_GIT_REQUIRES_DISCONNECT_BY_15R_6` | `15R.6` | Production paths now require disconnected Git linkage before runtime use, secret injection, and build creation; connected or unknown projects fail closed |
+| `15R-F07` | P1-D | `CONFIRMED_PROVIDER_DEPENDENT`; `RESOLVED_BY_15R_6` | `15R.6` | Production paths now require disconnected Git linkage before runtime use, secret injection, and build creation; connected or unknown projects fail closed; live disposable proof confirmed a disconnected project did not auto-deploy on Git push |
 | `15R-F08` | P1-E | `CONFIRMED`; `RESOLVED_BY_15R_7` | `15R.7` | Build verification now requires provider-observed source identity matching the immutable build input |
 | `15R-F09` | P1-F | `CONFIRMED`; `RESOLVED_CODE_PENDING_LIVE_VERIFY_BY_15R_7` | `15R.7` | Public URL verification now requires provider alias/binding proof for the exact deployment before reachability can mark LIVE |
 | `15R-F10` | P1-G | `CONFIRMED`; `RESOLVED_CODE_PENDING_LIVE_VERIFY_BY_15R_8` | `15R.8` | Runtime env application now targets production only; live project env/shared-env verification remains required |
@@ -612,7 +612,7 @@ No speculative remediation nodes were added beyond reproduced findings. The 15R 
 
 `REMOTE_BUILD_CANCELLATION = RESOLVED_BY_15R_5`
 
-`GIT_AUTODEPLOY_CONTAINMENT = FAIL_CLOSED_CONNECTED_GIT_REQUIRES_DISCONNECT`
+`GIT_AUTODEPLOY_CONTAINMENT = PASS_DISCONNECTED_NO_AUTODEPLOY_OBSERVED`
 
 `SOURCE_IDENTITY_FAIL_OPEN = RESOLVED_BY_15R_7`
 
@@ -642,7 +642,7 @@ No speculative remediation nodes were added beyond reproduced findings. The 15R 
 
 `VERCEL_CREDENTIAL_LEAST_PRIVILEGE = PARTIAL`
 
-`VERCEL_GIT_AUTODEPLOY_LIVE = FAIL_CLOSED_CONNECTED_GIT_REQUIRES_DISCONNECT`
+`VERCEL_GIT_AUTODEPLOY_LIVE = PASS_DISCONNECTED_NO_AUTODEPLOY_OBSERVED`
 
 `AWS_KMS_PROVIDER_STATUS = PASS`
 

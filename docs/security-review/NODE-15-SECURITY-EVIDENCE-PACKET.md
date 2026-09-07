@@ -520,7 +520,7 @@ Provider status:
 | GitHub App | PASS | Installation has read access to code and metadata, no observed write/admin permissions, and selected-repository scope only for `kp080681/dealupwebsite`, `kp080681/Vantage`, and `kp080681/Cloud-for-small-software`. |
 | Vercel project identity | PASS | Live SSC project bindings for `ssc-dealup-website` and `ssc-vantage` match the expected project ids, GitHub repositories, and `main` production branch. |
 | Vercel credential least privilege | PARTIAL | Current token is user-scoped for team `team_HxUKmwKrgjW0tCYyVUtYmBsA`; acceptable for founder-operated controlled alpha with SSC controls, not the final self-service credential model. |
-| Vercel Git auto-deploy live behavior | FAIL_CLOSED_CONNECTED_GIT_REQUIRES_DISCONNECT | Live disposable verification showed connected projects can report `git=null` with `link` present, and `PATCH /v9/projects/{id}` with `git.deploymentEnabled=false` returns HTTP 400 through SSC's REST path. 15R.6 now treats only disconnected linkage as safe and fails closed for connected or unknown state. |
+| Vercel Git auto-deploy live behavior | PASS_DISCONNECTED_NO_AUTODEPLOY_OBSERVED | Live disposable verification showed connected projects can report `git=null` with `link` present, and `PATCH /v9/projects/{id}` with `git.deploymentEnabled=false` returns HTTP 400 through SSC's REST path. 15R.6 now treats only disconnected linkage as safe and fails closed for connected or unknown state. After manually disconnecting only the disposable `ssc-ssc-recovery-test` project, Vercel returned `git:null` and `link:null`; a harmless Git push to `kp080681/ssc-lifecycle-test` created zero out-of-band deployments. |
 | Vercel environment isolation | PASS_VISUAL | Project env review found per-project grouping and no observed team-wide inheritance of SSC control-plane credentials into workload projects. |
 | Vercel spend containment | PLAN_LIMITED_ACCEPTED | Hobby plan; paid on-demand usage not enabled; spend management is unavailable on the current plan. |
 | AWS IAM/KMS | PASS | Runtime IAM policy allows `kms:GenerateDataKey` and `kms:Decrypt` on one specific SSC KMS key with no observed wildcard resource or runtime admin actions. |
@@ -542,7 +542,6 @@ This is an internal operating ceiling, not product pricing, public SLA, or RTO/R
 
 Remaining provider items:
 
-- Vercel disposable Git auto-deploy behavioral verification after manual disconnect.
 - Trigger production dependency-resolution behavior from the committed lockfile if still provider-dependent.
 - Install `NEON_API_KEY` into Trigger Production only when managed PostgreSQL live activation is approved.
 - Apply pending control-plane migrations in reviewed order before exercising new production paths.
