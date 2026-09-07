@@ -503,7 +503,7 @@ Status: Node 15R.13 provider configuration verification is complete with documen
 | 15R.10 Recovery safety corrections | COMPLETE | Restore target equivalence guard, backup digest verification, and restored-secret decrypt call shape corrected. |
 | 15R.11 Workspace / economic guardrails | COMPLETE_CODE_PENDING_LIVE_VERIFY | Workspace active app/deployment/provider-operation and managed DB limits exist. |
 | 15R.12 Production PostgreSQL scope decision | COMPLETE | Explicit `NONE`, `EXTERNAL`, and `SSC_MANAGED` ownership modes selected. |
-| 15R.12A Production PostgreSQL provisioning | COMPLETE_CODE_PENDING_LIVE_VERIFY | Managed Neon provisioning/reconciliation/encrypted `DATABASE_URL`/deletion are production-wired. |
+| 15R.12A Production PostgreSQL provisioning | COMPLETE | Managed Neon provisioning/reconciliation/encrypted `DATABASE_URL` are production-wired and live-verified on the disposable SSC Recovery Test app. |
 | 15R.12B Managed PostgreSQL recovery proof | COMPLETE | Disposable Neon branch restore to captured LSN recovered deterministic data with row-count/digest parity and cleanup. |
 | 15R.13 Provider configuration verification | COMPLETE_WITH_DOCUMENTED_LIMITATIONS | GitHub, Vercel, AWS/KMS, Trigger.dev, Neon, economic ceilings, and remaining provider limitations recorded. |
 
@@ -523,20 +523,41 @@ NEON_RECOVERY = PASS
 CONTROLLED_ALPHA_INFRA_BUDGET_USD = 100
 PROVIDER_PREEMPTIVE_UPGRADES_ALLOWED = false
 PROVIDER_CONFIGURATION_VERIFICATION = PASS_WITH_DOCUMENTED_LIMITATIONS
+PRE_15R_14_MANAGED_POSTGRESQL_LIVE_ACTIVATION = PASS
 ```
 
 ## Remaining Live Actions Before Independent Re-Review
 
 1. Trigger production dependency-resolution behavior from the committed lockfile if still provider-dependent.
-2. Install `NEON_API_KEY` into Trigger Production only when managed PostgreSQL live activation is approved.
-3. Apply pending control-plane migrations in reviewed order before exercising new production paths.
-4. Run one controlled live SSC-managed database provisioning proof after migrations and credential activation.
-5. Keep KMS production/non-production environment separation as a future hardening/provider policy question unless current restore design makes it necessary.
+2. Keep KMS production/non-production environment separation as a future hardening/provider policy question unless current restore design makes it necessary.
+
+## PRE_15R_14 Live Activation Evidence
+
+Verified live deployment `7177b871-2c70-4afd-bd12-bab6fedfaed2` for app `6bc015df-ccb1-4151-982e-3ea24e45c54b` in workspace `1527483e-69a3-4771-9bf1-b54a70028d9e` entered through the canonical queue path and reached `PROVISIONING` after `BUILD_INPUT_PREPARED`, `ENV_REQUIREMENTS_DETECTED`, and `ENV_REQUIREMENTS_VERIFIED`.
+
+Managed PostgreSQL activation result:
+
+```text
+databaseMode = SSC_MANAGED
+databaseStatus = READY
+provider = neon
+providerProjectId = patient-tooth-74331988
+providerProjectName = ssc-6bc015dfccb1-408986212cc5-db
+providerDatabaseName = neondb
+providerRoleName = neondb_owner
+connectionSecretId = f3f828ef-fc1a-4079-88d0-482bf9e1a6d0
+reconciliationKey = database:neon:1527483e-69a3-4771-9bf1-b54a70028d9e:6bc015df-ccb1-4151-982e-3ea24e45c54b
+duplicateNeonProjectsCreated = 0
+plaintextDatabaseUriPrinted = false
+triggerProductionDeployVersion = 20260907.1
+```
+
+The initial invalid Neon credential produced Neon API 401 Unauthorized. After the correct credential was installed, Neon created exactly one SSC-named project. A downstream missing `AWS_KMS_KEY_ID` left the local managed database record at `CREATE_REQUESTED` with `provider_project_id` null. Read-only Neon lookup found exactly one matching provider project, and retry against the same deployment reconciled that provider project instead of creating another. The `DATABASE_READY` event recorded "Managed PostgreSQL is ready for runtime binding." This proof does not claim the disposable application itself is `LIVE`, and the Neon project was intentionally not deleted.
 
 ## Next Node
 
 ```text
-NEXT_NODE = PRE_15R_14_LIVE_ACTIVATION
+NEXT_NODE = 15R.14_INDEPENDENT_ADVERSARIAL_RE_REVIEW
 ```
 
-Use `15R.14 Independent Adversarial Re-Review` after the remaining live activation checks are complete.
+Use `15R.14 Independent Adversarial Re-Review` next.

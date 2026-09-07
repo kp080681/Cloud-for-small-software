@@ -538,7 +538,7 @@ Notes: this is not billing, pricing, or usage metering. It is a founder-controll
 
 Reviewer claim: SSC V1 advertises PostgreSQL support, but production lifecycle does not provision customer PostgreSQL.
 
-Classification: `CONFIRMED`; `SCOPED_BY_15R_12`; `RESOLVED_CODE_PENDING_LIVE_VERIFY_BY_15R_12A`
+Classification: `CONFIRMED`; `SCOPED_BY_15R_12`; `RESOLVED_BY_15R_12A`; `LIVE_ACTIVATION_PASS_BY_PRE_15R_14`
 
 Exact files/functions:
 
@@ -558,18 +558,18 @@ Reproduction method: repository search for customer database lifecycle create/re
 Observed result:
 
 ```text
-CUSTOMER_POSTGRESQL_PROVISIONING = PRODUCTION_WIRED_PENDING_LIVE_VERIFY
+CUSTOMER_POSTGRESQL_PROVISIONING = LIVE_ACTIVATION_PASS
 ```
 
 Concrete consequence before 15R.12A: a workload requiring SSC-provisioned PostgreSQL could not be deployed through the production control-plane lifecycle without using an existing external database/secret path.
 
 Decision: Node 15R.12 selected explicit database ownership modes for controlled alpha. Node 15R.12A implements `NONE`, `EXTERNAL`, and `SSC_MANAGED` production wiring while preserving existing no-database and external-database workload safety.
 
-Resolution: Node 15R.12A adds explicit `NONE`, `EXTERNAL`, and `SSC_MANAGED` database modes, a managed database resource record, workspace managed database admission limit, durable create intent/claim, Neon provisioning/reconciliation, encrypted generated `DATABASE_URL`, production-only binding, ownership-aware deletion, and read-only managed database inventory/orphan classification. Node 15R.12B proves provider-native recovery for a disposable SSC-managed Neon PostgreSQL database using branch restore to a captured LSN, with exact row-count and digest parity after destructive mutation. Node 15R.13 records live provider configuration evidence and accepts remaining provider limitations for founder-operated controlled alpha.
+Resolution: Node 15R.12A adds explicit `NONE`, `EXTERNAL`, and `SSC_MANAGED` database modes, a managed database resource record, workspace managed database admission limit, durable create intent/claim, Neon provisioning/reconciliation, encrypted generated `DATABASE_URL`, production-only binding, ownership-aware deletion, and read-only managed database inventory/orphan classification. Node 15R.12B proves provider-native recovery for a disposable SSC-managed Neon PostgreSQL database using branch restore to a captured LSN, with exact row-count and digest parity after destructive mutation. Node 15R.13 records live provider configuration evidence and accepts remaining provider limitations for founder-operated controlled alpha. PRE_15R_14 then verifies live managed PostgreSQL activation on deployment `7177b871-2c70-4afd-bd12-bab6fedfaed2`: an invalid Neon credential failed closed, the corrected credential created exactly one SSC-named Neon project, missing KMS configuration left the local record recoverable at `CREATE_REQUESTED`, and replay reconciled the existing provider project to `READY` without duplication.
 
-Required next node: `PRE_15R_14_LIVE_ACTIVATION`
+Required next node: none for managed PostgreSQL live activation; continue with `15R.14 Independent Adversarial Re-Review`.
 
-Provider verification required? Yes before external alpha, to validate current Neon API token scope, account/project limits, delete semantics, and backup/PITR behavior.
+Provider verification required? Complete for the live managed PostgreSQL activation/provisioning path. Remaining Neon limitations are credential-scope and provider-account constraints for independent review and later public/self-service hardening.
 
 Notes: this is a product-contract gap more than a hostile-code bug, but it is alpha-relevant because PostgreSQL is in SSC V1 scope.
 
@@ -592,9 +592,9 @@ Notes: this is a product-contract gap more than a hostile-code bug, but it is al
 | `15R-F13` | P1-J | `CONFIRMED`; `RESOLVED_CODE_PENDING_NEW_DRILL_BY_15R_10` | none | Restore guard now requires independent disposable target identity, canonical same-database refusal, and backup SHA-256 verification before restore |
 | `15R-F14` | P1-K | `CONFIRMED`; `RESOLVED_BY_15R_10` | none | Optional restored-secret decrypt branch now calls `decryptAppSecret(db, { appId, name })` and fails digest mismatch without plaintext output |
 | `15R-F15` | P1-L | `PARTIALLY_CONFIRMED`; `RESOLVED_CODE_PENDING_LIVE_VERIFY_BY_15R_11` | none | Workspace active app, deployment, and provider-operation admission limits now exist; provider-account spend/resource controls remain live-verification dependent |
-| `15R-F16` | P1-M | `CONFIRMED`; `SCOPED_BY_15R_12`; `RESOLVED_CODE_PENDING_LIVE_VERIFY_BY_15R_12A`; `RECOVERY_PROOF_PASS_BY_15R_12B`; `PROVIDER_CONFIG_PASS_WITH_LIMITATIONS_BY_15R_13` | `PRE_15R_14_LIVE_ACTIVATION` | Customer PostgreSQL provisioning is production-wired with explicit ownership; disposable provider-native recovery proof passed; provider configuration verified with documented limitations |
+| `15R-F16` | P1-M | `CONFIRMED`; `SCOPED_BY_15R_12`; `RESOLVED_BY_15R_12A`; `RECOVERY_PROOF_PASS_BY_15R_12B`; `PROVIDER_CONFIG_PASS_WITH_LIMITATIONS_BY_15R_13`; `LIVE_ACTIVATION_PASS_BY_PRE_15R_14` | none | Customer PostgreSQL provisioning is production-wired with explicit ownership; disposable provider-native recovery proof passed; provider configuration verified with documented limitations; live activation reconciled an existing Neon project without duplication |
 
-No speculative remediation nodes were added beyond reproduced findings. The 15R remediation sequence is complete through provider configuration verification, with documented limitations and remaining live activation actions before independent adversarial re-review.
+No speculative remediation nodes were added beyond reproduced findings. The 15R remediation sequence is complete through provider configuration verification and PRE_15R_14 live activation evidence, with documented limitations ready for independent adversarial re-review.
 
 ## Final Status
 
@@ -630,7 +630,7 @@ No speculative remediation nodes were added beyond reproduced findings. The 15R 
 
 `WORKSPACE_RESOURCE_LIMIT = RESOLVED_CODE_PENDING_LIVE_VERIFY`
 
-`CUSTOMER_POSTGRESQL_PROVISIONING = PRODUCTION_WIRED_PENDING_LIVE_VERIFY`
+`CUSTOMER_POSTGRESQL_PROVISIONING = LIVE_ACTIVATION_PASS`
 
 `PROVIDER_NATIVE_RECOVERY_VERIFIED = true`
 
@@ -662,7 +662,7 @@ No speculative remediation nodes were added beyond reproduced findings. The 15R 
 
 `REJECTED_FINDING_COUNT = 0`
 
-`NEXT_NODE = PRE_15R_14_LIVE_ACTIVATION`
+`NEXT_NODE = 15R.14_INDEPENDENT_ADVERSARIAL_RE_REVIEW`
 
 `NODE_15R_13_COMPLETE = true`
 

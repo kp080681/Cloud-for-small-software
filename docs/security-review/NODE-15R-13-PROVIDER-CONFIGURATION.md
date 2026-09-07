@@ -195,7 +195,7 @@ NEON_DISPOSABLE_RESOURCE_CLEANUP = PASS
 
 15R.12B proved Neon project creation, synthetic data creation, LSN capture, destructive mutation, branch restore, exact row-count parity, exact SHA-256 digest parity, and cleanup using a disposable SSC-managed resource.
 
-Production managed database live path still requires migration application, `NEON_API_KEY` installation into Trigger Production, and one controlled live provisioning verification. Do not perform those in this node.
+Production managed database live activation was later verified during PRE_15R_14 using the disposable SSC Recovery Test app. Trigger production deploy version `20260907.1` succeeded from the committed dependency graph, the Neon credential was corrected in Trigger Production after an initial 401, and the existing SSC KMS key ARN was configured after the recovery path exposed a missing `AWS_KMS_KEY_ID`. The live proof created exactly one SSC-named Neon project and then reconciled that existing provider project on retry rather than creating a duplicate.
 
 ## Controlled-Alpha Operating Boundary
 
@@ -213,10 +213,7 @@ Short-lived disposable proof resources may temporarily consume incremental usage
 ## Remaining Live Actions
 
 1. Trigger production dependency-resolution behavior from the committed lockfile if still provider-dependent.
-2. Install `NEON_API_KEY` into Trigger Production only when managed PostgreSQL live activation is approved.
-3. Apply pending control-plane migrations in reviewed order before exercising new production paths.
-4. Run one controlled live SSC-managed database provisioning proof after migrations and credential activation.
-5. Keep KMS production/non-production environment separation as a future hardening/provider policy question unless current restore design makes it necessary.
+2. Keep KMS production/non-production environment separation as a future hardening/provider policy question unless current restore design makes it necessary.
 
 ## Disposable Vercel Git Auto-Deploy Verification Result
 
@@ -237,12 +234,46 @@ VERCEL_GIT_AUTODEPLOY_LIVE = DISCONNECTED_NO_AUTODEPLOY_OBSERVED
 GIT_PUSH_CREATED_OUT_OF_BAND_DEPLOYMENTS = 0
 ```
 
+## Managed PostgreSQL Live Activation Result
+
+Disposable workload:
+
+```text
+deploymentId: 7177b871-2c70-4afd-bd12-bab6fedfaed2
+app: SSC Recovery Test
+appId: 6bc015df-ccb1-4151-982e-3ea24e45c54b
+workspaceId: 1527483e-69a3-4771-9bf1-b54a70028d9e
+databaseMode: SSC_MANAGED
+```
+
+Verified sequence:
+
+1. Deployment entered `ANALYZING` through the canonical queue path.
+2. Orchestrator advanced through `BUILD_INPUT_PREPARED`, `ENV_REQUIREMENTS_DETECTED`, `ENV_REQUIREMENTS_VERIFIED`, and `PROVISIONING`.
+3. Managed database intent was recorded.
+4. Initial Neon credential in Trigger Production returned Neon API 401 Unauthorized.
+5. Correct Neon credential was installed.
+6. Neon created exactly one SSC-named project: `patient-tooth-74331988` / `ssc-6bc015dfccb1-408986212cc5-db`.
+7. SSC remained locally at `CREATE_REQUESTED` with `provider_project_id` null after a downstream failure.
+8. Read-only Neon lookup found exactly one matching provider project, proving recoverable provider-side creation and no duplication.
+9. Trigger provisioning retries then failed after provider observation because `AWS_KMS_KEY_ID` was missing.
+10. Existing SSC KMS key ARN was recovered from `encrypted_secrets.kms_key_id` and configured in Trigger Production.
+11. `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_REGION`, and `AWS_KMS_KEY_ID` were confirmed present.
+12. The orchestrator was retriggered against the same deployment.
+13. SSC reconciled the existing Neon project rather than creating another.
+14. Final verified state: deployment status `PROVISIONING`, database status `READY`, provider `neon`, provider project id `patient-tooth-74331988`, provider project name `ssc-6bc015dfccb1-408986212cc5-db`, provider database name `neondb`, provider role name `neondb_owner`, connection secret id `f3f828ef-fc1a-4079-88d0-482bf9e1a6d0`, reconciliation key `database:neon:1527483e-69a3-4771-9bf1-b54a70028d9e:6bc015df-ccb1-4151-982e-3ea24e45c54b`.
+15. `DATABASE_READY` event recorded: "Managed PostgreSQL is ready for runtime binding".
+16. No plaintext database URI was printed.
+17. No duplicate Neon project was created.
+
+This closes the managed PostgreSQL live activation/provisioning proof for PRE_15R_14. It does not claim the disposable application itself reached `LIVE`, and the Neon project was intentionally not deleted as part of this evidence update.
+
 ## Decision
 
 ```text
 PROVIDER_CONFIGURATION_VERIFICATION = PASS_WITH_DOCUMENTED_LIMITATIONS
 NODE_15R_13_COMPLETE = true
-NEXT_NODE = PRE_15R_14_LIVE_ACTIVATION
+NEXT_NODE = 15R.14_INDEPENDENT_ADVERSARIAL_RE_REVIEW
 ```
 
 Known limitations remain:
@@ -250,7 +281,5 @@ Known limitations remain:
 - Vercel user-scoped token.
 - Trigger unrestricted Root key exists operator-side.
 - Neon org-wide API key.
-- Neon production credential not yet installed.
-- Pending database migrations.
 
 These do not automatically block founder-operated controlled alpha. They matter before public/self-service operation.

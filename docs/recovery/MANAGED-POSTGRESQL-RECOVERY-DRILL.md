@@ -135,6 +135,26 @@ For controlled alpha, SSC-managed PostgreSQL recovery means:
 
 This does not promise continuous SSC-managed backups, customer self-service restore, arbitrary PITR UI, zero RPO, zero downtime, or recovery for external databases.
 
+## PRE_15R_14 Live Activation Cross-Check
+
+After the recovery drill, PRE_15R_14 verified that the live production provisioning path can create and recoverably reconcile an SSC-managed Neon PostgreSQL database for a disposable workload:
+
+```text
+deploymentId: 7177b871-2c70-4afd-bd12-bab6fedfaed2
+appId: 6bc015df-ccb1-4151-982e-3ea24e45c54b
+workspaceId: 1527483e-69a3-4771-9bf1-b54a70028d9e
+databaseMode: SSC_MANAGED
+databaseStatus: READY
+provider: neon
+providerProjectId: patient-tooth-74331988
+providerProjectName: ssc-6bc015dfccb1-408986212cc5-db
+connectionSecretId: f3f828ef-fc1a-4079-88d0-482bf9e1a6d0
+duplicateNeonProjectsCreated: 0
+plaintextDatabaseUriPrinted: false
+```
+
+The sequence included an initial Neon API 401 from an invalid Trigger Production credential, later correction of that credential, a downstream missing `AWS_KMS_KEY_ID`, and replay against the same deployment. Read-only Neon lookup found exactly one matching SSC-named project, and SSC reconciled that project rather than creating a duplicate. This cross-check is provisioning/reconciliation evidence, not a new database restore drill, and it does not claim the disposable application reached `LIVE`.
+
 ## Provider Mechanism
 
 Current Neon documentation identifies branch restore / point-in-time restore as the appropriate provider-native mechanism. The Neon branch restore API restores a branch to an earlier state using a source LSN or timestamp. When restoring a branch to its own history, Neon requires a `preserve_under_name` value so the current state is retained under a backup branch.

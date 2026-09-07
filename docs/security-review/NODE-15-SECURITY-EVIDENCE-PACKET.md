@@ -524,7 +524,7 @@ Provider status:
 | Vercel environment isolation | PASS_VISUAL | Project env review found per-project grouping and no observed team-wide inheritance of SSC control-plane credentials into workload projects. |
 | Vercel spend containment | PLAN_LIMITED_ACCEPTED | Hobby plan; paid on-demand usage not enabled; spend management is unavailable on the current plan. |
 | AWS IAM/KMS | PASS | Runtime IAM policy allows `kms:GenerateDataKey` and `kms:Decrypt` on one specific SSC KMS key with no observed wildcard resource or runtime admin actions. |
-| Trigger.dev environment | PASS | Production runtime environment contains expected control-plane credentials, no observed customer workload secrets, no observed root API key, and `NEON_API_KEY` is absent. |
+| Trigger.dev environment | PASS | Production runtime environment contains expected control-plane credentials, no observed customer workload secrets, and no observed root API key. PRE_15R_14 installed the Neon credential and existing SSC KMS key id for the managed PostgreSQL live activation proof. |
 | Trigger.dev credential least privilege | PARTIAL_ROOT_KEY | Root and project keys exist with unrestricted access; root credential remains operator-only and must not become a runtime dependency. |
 | Trigger.dev resource ceiling | PASS | Free plan supplies a concrete ceiling: $5/month free credits, 20 concurrent runs, 10 schedules, and 1 day log retention. |
 | Neon credential least privilege | PARTIAL_ORG_WIDE | Neon API key is organization-wide/admin-level; acceptable for founder-operated controlled alpha with SSC ownership/recovery controls, not ideal for public self-service. |
@@ -543,10 +543,27 @@ This is an internal operating ceiling, not product pricing, public SLA, or RTO/R
 Remaining provider items:
 
 - Trigger production dependency-resolution behavior from the committed lockfile if still provider-dependent.
-- Install `NEON_API_KEY` into Trigger Production only when managed PostgreSQL live activation is approved.
-- Apply pending control-plane migrations in reviewed order before exercising new production paths.
-- Run one controlled live SSC-managed database provisioning proof after migrations and credential activation.
 - Keep KMS production/non-production environment separation as a future hardening/provider policy question unless current restore design makes it necessary.
+
+Managed PostgreSQL live activation proof:
+
+```text
+PRE_15R_14_MANAGED_POSTGRESQL_LIVE_ACTIVATION = PASS
+deploymentId = 7177b871-2c70-4afd-bd12-bab6fedfaed2
+appId = 6bc015df-ccb1-4151-982e-3ea24e45c54b
+workspaceId = 1527483e-69a3-4771-9bf1-b54a70028d9e
+databaseMode = SSC_MANAGED
+deploymentStatus = PROVISIONING
+databaseStatus = READY
+provider = neon
+providerProjectId = patient-tooth-74331988
+providerProjectName = ssc-6bc015dfccb1-408986212cc5-db
+connectionSecretId = f3f828ef-fc1a-4079-88d0-482bf9e1a6d0
+duplicateNeonProjectsCreated = 0
+plaintextDatabaseUriPrinted = false
+```
+
+The first live attempt proved fail-closed behavior when the initial Neon credential was invalid. After the credential was corrected, Neon created exactly one SSC-named project. A downstream missing `AWS_KMS_KEY_ID` left SSC at local `CREATE_REQUESTED` with `provider_project_id` null; read-only Neon lookup found exactly one matching project, and replay reconciled that provider project instead of creating another. `DATABASE_READY` was recorded with "Managed PostgreSQL is ready for runtime binding." The disposable application itself was not claimed `LIVE`.
 
 `PROVIDER_CONFIGURATION_VERIFICATION = PASS_WITH_DOCUMENTED_LIMITATIONS`
 

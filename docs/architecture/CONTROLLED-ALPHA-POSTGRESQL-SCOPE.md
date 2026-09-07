@@ -1,6 +1,6 @@
 # Controlled Alpha PostgreSQL Scope
 
-Status: Node 15R.12A implementation complete pending live provider verification. This document records the production PostgreSQL scope decision and the smallest managed PostgreSQL production wiring for controlled alpha. No provider resources, databases, Trigger deployments, customer workloads, or secrets were changed while updating this document.
+Status: Node 15R.12A implementation complete with PRE_15R_14 live managed PostgreSQL activation proof. This document records the production PostgreSQL scope decision and the smallest managed PostgreSQL production wiring for controlled alpha.
 
 ## Boundary
 
@@ -37,10 +37,10 @@ Node 15R.12 concerns only customer workload PostgreSQL. Node 18 backup/recovery 
 Conclusion:
 
 ```text
-CUSTOMER_POSTGRESQL_PROVISIONING = PRODUCTION_WIRED_PENDING_LIVE_VERIFY
+CUSTOMER_POSTGRESQL_PROVISIONING = LIVE_ACTIVATION_PASS
 ```
 
-SSC can safely deploy no-database workloads, workloads that bring an existing external PostgreSQL/Supabase database through encrypted configuration, and explicitly `SSC_MANAGED` PostgreSQL workloads through the managed Neon production path once migration 016 is applied and live provider settings are verified.
+SSC can safely deploy no-database workloads, workloads that bring an existing external PostgreSQL/Supabase database through encrypted configuration, and explicitly `SSC_MANAGED` PostgreSQL workloads through the managed Neon production path. PRE_15R_14 verified this path with a disposable SSC Recovery Test deployment.
 
 ## Workload Database Modes
 
@@ -85,7 +85,7 @@ For controlled alpha:
 - No-database workloads are supported.
 - Existing external PostgreSQL/Supabase workloads are supported through encrypted app secrets and normal env requirement verification.
 - SSC must not delete, modify, migrate, back up, or restore external customer databases.
-- SSC-managed PostgreSQL is now production-wired in code and schema, pending migration application and live provider verification.
+- SSC-managed PostgreSQL is now production-wired in code and schema, and PRE_15R_14 live activation verified provisioning/reconciliation on a disposable workload.
 - Managed customer database backup/restore proof for the tested Neon branch-restore-to-LSN path is complete under `15R.12B Managed PostgreSQL Recovery Proof`.
 
 This does not remove PostgreSQL from the V1 thesis. It also prevents the platform from inferring ownership from `DATABASE_URL` or provider hostnames.
@@ -142,7 +142,7 @@ The proven claim remains narrow: a disposable SSC-managed Neon PostgreSQL databa
 
 ## Provider-Dependent Security Checks
 
-Before `SSC_MANAGED` customer PostgreSQL goes live, verify:
+Provider-dependent items that remain important for independent review and later public/self-service hardening:
 
 - Neon organization/project/token scope and least-privilege practical boundary.
 - Per-app database isolation and tenant identity mapping.
@@ -151,6 +151,24 @@ Before `SSC_MANAGED` customer PostgreSQL goes live, verify:
 - Connection TLS/pooling behavior and credential rotation path.
 - Workspace-level managed database count, storage, compute, and spend guardrails.
 - Orphan/recovery behavior when SSC state is restored behind existing provider database resources.
+
+PRE_15R_14 live activation result:
+
+```text
+deploymentId = 7177b871-2c70-4afd-bd12-bab6fedfaed2
+appId = 6bc015df-ccb1-4151-982e-3ea24e45c54b
+workspaceId = 1527483e-69a3-4771-9bf1-b54a70028d9e
+databaseMode = SSC_MANAGED
+deploymentStatus = PROVISIONING
+databaseStatus = READY
+providerProjectId = patient-tooth-74331988
+providerProjectName = ssc-6bc015dfccb1-408986212cc5-db
+connectionSecretId = f3f828ef-fc1a-4079-88d0-482bf9e1a6d0
+duplicateNeonProjectsCreated = 0
+plaintextDatabaseUriPrinted = false
+```
+
+The proof intentionally stopped short of claiming the disposable application reached `LIVE`. The Neon project was not deleted as part of the evidence recording.
 
 ## Neon Spike Audit
 
