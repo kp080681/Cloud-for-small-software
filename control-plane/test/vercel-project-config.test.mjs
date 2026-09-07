@@ -3,7 +3,6 @@ import fs from "node:fs";
 import path from "node:path";
 import test from "node:test";
 import {
-  disableGitAutoDeploymentsBody,
   ensureGitAutoDeploymentsDisabled,
   GitAutoDeployContainment,
   gitAutoDeploymentState,
@@ -12,114 +11,95 @@ import {
 
 const root = path.resolve(import.meta.dirname, "..");
 
-test("git auto-deploy state classifies disconnected, disabled, enabled, and unknown projects", () => {
+test("git auto-deploy state classifies only disconnected projects as safe", () => {
   assert.equal(gitAutoDeploymentState({ git: null, link: null }), "disconnected");
   assert.equal(gitAutoDeploymentsDisabled({ git: null, link: null }), true);
 
-  assert.equal(gitAutoDeploymentState({ git: { deploymentEnabled: false }, link: { type: "github" } }), "disabled");
-  assert.equal(gitAutoDeploymentsDisabled({ git: { deploymentEnabled: false }, link: { type: "github" } }), true);
+  assert.equal(gitAutoDeploymentState({ git: null, link: { type: "github" } }), "connected");
+  assert.equal(gitAutoDeploymentsDisabled({ git: null, link: { type: "github" } }), false);
 
-  assert.equal(gitAutoDeploymentState({ git: { deploymentEnabled: true }, link: { type: "github" } }), "enabled");
+  assert.equal(gitAutoDeploymentState({ git: { deploymentEnabled: false }, link: { type: "github" } }), "connected");
+  assert.equal(gitAutoDeploymentsDisabled({ git: { deploymentEnabled: false }, link: { type: "github" } }), false);
+
+  assert.equal(gitAutoDeploymentState({ git: { deploymentEnabled: true }, link: { type: "github" } }), "connected");
   assert.equal(gitAutoDeploymentsDisabled({ git: { deploymentEnabled: true }, link: { type: "github" } }), false);
 
   assert.equal(gitAutoDeploymentState({}), "unknown");
   assert.equal(gitAutoDeploymentsDisabled({}), false);
 });
 
-test("enabled new project is corrected and re-fetch verifies disabled", async () => {
-  const calls = [];
-  const result = await ensureGitAutoDeploymentsDisabled({
-    project: { id: "prj_1", git: { deploymentEnabled: true }, link: { type: "github" } },
-    updateProject: async (projectId, body) => {
-      calls.push({ projectId, body });
-      return { id: projectId };
-    },
-    getProject: async (projectId) => ({ id: projectId, git: { deploymentEnabled: false }, link: { type: "github" } }),
-  });
-
-  assert.equal(result.ok, true);
-  assert.equal(result.result, GitAutoDeployContainment.CORRECTED);
-  assert.deepEqual(calls, [{ projectId: "prj_1", body: disableGitAutoDeploymentsBody() }]);
-});
-
-test("provider update success but re-fetch still enabled fails closed", async () => {
-  const result = await ensureGitAutoDeploymentsDisabled({
-    project: { id: "prj_1", git: { deploymentEnabled: true }, link: { type: "github" } },
-    updateProject: async () => ({ id: "prj_1" }),
-    getProject: async () => ({ id: "prj_1", git: { deploymentEnabled: true }, link: { type: "github" } }),
-  });
-
-  assert.equal(result.ok, false);
-  assert.equal(result.result, GitAutoDeployContainment.VERIFICATION_FAILED);
-});
-
-test("identity-valid adopted project with enabled auto-deploy requires correction before use", async () => {
-  const result = await ensureGitAutoDeploymentsDisabled({
-    project: { id: "prj_adopted", git: { deploymentEnabled: true }, link: { type: "github" } },
-    updateProject: async () => ({ id: "prj_adopted" }),
-    getProject: async () => ({ id: "prj_adopted", git: { deploymentEnabled: false }, link: { type: "github" } }),
-  });
-
-  assert.equal(result.result, GitAutoDeployContainment.CORRECTED);
-  assert.equal(result.ok, true);
-});
-
-test("adopted project cannot be used when provider correction fails", async () => {
-  const error = new Error("forbidden");
-  error.status = 403;
-  const result = await ensureGitAutoDeploymentsDisabled({
-    project: { id: "prj_adopted", git: { deploymentEnabled: true }, link: { type: "github" } },
-    updateProject: async () => {
-      throw error;
-    },
-    getProject: async () => {
-      throw new Error("should not refetch after failed update");
-    },
-  });
-
-  assert.equal(result.ok, false);
-  assert.equal(result.result, GitAutoDeployContainment.PROVIDER_UNSUPPORTED);
-  assert.equal(result.providerHttpStatus, 403);
-});
-
-test("legacy runtime with disabled auto-deploy passes without mutation", async () => {
+test("disconnected project passes without provider mutation", async () => {
   let updateCalled = false;
   const result = await ensureGitAutoDeploymentsDisabled({
-    project: { id: "prj_legacy", git: { deploymentEnabled: false }, link: { type: "github" } },
+    project: { id: "prj_1", git: null, link: null },
     updateProject: async () => {
       updateCalled = true;
     },
     getProject: async () => {
-      throw new Error("should not refetch when already disabled");
+      throw new Error("should not refetch disconnected project");
     },
   });
 
   assert.equal(result.ok, true);
-  assert.equal(result.result, GitAutoDeployContainment.ALREADY_DISABLED);
+  assert.equal(result.result, GitAutoDeployContainment.ALREADY_DISCONNECTED);
   assert.equal(updateCalled, false);
 });
 
-test("legacy runtime drifted back to enabled must be corrected before build", async () => {
+test("connected project requires manual disconnect and is not patched", async () => {
+  let updateCalled = false;
+  let refetchCalled = false;
   const result = await ensureGitAutoDeploymentsDisabled({
-    project: { id: "prj_legacy", git: { deploymentEnabled: true }, link: { type: "github" } },
-    updateProject: async () => ({ id: "prj_legacy" }),
-    getProject: async () => ({ id: "prj_legacy", git: { deploymentEnabled: false }, link: { type: "github" } }),
-  });
-
-  assert.equal(result.ok, true);
-  assert.equal(result.result, GitAutoDeployContainment.CORRECTED);
-});
-
-test("provider response omitting Git state is unknown and not treated as disabled", async () => {
-  const result = await ensureGitAutoDeploymentsDisabled({
-    project: { id: "prj_unknown" },
-    updateProject: async () => ({ id: "prj_unknown" }),
-    getProject: async () => ({ id: "prj_unknown" }),
+    project: { id: "prj_1", git: null, link: { type: "github", repo: "kp080681/ssc-lifecycle-test" } },
+    updateProject: async () => {
+      updateCalled = true;
+    },
+    getProject: async () => {
+      refetchCalled = true;
+    },
   });
 
   assert.equal(result.ok, false);
-  assert.equal(result.result, GitAutoDeployContainment.VERIFICATION_FAILED);
+  assert.equal(result.result, GitAutoDeployContainment.ACTION_REQUIRED);
+  assert.equal(result.reason, "connected-git-requires-manual-disconnect");
+  assert.equal(updateCalled, false);
+  assert.equal(refetchCalled, false);
+});
+
+test("deploymentEnabled false on a connected project still requires disconnect", async () => {
+  const result = await ensureGitAutoDeploymentsDisabled({
+    project: { id: "prj_connected", git: { deploymentEnabled: false }, link: { type: "github" } },
+  });
+
+  assert.equal(result.ok, false);
+  assert.equal(result.result, GitAutoDeployContainment.ACTION_REQUIRED);
+});
+
+test("unknown project Git state is blocked without provider mutation", async () => {
+  let updateCalled = false;
+  const result = await ensureGitAutoDeploymentsDisabled({
+    project: { id: "prj_unknown" },
+    updateProject: async () => {
+      updateCalled = true;
+    },
+  });
+
+  assert.equal(result.ok, false);
+  assert.equal(result.result, GitAutoDeployContainment.UNKNOWN);
   assert.equal(result.state, "unknown");
+  assert.equal(updateCalled, false);
+});
+
+test("unsupported deploymentEnabled PATCH is no longer represented as successful containment", async () => {
+  const result = await ensureGitAutoDeploymentsDisabled({
+    project: { id: "prj_enabled", git: { deploymentEnabled: true }, link: { type: "github" } },
+    updateProject: async () => {
+      throw new Error("unsupported provider patch must not be attempted");
+    },
+  });
+
+  assert.equal(result.ok, false);
+  assert.notEqual(result.result, GitAutoDeployContainment.DISCONNECTED);
+  assert.equal(result.corrected, false);
 });
 
 test("SSC production paths enforce Git auto-deploy containment before secrets and build create", () => {
@@ -128,6 +108,11 @@ test("SSC production paths enforce Git auto-deploy containment before secrets an
   const executeBuild = fs.readFileSync(path.join(root, "trigger/execute-build.ts"), "utf8");
 
   assert.match(provisionRuntime, /ensureGitAutoDeploymentsDisabled/);
+  assert.doesNotMatch(
+    provisionRuntime,
+    /gitRepository:\s*\{/,
+    "runtime project creation must not create project-level Git linkage",
+  );
   assert.ok(
     provisionRuntime.indexOf("enforceRuntimeGitAutoDeployments") < provisionRuntime.indexOf("INSERT INTO app_runtimes"),
     "runtime provisioning must verify Git auto-deploy containment before local runtime attachment",

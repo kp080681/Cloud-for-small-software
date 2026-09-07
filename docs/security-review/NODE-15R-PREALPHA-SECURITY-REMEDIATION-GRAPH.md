@@ -496,7 +496,7 @@ Status: Node 15R.13 provider configuration verification is complete with documen
 | 15R.3 Production tenant-boundary wiring | COMPLETE | Tenant/resource assertions are wired into source, runtime, secret, build, and provider-resource paths. |
 | 15R.4 Provider mutation concurrency / fencing | COMPLETE | Atomic provider-operation claims and stale-result fencing prevent duplicate/non-terminal drift. |
 | 15R.5 Build timeout + remote cancellation | COMPLETE | Timeout/abandon paths attempt bounded provider containment and record evidence. |
-| 15R.6 Git auto-deploy containment | COMPLETE_CODE_PENDING_BEHAVIOR_TEST | Production code verifies/corrects auto-deploy containment and fails closed on unknown state. |
+| 15R.6 Git auto-deploy containment | FAIL_CLOSED_CONNECTED_GIT_REQUIRES_DISCONNECT | Production code requires disconnected project Git linkage; connected or unknown state fails closed. |
 | 15R.7 Source + live deployment identity | COMPLETE | Build and public access require independent provider/source/live identity proof. |
 | 15R.8 Secret environment boundary | COMPLETE_CODE_PENDING_LIVE_VERIFY | New SSC-managed secrets are applied to production only; live env inheritance review found no control-plane credential leakage. |
 | 15R.9 Reproducible dependencies / lockfile | COMPLETE | Control-plane dependency graph is locked and `npm ci` is validated. |
@@ -513,7 +513,7 @@ Status: Node 15R.13 provider configuration verification is complete with documen
 GITHUB_PROVIDER_STATUS = PASS
 VERCEL_PROJECT_IDENTITY = PASS
 VERCEL_CREDENTIAL_LEAST_PRIVILEGE = PARTIAL
-VERCEL_GIT_AUTODEPLOY_LIVE = PENDING_DISPOSABLE_BEHAVIOR_TEST
+VERCEL_GIT_AUTODEPLOY_LIVE = FAIL_CLOSED_CONNECTED_GIT_REQUIRES_DISCONNECT
 VERCEL_ENV_ISOLATION = PASS_VISUAL
 VERCEL_SPEND_CONTAINMENT = PLAN_LIMITED_ACCEPTED
 AWS_KMS_PROVIDER_STATUS = PASS
@@ -527,7 +527,7 @@ PROVIDER_CONFIGURATION_VERIFICATION = PASS_WITH_DOCUMENTED_LIMITATIONS
 
 ## Remaining Live Actions Before Independent Re-Review
 
-1. Vercel disposable Git auto-deploy behavioral verification.
+1. Vercel disposable Git auto-deploy behavioral verification after manual disconnect.
 2. Trigger production dependency-resolution behavior from the committed lockfile if still provider-dependent.
 3. Install `NEON_API_KEY` into Trigger Production only when managed PostgreSQL live activation is approved.
 4. Apply pending control-plane migrations in reviewed order before exercising new production paths.

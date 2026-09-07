@@ -149,7 +149,7 @@ Current Vercel API usage is provider-control-plane traffic, not customer workloa
 | Endpoint/Method | Code Path | Purpose | Destructive |
 | --- | --- | --- | --- |
 | `GET /v9/projects/{id-or-name}` | `provision-runtime.ts`, `configure-public-access.ts`, `create-disposable-orphan-fixture.mjs` | Runtime/project lookup and reconciliation | No |
-| `POST /v11/projects` | `provision-runtime.ts` | Create SSC-managed Vercel project with Git auto-deploy disabled | Creates provider resource |
+| `POST /v11/projects` | `provision-runtime.ts` | Create SSC-managed Vercel project while avoiding project-level Git linkage where possible | Creates provider resource |
 | `POST /v10/projects/{project}/env?upsert=true` | `apply-runtime-env.ts` | Apply app-scoped runtime environment variables | Mutates provider env |
 | `GET /v7/deployments` | `execute-build.ts`, `detect-orphan-resources.ts`, `create-disposable-orphan-fixture.mjs` | Deployment recovery/orphan inventory | No |
 | `GET /v13/deployments/{id}` | `execute-build.ts`, `reconcile-build.ts`, `configure-public-access.ts`, `detect-orphan-resources.ts`, `create-disposable-orphan-fixture.mjs` | Provider deployment status/source/public URL evidence | No |
@@ -205,7 +205,7 @@ No Neon provider/admin credential exposure to customer workloads was found in cu
 - 15.2 `tenant-boundary.mjs` and runtime-env joins prevent cross-workspace/app secret injection.
 - KMS encryption context binds secret decrypt operations to namespace/workspace/app/secret identity.
 - Provider operation ledger and Vercel SSC metadata constrain deployment recovery to deterministic SSC identity.
-- Vercel Git auto-deploy is disabled/verified during SSC project creation so provider-side Git pushes do not bypass SSC orchestration.
+- Vercel Git auto-deploy containment now requires disconnected project Git linkage; connected or unknown provider Git state fails closed before runtime attachment, secret injection, or build creation.
 
 ## 6. Build Isolation
 
@@ -217,7 +217,7 @@ Current controls:
 - `package.json` must exist under configured root.
 - Source identity mismatch during provider reconciliation fails the deployment.
 - Vercel deployments include deterministic SSC metadata for recovery.
-- Vercel Git auto-deployment is configured/verified through project settings helpers to keep SSC as lifecycle owner.
+- Vercel Git auto-deployment containment requires project Git linkage to be absent/disconnected so SSC remains lifecycle owner.
 
 Remaining risks:
 
@@ -520,7 +520,7 @@ Provider status:
 | GitHub App | PASS | Installation has read access to code and metadata, no observed write/admin permissions, and selected-repository scope only for `kp080681/dealupwebsite`, `kp080681/Vantage`, and `kp080681/Cloud-for-small-software`. |
 | Vercel project identity | PASS | Live SSC project bindings for `ssc-dealup-website` and `ssc-vantage` match the expected project ids, GitHub repositories, and `main` production branch. |
 | Vercel credential least privilege | PARTIAL | Current token is user-scoped for team `team_HxUKmwKrgjW0tCYyVUtYmBsA`; acceptable for founder-operated controlled alpha with SSC controls, not the final self-service credential model. |
-| Vercel Git auto-deploy live behavior | PENDING_DISPOSABLE_BEHAVIOR_TEST | 15R.6 code verifies/corrects `git.deploymentEnabled=false` and fails closed on unknown state, but live behavioral proof is still pending. |
+| Vercel Git auto-deploy live behavior | FAIL_CLOSED_CONNECTED_GIT_REQUIRES_DISCONNECT | Live disposable verification showed connected projects can report `git=null` with `link` present, and `PATCH /v9/projects/{id}` with `git.deploymentEnabled=false` returns HTTP 400 through SSC's REST path. 15R.6 now treats only disconnected linkage as safe and fails closed for connected or unknown state. |
 | Vercel environment isolation | PASS_VISUAL | Project env review found per-project grouping and no observed team-wide inheritance of SSC control-plane credentials into workload projects. |
 | Vercel spend containment | PLAN_LIMITED_ACCEPTED | Hobby plan; paid on-demand usage not enabled; spend management is unavailable on the current plan. |
 | AWS IAM/KMS | PASS | Runtime IAM policy allows `kms:GenerateDataKey` and `kms:Decrypt` on one specific SSC KMS key with no observed wildcard resource or runtime admin actions. |
@@ -542,7 +542,7 @@ This is an internal operating ceiling, not product pricing, public SLA, or RTO/R
 
 Remaining provider items:
 
-- Vercel disposable Git auto-deploy behavioral verification.
+- Vercel disposable Git auto-deploy behavioral verification after manual disconnect.
 - Trigger production dependency-resolution behavior from the committed lockfile if still provider-dependent.
 - Install `NEON_API_KEY` into Trigger Production only when managed PostgreSQL live activation is approved.
 - Apply pending control-plane migrations in reviewed order before exercising new production paths.

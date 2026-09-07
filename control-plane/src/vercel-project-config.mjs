@@ -1,9 +1,8 @@
 export const GitAutoDeployContainment = Object.freeze({
-  DISABLED: "GIT_AUTODEPLOY_DISABLED",
-  ALREADY_DISABLED: "GIT_AUTODEPLOY_ALREADY_DISABLED",
-  CORRECTED: "GIT_AUTODEPLOY_CORRECTED",
-  VERIFICATION_FAILED: "GIT_AUTODEPLOY_VERIFICATION_FAILED",
-  PROVIDER_UNSUPPORTED: "GIT_AUTODEPLOY_PROVIDER_UNSUPPORTED",
+  DISCONNECTED: "GIT_AUTODEPLOY_DISCONNECTED",
+  ALREADY_DISCONNECTED: "GIT_AUTODEPLOY_ALREADY_DISCONNECTED",
+  ACTION_REQUIRED: "GIT_AUTODEPLOY_DISCONNECT_REQUIRED",
+  UNKNOWN: "GIT_AUTODEPLOY_STATE_UNKNOWN",
 });
 
 export function sscManagedProjectGitSettings() {
@@ -12,17 +11,7 @@ export function sscManagedProjectGitSettings() {
   };
 }
 
-export function disableGitAutoDeploymentsBody() {
-  return {
-    git: {
-      deploymentEnabled: false,
-    },
-  };
-}
-
 export function gitAutoDeploymentState(project) {
-  if (project?.git?.deploymentEnabled === false) return "disabled";
-  if (project?.git?.deploymentEnabled === true) return "enabled";
   if (
     project &&
     Object.hasOwn(project, "git") &&
@@ -32,69 +21,45 @@ export function gitAutoDeploymentState(project) {
   ) {
     return "disconnected";
   }
-  if (project?.link || project?.git) return "enabled";
+  if (project?.link || project?.git) return "connected";
   return "unknown";
 }
 
 export function gitAutoDeploymentsDisabled(project) {
-  return ["disabled", "disconnected"].includes(gitAutoDeploymentState(project));
+  return gitAutoDeploymentState(project) === "disconnected";
 }
 
 export async function ensureGitAutoDeploymentsDisabled({
   project,
   projectId = project?.id,
-  getProject,
-  updateProject,
 } = {}) {
   const initialState = gitAutoDeploymentState(project);
   if (gitAutoDeploymentsDisabled(project)) {
     return {
       ok: true,
-      result: GitAutoDeployContainment.ALREADY_DISABLED,
+      result: GitAutoDeployContainment.ALREADY_DISCONNECTED,
       state: initialState,
       corrected: false,
     };
   }
 
-  if (!projectId || typeof updateProject !== "function" || typeof getProject !== "function") {
+  if (initialState === "connected") {
     return {
       ok: false,
-      result: GitAutoDeployContainment.PROVIDER_UNSUPPORTED,
+      result: GitAutoDeployContainment.ACTION_REQUIRED,
       state: initialState,
       corrected: false,
-      reason: "provider-update-or-refetch-unavailable",
-    };
-  }
-
-  try {
-    await updateProject(projectId, disableGitAutoDeploymentsBody());
-  } catch (error) {
-    return {
-      ok: false,
-      result: GitAutoDeployContainment.PROVIDER_UNSUPPORTED,
-      state: initialState,
-      corrected: false,
-      providerHttpStatus: error?.status ?? null,
-      reason: "provider-update-failed",
-    };
-  }
-
-  const verified = await getProject(projectId);
-  const verifiedState = gitAutoDeploymentState(verified);
-  if (gitAutoDeploymentsDisabled(verified)) {
-    return {
-      ok: true,
-      result: GitAutoDeployContainment.CORRECTED,
-      state: verifiedState,
-      corrected: true,
+      projectId: projectId ?? null,
+      reason: "connected-git-requires-manual-disconnect",
     };
   }
 
   return {
     ok: false,
-    result: GitAutoDeployContainment.VERIFICATION_FAILED,
-    state: verifiedState,
+    result: GitAutoDeployContainment.UNKNOWN,
+    state: initialState,
     corrected: false,
-    reason: "provider-state-not-disabled-after-update",
+    projectId: projectId ?? null,
+    reason: "provider-git-state-unavailable",
   };
 }

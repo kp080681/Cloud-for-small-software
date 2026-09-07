@@ -13,7 +13,6 @@ import {
   sscDeploymentMeta,
 } from "../src/vercel-deployment-recovery.mjs";
 import {
-  disableGitAutoDeploymentsBody,
   gitAutoDeploymentState,
   gitAutoDeploymentsDisabled,
 } from "../src/vercel-project-config.mjs";
@@ -104,15 +103,12 @@ test("public verification replay and terminal statuses do not move backward", ()
   assert.equal(isRecoveryTerminalStatus("HEALTH_CHECKING"), false);
 });
 
-test("SSC-managed Vercel projects disable Git automatic deployments", () => {
-  assert.deepEqual(disableGitAutoDeploymentsBody(), {
-    git: {
-      deploymentEnabled: false,
-    },
-  });
+test("SSC-managed Vercel projects require disconnected Git linkage", () => {
   assert.equal(gitAutoDeploymentsDisabled({ git: null, link: null }), true);
   assert.equal(gitAutoDeploymentState({}), "unknown");
   assert.equal(gitAutoDeploymentsDisabled({}), false);
-  assert.equal(gitAutoDeploymentsDisabled({ git: { deploymentEnabled: false } }), true);
+  assert.equal(gitAutoDeploymentState({ git: null, link: { type: "github" } }), "connected");
+  assert.equal(gitAutoDeploymentsDisabled({ git: { deploymentEnabled: false } }), false);
+  assert.equal(gitAutoDeploymentsDisabled({ git: { deploymentEnabled: false }, link: { type: "github" } }), false);
   assert.equal(gitAutoDeploymentsDisabled({ git: { deploymentEnabled: true }, link: { type: "github" } }), false);
 });

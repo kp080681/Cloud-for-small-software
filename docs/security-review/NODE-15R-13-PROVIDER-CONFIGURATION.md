@@ -9,7 +9,7 @@ Status: provider configuration verification is `PASS_WITH_DOCUMENTED_LIMITATIONS
 | GitHub security/least privilege | PASS |
 | Vercel project identity | PASS |
 | Vercel credential least privilege | PARTIAL |
-| Vercel Git auto-deploy live behavior | PENDING_DISPOSABLE_BEHAVIOR_TEST |
+| Vercel Git auto-deploy live behavior | FAIL_CLOSED_CONNECTED_GIT_REQUIRES_DISCONNECT |
 | Vercel environment isolation | PASS_VISUAL |
 | Vercel spend containment | PLAN_LIMITED_ACCEPTED |
 | AWS IAM/KMS | PASS |
@@ -99,10 +99,12 @@ Git auto-deploy:
 VERCEL_GIT_REPOSITORY_CONNECTED = true
 VERCEL_GIT_AUTODEPLOY_CODE_CONTROL = PASS
 VERCEL_GIT_AUTODEPLOY_LIVE_SETTING_VISIBLE = false
-VERCEL_GIT_AUTODEPLOY_LIVE_VERIFICATION = PENDING_DISPOSABLE_BEHAVIOR_TEST
+VERCEL_GIT_AUTODEPLOY_LIVE = FAIL_CLOSED_CONNECTED_GIT_REQUIRES_DISCONNECT
 ```
 
-15R.6 code sets and verifies `git.deploymentEnabled=false`, corrects adopted projects, checks drift before build, and fails closed on unknown state. The live dashboard/API review did not expose the effective value, so this remains a disposable behavior-test item.
+Live disposable verification showed Vercel can report a connected GitHub project as `git=null` with `link` present. It also showed that `PATCH /v9/projects/{id}` with `{ "git": { "deploymentEnabled": false } }` returns HTTP 400 through SSC's current REST path. SSC therefore no longer treats `git.deploymentEnabled=false` as a successful containment mechanism for controlled alpha.
+
+15R.6 now treats only absent/disconnected project Git linkage as safe. Connected or unknown state fails closed before runtime attachment, secret injection, or provider build creation. Production projects must not be silently disconnected by this node; a supported provider disconnect operation must be separately reviewed before automation.
 
 Spend:
 
@@ -208,12 +210,32 @@ Short-lived disposable proof resources may temporarily consume incremental usage
 
 ## Remaining Live Actions
 
-1. Vercel disposable Git auto-deploy behavioral verification.
+1. Vercel disposable Git auto-deploy behavioral verification after manual disconnect.
 2. Trigger production dependency-resolution behavior from the committed lockfile if still provider-dependent.
 3. Install `NEON_API_KEY` into Trigger Production only when managed PostgreSQL live activation is approved.
 4. Apply pending control-plane migrations in reviewed order before exercising new production paths.
 5. Run one controlled live SSC-managed database provisioning proof after migrations and credential activation.
 6. Keep KMS production/non-production environment separation as a future hardening/provider policy question unless current restore design makes it necessary.
+
+## Disposable Vercel Git Auto-Deploy Verification Plan
+
+Use only the disposable recovery-test/lifecycle-test project. Do not use DealUp, Vantage, or DealOS.
+
+1. Manually disconnect the disposable Vercel recovery-test project from Git in the Vercel dashboard.
+2. Verify the project API response reports `git: null` and `link: null`.
+3. Record the baseline provider deployment count for the disposable project.
+4. Make a harmless commit to `kp080681/ssc-lifecycle-test`.
+5. Wait long enough for any provider Git automation to appear.
+6. Re-read the provider deployment list and verify the count did not increase from the Git commit.
+7. Trigger one normal SSC/API-owned deployment for the disposable workload and verify it still creates the expected deployment.
+8. Clean up the disposable SSC/Vercel resources through the reviewed deletion path.
+
+Expected result:
+
+```text
+VERCEL_GIT_AUTODEPLOY_LIVE = DISCONNECTED_NO_AUTODEPLOY_OBSERVED
+SSC_API_TRIGGERED_DEPLOYMENT_STILL_WORKS = true
+```
 
 ## Decision
 
@@ -228,7 +250,7 @@ Known limitations remain:
 - Vercel user-scoped token.
 - Trigger unrestricted Root key exists operator-side.
 - Neon org-wide API key.
-- Disposable Vercel Git auto-deploy behavioral proof pending.
+- Disposable Vercel Git auto-deploy behavioral proof pending after manual disconnect.
 - Neon production credential not yet installed.
 - Pending database migrations.
 

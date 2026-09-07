@@ -253,15 +253,15 @@ Observed result:
 
 Concrete consequence: whether Git auto-deploys are prevented depends on Vercel semantics and actual project settings, not a repository-proven production invariant.
 
-Resolution: Node 15R.6 establishes a code-level invariant for controlled-alpha production paths. SSC verifies project identity first, then requires Vercel Git auto-deploy containment before runtime adoption/attachment, before secret decryption/env injection, and before provider deployment creation. Enabled or unknown Git state is corrected with a bounded provider project update and re-fetch; if verification still cannot prove `git.deploymentEnabled === false` or explicit disconnected state, SSC fails closed.
+Resolution: Node 15R.6 establishes a code-level invariant for controlled-alpha production paths. SSC verifies project identity first, then requires Vercel Git auto-deploy containment before runtime adoption/attachment, before secret decryption/env injection, and before provider deployment creation. Live disposable verification showed connected projects may report `git=null` with `link` present, and `PATCH /v9/projects/{id}` with `git.deploymentEnabled=false` returns HTTP 400 through SSC's current REST path. SSC now treats only absent/disconnected project Git linkage as safe; connected or unknown state fails closed with an explicit disconnect-required result.
 
-Provider behavior verified from Vercel documentation: `git.deploymentEnabled: false` turns off automatic deployments for all branches, while deprecated `skipGitConnectDuringLink` only opts out of the CLI prompt to connect Git during `vercel link`. The project REST API supports project updates through `PATCH /v9/projects/{idOrName}`; live provider verification is still required to confirm current DealUp/Vantage settings and token permissions in the actual Vercel team.
+Provider behavior verified live: SSC's attempted project PATCH path cannot correct `deploymentEnabled` for the disposable connected project. A supported provider disconnect operation is available at the provider level, but SSC will not silently disconnect production projects until such an operation is separately reviewed and wired.
 
 Required next node: none for code-level Git auto-deploy containment; continue with `15R.7 Source + LIVE Deployment Identity`.
 
-Provider verification required? Yes, live DealUp/Vantage projects must still be inspected/corrected by an operator after review. This Codex node did not mutate Vercel.
+Provider verification required? Yes. A disposable project must be manually disconnected, API-verified as `git:null` and `link:null`, then tested with a harmless Git commit to prove no provider deployment count increase. This Codex node did not mutate Vercel.
 
-Notes: unknown provider Git state is no longer treated as disabled. Explicit disconnected projects (`git: null`, `link: null`) and projects with `git.deploymentEnabled === false` are safe; connected/enabled or omitted state must be corrected and verified before use.
+Notes: unknown provider Git state is not treated as safe. Explicit disconnected projects (`git: null`, `link: null`) are safe; connected or omitted state must be manually disconnected or blocked before use.
 
 ### P1-E - Build/Source Reconciliation Can Pass With Missing Independently Observed Source Identity
 
@@ -583,7 +583,7 @@ Notes: this is a product-contract gap more than a hostile-code bug, but it is al
 | `15R-F04` | P1-A | `CONFIRMED`; `RESOLVED_BY_15R_4` | `15R.4` | Atomic provider-operation claim prevents duplicate Vercel deployment creation for one logical operation |
 | `15R-F05` | P1-B | `CONFIRMED`; `STATE_SAFETY_RESOLVED_BY_15R_4`; `REMOTE_CANCELLATION_RESOLVED_BY_15R_5` | `15R.5` | Delete/provision and abandon/build races cannot revive active state; abandoned in-flight provider deployments now receive remote containment attempts |
 | `15R-F06` | P1-C | `CONFIRMED`; `RESOLVED_BY_15R_5` | `15R.5` | Timeout/abandon now requests and records provider build containment instead of only marking local state |
-| `15R-F07` | P1-D | `CONFIRMED_PROVIDER_DEPENDENT`; `RESOLVED_CODE_PENDING_LIVE_VERIFY_BY_15R_6` | `15R.6` | Production paths now verify/correct Git auto-deploy containment before runtime use, secret injection, and build creation; live Vercel project verification remains required |
+| `15R-F07` | P1-D | `CONFIRMED_PROVIDER_DEPENDENT`; `FAIL_CLOSED_CONNECTED_GIT_REQUIRES_DISCONNECT_BY_15R_6` | `15R.6` | Production paths now require disconnected Git linkage before runtime use, secret injection, and build creation; connected or unknown projects fail closed |
 | `15R-F08` | P1-E | `CONFIRMED`; `RESOLVED_BY_15R_7` | `15R.7` | Build verification now requires provider-observed source identity matching the immutable build input |
 | `15R-F09` | P1-F | `CONFIRMED`; `RESOLVED_CODE_PENDING_LIVE_VERIFY_BY_15R_7` | `15R.7` | Public URL verification now requires provider alias/binding proof for the exact deployment before reachability can mark LIVE |
 | `15R-F10` | P1-G | `CONFIRMED`; `RESOLVED_CODE_PENDING_LIVE_VERIFY_BY_15R_8` | `15R.8` | Runtime env application now targets production only; live project env/shared-env verification remains required |
@@ -612,7 +612,7 @@ No speculative remediation nodes were added beyond reproduced findings. The 15R 
 
 `REMOTE_BUILD_CANCELLATION = RESOLVED_BY_15R_5`
 
-`GIT_AUTODEPLOY_CONTAINMENT = RESOLVED_CODE_PENDING_LIVE_VERIFY`
+`GIT_AUTODEPLOY_CONTAINMENT = FAIL_CLOSED_CONNECTED_GIT_REQUIRES_DISCONNECT`
 
 `SOURCE_IDENTITY_FAIL_OPEN = RESOLVED_BY_15R_7`
 
@@ -642,7 +642,7 @@ No speculative remediation nodes were added beyond reproduced findings. The 15R 
 
 `VERCEL_CREDENTIAL_LEAST_PRIVILEGE = PARTIAL`
 
-`VERCEL_GIT_AUTODEPLOY_LIVE = PENDING_DISPOSABLE_BEHAVIOR_TEST`
+`VERCEL_GIT_AUTODEPLOY_LIVE = FAIL_CLOSED_CONNECTED_GIT_REQUIRES_DISCONNECT`
 
 `AWS_KMS_PROVIDER_STATUS = PASS`
 
