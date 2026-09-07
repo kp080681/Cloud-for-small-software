@@ -153,73 +153,145 @@ export async function claimManagedDatabaseCreate(db, row) {
   return result.rowCount === 1 ? result.rows[0] : null;
 }
 
+export function managedDatabaseProviderResultAttachmentDecision(current) {
+  if (!current) return { action: "stale", reason: "DATABASE_ATTACH_TARGET_MISSING" };
+  if (current.app_deleted_at) return { action: "stale", reason: "APP_DELETED" };
+  if (current.deployment_status === "DELETING" || current.deployment_status === "DELETED") {
+    return { action: "stale", reason: "DEPLOYMENT_DELETING_OR_DELETED" };
+  }
+  if (!["PROVISIONING", "BUILDING"].includes(current.deployment_status)) {
+    return { action: "stale", reason: "DEPLOYMENT_STATE_INCOMPATIBLE" };
+  }
+  if (current.database_mode !== DatabaseMode.SSC_MANAGED) {
+    return { action: "stale", reason: "DATABASE_MODE_INCOMPATIBLE" };
+  }
+  if (![ManagedDatabaseStatus.INTENT_RECORDED, ManagedDatabaseStatus.CREATE_REQUESTED, ManagedDatabaseStatus.RECONCILIATION_REQUIRED].includes(current.database_status)) {
+    return { action: "stale", reason: "DATABASE_STATE_INCOMPATIBLE" };
+  }
+  return { action: "attach" };
+}
+
 export async function persistManagedDatabaseReady(db, { deployment, row, resource, connectionUri }) {
-  const secret = await encryptAppSecret(db, {
-    workspaceId: deployment.workspace_id,
-    appId: deployment.app_id,
-    name: "DATABASE_URL",
-    plaintext: ensureTlsConnectionString(connectionUri),
-  });
-  const binding = await db.query(
-    `INSERT INTO app_secret_bindings
-       (workspace_id, app_id, secret_id, env_key, target_environment)
-     VALUES ($1,$2,$3,'DATABASE_URL','production')
-     ON CONFLICT (app_id, env_key, target_environment) DO UPDATE SET
-       secret_id = EXCLUDED.secret_id,
-       updated_at = now()
-     RETURNING id`,
-    [deployment.workspace_id, deployment.app_id, secret.id],
-  );
-  const updated = await db.query(
-    `UPDATE app_databases
-        SET provider_project_id=$1,
-            provider_project_name=$2,
-            provider_branch_id=$3,
-            provider_endpoint_id=$4,
-            provider_database_id=$5,
-            provider_database_name=$6,
-            provider_role_name=$7,
-            connection_secret_id=$8,
-            status='READY',
-            delete_error_code=NULL,
-            delete_error_message=NULL,
-            metadata=metadata || $9::jsonb,
-            updated_at=now()
-      WHERE id=$10
-      RETURNING *`,
-    [
-      resource.providerProjectId,
-      resource.providerProjectName,
-      resource.providerBranchId,
-      resource.providerEndpointId,
-      resource.providerDatabaseId,
-      resource.providerDatabaseName,
-      resource.providerRoleName,
-      secret.id,
-      JSON.stringify({ sslmode: "require", plaintextPrinted: false, plaintextPersistedOutsideEncryptedSecret: false, bindingId: binding.rows[0]?.id ?? null }),
-      row.id,
-    ],
-  );
-  await db.query(
-    `UPDATE deployments
-        SET database_provider_id=$1,
-            updated_at=now()
-      WHERE id=$2`,
-    [resource.providerProjectId, deployment.id],
-  );
-  await recordDatabaseEvent(db, deployment, "DATABASE_READY", "Managed PostgreSQL is ready for runtime binding", {
-    provider: "neon",
-    providerProjectId: resource.providerProjectId,
-    providerProjectName: resource.providerProjectName,
-    providerBranchId: resource.providerBranchId,
-    providerEndpointId: resource.providerEndpointId,
-    providerDatabaseName: resource.providerDatabaseName,
-    providerRoleName: resource.providerRoleName,
-    secretName: "DATABASE_URL",
-    plaintextPrinted: false,
-    plaintextPersistedOutsideEncryptedSecret: false,
-  });
-  return updated.rows[0];
+  await db.query("BEGIN");
+  try {
+    const currentResult = await db.query(
+      `SELECT d.status AS deployment_status,
+              a.deleted_at AS app_deleted_at,
+              ad.status AS database_status,
+              ad.database_mode AS database_mode
+         FROM deployments d
+         JOIN apps a ON a.id=d.app_id
+         JOIN app_databases ad ON ad.id=$2 AND ad.app_id=d.app_id
+        WHERE d.id=$1
+        FOR UPDATE OF d,a,ad`,
+      [deployment.id, row.id],
+    );
+    const current = currentResult.rows[0] ?? null;
+    const decision = managedDatabaseProviderResultAttachmentDecision(current);
+    if (decision.action !== "attach") {
+      if (current) {
+        await db.query(
+          `INSERT INTO deployment_events
+             (deployment_id, from_status, to_status, event_type, message, metadata)
+           VALUES ($1,$2,$2,'DATABASE_PROVIDER_RESULT_STALE',
+                   'Managed PostgreSQL provider result was observed after app/deployment became incompatible', $3::jsonb)`,
+          [deployment.id, current.deployment_status, JSON.stringify({
+            provider: "neon",
+            providerProjectId: resource.providerProjectId,
+            providerProjectName: resource.providerProjectName,
+            staleReason: decision.reason,
+            providerResourceTraceable: Boolean(resource.providerProjectId || resource.providerProjectName),
+            plaintextPrinted: false,
+            plaintextPersistedOutsideEncryptedSecret: false,
+          })],
+        );
+      }
+      await db.query("COMMIT");
+      return {
+        result: "DATABASE_PROVIDER_RESULT_STALE",
+        stale: true,
+        staleReason: decision.reason,
+        provider_project_id: resource.providerProjectId,
+        provider_project_name: resource.providerProjectName,
+      };
+    }
+
+    const secret = await encryptAppSecret(db, {
+      workspaceId: deployment.workspace_id,
+      appId: deployment.app_id,
+      name: "DATABASE_URL",
+      plaintext: ensureTlsConnectionString(connectionUri),
+    });
+    const binding = await db.query(
+      `INSERT INTO app_secret_bindings
+         (workspace_id, app_id, secret_id, env_key, target_environment)
+       VALUES ($1,$2,$3,'DATABASE_URL','production')
+       ON CONFLICT (app_id, env_key, target_environment) DO UPDATE SET
+         secret_id = EXCLUDED.secret_id,
+         updated_at = now()
+       RETURNING id`,
+      [deployment.workspace_id, deployment.app_id, secret.id],
+    );
+    const updated = await db.query(
+      `UPDATE app_databases
+          SET provider_project_id=$1,
+              provider_project_name=$2,
+              provider_branch_id=$3,
+              provider_endpoint_id=$4,
+              provider_database_id=$5,
+              provider_database_name=$6,
+              provider_role_name=$7,
+              connection_secret_id=$8,
+              status='READY',
+              delete_error_code=NULL,
+              delete_error_message=NULL,
+              metadata=metadata || $9::jsonb,
+              updated_at=now()
+        WHERE id=$10
+        RETURNING *`,
+      [
+        resource.providerProjectId,
+        resource.providerProjectName,
+        resource.providerBranchId,
+        resource.providerEndpointId,
+        resource.providerDatabaseId,
+        resource.providerDatabaseName,
+        resource.providerRoleName,
+        secret.id,
+        JSON.stringify({ sslmode: "require", plaintextPrinted: false, plaintextPersistedOutsideEncryptedSecret: false, bindingId: binding.rows[0]?.id ?? null }),
+        row.id,
+      ],
+    );
+    await db.query(
+      `UPDATE deployments
+          SET database_provider_id=$1,
+              updated_at=now()
+        WHERE id=$2`,
+      [resource.providerProjectId, deployment.id],
+    );
+    await db.query(
+      `INSERT INTO deployment_events
+         (deployment_id, from_status, to_status, event_type, message, metadata)
+       VALUES ($1,$2,$2,'DATABASE_READY',$3,$4::jsonb)`,
+      [deployment.id, current.deployment_status, "Managed PostgreSQL is ready for runtime binding", JSON.stringify({
+        provider: "neon",
+        providerProjectId: resource.providerProjectId,
+        providerProjectName: resource.providerProjectName,
+        providerBranchId: resource.providerBranchId,
+        providerEndpointId: resource.providerEndpointId,
+        providerDatabaseName: resource.providerDatabaseName,
+        providerRoleName: resource.providerRoleName,
+        secretName: "DATABASE_URL",
+        plaintextPrinted: false,
+        plaintextPersistedOutsideEncryptedSecret: false,
+      })],
+    );
+    await db.query("COMMIT");
+    return updated.rows[0];
+  } catch (error) {
+    await db.query("ROLLBACK");
+    throw error;
+  }
 }
 
 export async function markManagedDatabaseReconciliationRequired(db, { deployment, row, reason, evidence = {} }) {

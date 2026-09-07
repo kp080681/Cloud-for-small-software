@@ -146,6 +146,8 @@ test("secret-bearing operator scripts resolve app target before accepting plaint
     storeSecret.indexOf("resolveAppTarget") < storeSecret.indexOf("CONTROL_PLANE_SECRET_VALUE"),
     "store-app-secret must resolve tenant/app before accepting plaintext secret value",
   );
+  assert.doesNotMatch(setSecret, /CONTROL_PLANE_SECRET_VALUE\)\.digest/);
+  assert.doesNotMatch(setSecret, /\bdigest,/);
 });
 
 test("deployment runner scripts accept immutable deployment id or workspace-scoped app target", () => {

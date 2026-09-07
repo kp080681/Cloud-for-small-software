@@ -132,10 +132,22 @@ export const provisionDatabase = task({
     const connectionUri = uriResponse?.uri ?? uriResponse?.connection_uri ?? uriResponse?.connectionUri;
     if (!connectionUri) throw new Error("Neon connection URI response did not include a URI");
 
-    await db.query("BEGIN");
     try {
       const ready = await persistManagedDatabaseReady(db, { deployment, row, resource: providerResource, connectionUri });
-      await db.query("COMMIT");
+      if (ready.stale) {
+        return {
+          result: "NODE_15R_14_DATABASE_PROVIDER_RESULT_STALE",
+          deploymentId: payload.deploymentId,
+          provider: "neon",
+          providerProjectId: ready.provider_project_id,
+          providerProjectName: ready.provider_project_name,
+          databaseMode: DatabaseMode.SSC_MANAGED,
+          providerResourceTraceable: true,
+          staleReason: ready.staleReason,
+          plaintextPrinted: false,
+          plaintextPersistedOutsideEncryptedSecret: false,
+        };
+      }
       return {
         result: "NODE_15R_12A_MANAGED_DATABASE_READY",
         deploymentId: payload.deploymentId,
@@ -150,7 +162,6 @@ export const provisionDatabase = task({
         plaintextPersistedOutsideEncryptedSecret: false,
       };
     } catch (error) {
-      await db.query("ROLLBACK");
       await recordDatabaseEvent(db, deployment, "DATABASE_PROVISIONING_FAILED", "Managed PostgreSQL provisioning failed after provider resource was observed", {
         provider: "neon",
         providerProjectId: providerResource.providerProjectId,

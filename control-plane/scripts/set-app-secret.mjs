@@ -1,4 +1,3 @@
-import crypto from "node:crypto";
 import pg from "pg";
 import { requireAppSlug, requireWorkspaceId, resolveAppTarget } from "../src/operator-targeting.mjs";
 import { encryptAppSecret } from "../src/secret-store.mjs";
@@ -20,7 +19,6 @@ try {
     if (!process.env[name]) throw new Error(`Missing required environment variable: ${name}`);
   }
 
-  const digest = crypto.createHash("sha256").update(process.env.CONTROL_PLANE_SECRET_VALUE).digest("hex");
   const stored = await encryptAppSecret(db, {
     workspaceId: app.workspace_id,
     appId: app.id,
@@ -34,7 +32,6 @@ try {
     appSlug: app.slug,
     secretId: stored.id,
     secretName: stored.name,
-    digest,
     plaintextPersisted: false,
     plaintextPrinted: false,
     ciphertextStored: true,

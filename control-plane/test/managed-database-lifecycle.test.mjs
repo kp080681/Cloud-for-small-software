@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
 import test from "node:test";
+import { KMSClient } from "@aws-sdk/client-kms";
 import {
   DatabaseMode,
   ManagedDatabaseStatus,
@@ -13,6 +14,7 @@ import {
   isSscManagedDatabaseName,
   managedDatabaseReconciliationKey,
   normalizeDatabaseMode,
+  persistManagedDatabaseReady,
   sscManagedDatabaseName,
 } from "../src/managed-database-lifecycle.mjs";
 import {
@@ -144,6 +146,99 @@ function probeDb() {
   };
 }
 
+function readyAttachmentDb({ deploymentStatus = "PROVISIONING", appDeletedAt = null, databaseStatus = ManagedDatabaseStatus.CREATE_REQUESTED } = {}) {
+  const calls = [];
+  const state = {
+    appDeletedAt,
+    appDatabaseStatus: databaseStatus,
+    deploymentStatus,
+    encryptedSecretWrites: 0,
+    bindingWrites: 0,
+    deploymentProviderId: null,
+    events: [],
+  };
+  return {
+    calls,
+    state,
+    async query(sql, params) {
+      calls.push({ sql, params });
+      if (sql === "BEGIN" || sql === "COMMIT" || sql === "ROLLBACK") return { rowCount: 0, rows: [] };
+      if (/SELECT d\.status AS deployment_status,[\s\S]+FOR UPDATE OF d,a,ad/.test(sql)) {
+        return {
+          rowCount: 1,
+          rows: [{
+            deployment_status: state.deploymentStatus,
+            app_deleted_at: state.appDeletedAt,
+            database_status: state.appDatabaseStatus,
+            database_mode: DatabaseMode.SSC_MANAGED,
+          }],
+        };
+      }
+      if (/INSERT INTO encrypted_secrets/.test(sql)) {
+        state.encryptedSecretWrites += 1;
+        return { rowCount: 1, rows: [{ id: "secret-created-after-delete", name: params[2], kms_key_id: params[7] }] };
+      }
+      if (/INSERT INTO app_secret_bindings/.test(sql)) {
+        state.bindingWrites += 1;
+        return { rowCount: 1, rows: [{ id: "binding-created-after-delete" }] };
+      }
+      if (/UPDATE app_databases[\s\S]+status='READY'/.test(sql)) {
+        state.appDatabaseStatus = ManagedDatabaseStatus.READY;
+        return {
+          rowCount: 1,
+          rows: [{
+            id: params[9],
+            workspace_id: workspaceId,
+            app_id: appId,
+            database_mode: DatabaseMode.SSC_MANAGED,
+            provider: "neon",
+            provider_project_id: params[0],
+            provider_project_name: params[1],
+            connection_secret_id: params[7],
+            status: state.appDatabaseStatus,
+          }],
+        };
+      }
+      if (/UPDATE deployments[\s\S]+SET database_provider_id=\$1/.test(sql)) {
+        state.deploymentProviderId = params[0];
+        return { rowCount: 1, rows: [] };
+      }
+      if (/INSERT INTO deployment_events/.test(sql)) {
+        const eventType = sql.includes("'DATABASE_PROVIDER_RESULT_STALE'") ? "DATABASE_PROVIDER_RESULT_STALE"
+          : sql.includes("'DATABASE_READY'") ? "DATABASE_READY"
+            : params[2];
+        const metadataParam = sql.includes("'DATABASE_PROVIDER_RESULT_STALE'") ? params[2]
+          : sql.includes("'DATABASE_READY'") ? params[3]
+            : params[4];
+        state.events.push({ eventType, metadata: JSON.parse(metadataParam) });
+        return { rowCount: 1, rows: [] };
+      }
+      throw new Error(`Unexpected SQL in readyAttachmentDb: ${sql}`);
+    },
+  };
+}
+
+function mockKmsForTest(t) {
+  const originalEnv = {
+    AWS_REGION: process.env.AWS_REGION,
+    AWS_KMS_KEY_ID: process.env.AWS_KMS_KEY_ID,
+  };
+  const originalSend = KMSClient.prototype.send;
+  process.env.AWS_REGION = "us-east-1";
+  process.env.AWS_KMS_KEY_ID = "arn:aws:kms:us-east-1:111122223333:key/test";
+  KMSClient.prototype.send = async () => ({
+    Plaintext: Buffer.alloc(32, 7),
+    CiphertextBlob: Buffer.from("encrypted-data-key"),
+  });
+  t.after(() => {
+    KMSClient.prototype.send = originalSend;
+    if (originalEnv.AWS_REGION === undefined) delete process.env.AWS_REGION;
+    else process.env.AWS_REGION = originalEnv.AWS_REGION;
+    if (originalEnv.AWS_KMS_KEY_ID === undefined) delete process.env.AWS_KMS_KEY_ID;
+    else process.env.AWS_KMS_KEY_ID = originalEnv.AWS_KMS_KEY_ID;
+  });
+}
+
 test("database modes are explicit and database-required legacy apps normalize to external", () => {
   assert.equal(normalizeDatabaseMode("NONE"), DatabaseMode.NONE);
   assert.equal(normalizeDatabaseMode("EXTERNAL"), DatabaseMode.EXTERNAL);
@@ -232,6 +327,165 @@ test("managed database deletion verifies tenant and provider identity before del
     () => deleteManagedDatabaseForApp(deleteDb({ ...row, workspace_id: "workspace-b" }), { workspaceId, appId, getProject: async () => null, deleteProject: async () => ({}) }),
     /workspace\/app ownership mismatch/,
   );
+});
+
+test("managed database provider result attaches only after current state fence passes", async (t) => {
+  mockKmsForTest(t);
+  const db = readyAttachmentDb();
+  const row = {
+    id: "db-row",
+    workspace_id: workspaceId,
+    app_id: appId,
+    database_mode: DatabaseMode.SSC_MANAGED,
+    provider: "neon",
+    provider_project_name: sscManagedDatabaseName({ workspaceId, appId }),
+    status: ManagedDatabaseStatus.CREATE_REQUESTED,
+  };
+
+  const ready = await persistManagedDatabaseReady(db, {
+    deployment,
+    row,
+    resource: {
+      providerProjectId: "neon-project",
+      providerProjectName: row.provider_project_name,
+      providerBranchId: "branch-id",
+      providerEndpointId: "endpoint-id",
+      providerDatabaseId: "database-id",
+      providerDatabaseName: "neondb",
+      providerRoleName: "neondb_owner",
+    },
+    connectionUri: "postgres://user:pass@example.neon.tech/neondb",
+  });
+
+  assert.equal(ready.status, ManagedDatabaseStatus.READY);
+  assert.equal(db.state.encryptedSecretWrites, 1);
+  assert.equal(db.state.bindingWrites, 1);
+  assert.equal(db.state.deploymentProviderId, "neon-project");
+  assert.equal(db.state.events.some((event) => event.eventType === "DATABASE_READY"), true);
+  assert.equal(db.state.events.some((event) => event.eventType === "DATABASE_PROVIDER_RESULT_STALE"), false);
+});
+
+test("stale managed database provider result must not attach after app deletion", async (t) => {
+  mockKmsForTest(t);
+  const db = readyAttachmentDb({
+    deploymentStatus: "DELETED",
+    appDeletedAt: new Date().toISOString(),
+    databaseStatus: ManagedDatabaseStatus.DELETED,
+  });
+  const staleDeployment = { ...deployment, status: "PROVISIONING" };
+  const staleRow = {
+    id: "db-row",
+    workspace_id: workspaceId,
+    app_id: appId,
+    database_mode: DatabaseMode.SSC_MANAGED,
+    provider: "neon",
+    provider_project_name: sscManagedDatabaseName({ workspaceId, appId }),
+    status: ManagedDatabaseStatus.CREATE_REQUESTED,
+  };
+
+  await persistManagedDatabaseReady(db, {
+    deployment: staleDeployment,
+    row: staleRow,
+    resource: {
+      providerProjectId: "neon-project-created-before-delete",
+      providerProjectName: staleRow.provider_project_name,
+      providerBranchId: "branch-id",
+      providerEndpointId: "endpoint-id",
+      providerDatabaseId: "database-id",
+      providerDatabaseName: "neondb",
+      providerRoleName: "neondb_owner",
+    },
+    connectionUri: "postgres://user:pass@example.neon.tech/neondb",
+  });
+
+  assert.equal(db.state.encryptedSecretWrites, 0, "stale provider result must not create a secret after deletion");
+  assert.equal(db.state.bindingWrites, 0, "stale provider result must not create a runtime env binding after deletion");
+  assert.equal(db.state.appDatabaseStatus, ManagedDatabaseStatus.DELETED, "deleted managed database row must not be marked READY");
+  assert.equal(db.state.deploymentProviderId, null, "deleted deployment must not be updated with a provider database id");
+  assert.equal(db.state.events.some((event) => event.eventType === "DATABASE_READY"), false, "stale provider result must not record DATABASE_READY");
+  assert.equal(db.state.events.some((event) => event.eventType === "DATABASE_PROVIDER_RESULT_STALE"), true, "stale provider result should be auditable");
+});
+
+test("stale managed database provider result must not attach while deletion is in progress", async (t) => {
+  mockKmsForTest(t);
+  const db = readyAttachmentDb({
+    deploymentStatus: "DELETING",
+    databaseStatus: ManagedDatabaseStatus.DELETING,
+  });
+  const row = {
+    id: "db-row",
+    workspace_id: workspaceId,
+    app_id: appId,
+    database_mode: DatabaseMode.SSC_MANAGED,
+    provider: "neon",
+    provider_project_name: sscManagedDatabaseName({ workspaceId, appId }),
+    status: ManagedDatabaseStatus.CREATE_REQUESTED,
+  };
+
+  const result = await persistManagedDatabaseReady(db, {
+    deployment,
+    row,
+    resource: {
+      providerProjectId: "neon-project-created-before-delete",
+      providerProjectName: row.provider_project_name,
+      providerBranchId: "branch-id",
+      providerEndpointId: "endpoint-id",
+      providerDatabaseId: "database-id",
+      providerDatabaseName: "neondb",
+      providerRoleName: "neondb_owner",
+    },
+    connectionUri: "postgres://user:pass@example.neon.tech/neondb",
+  });
+
+  assert.equal(result.result, "DATABASE_PROVIDER_RESULT_STALE");
+  assert.equal(result.staleReason, "DEPLOYMENT_DELETING_OR_DELETED");
+  assert.equal(db.state.encryptedSecretWrites, 0);
+  assert.equal(db.state.bindingWrites, 0);
+  assert.equal(db.state.appDatabaseStatus, ManagedDatabaseStatus.DELETING);
+  assert.equal(db.state.deploymentProviderId, null);
+  assert.equal(db.state.events.some((event) => event.eventType === "DATABASE_READY"), false);
+  assert.equal(db.state.events.some((event) => event.eventType === "DATABASE_PROVIDER_RESULT_STALE"), true);
+});
+
+test("stale managed database provider result must not attach after deployment is deleted", async (t) => {
+  mockKmsForTest(t);
+  const db = readyAttachmentDb({
+    deploymentStatus: "DELETED",
+    databaseStatus: ManagedDatabaseStatus.CREATE_REQUESTED,
+  });
+  const row = {
+    id: "db-row",
+    workspace_id: workspaceId,
+    app_id: appId,
+    database_mode: DatabaseMode.SSC_MANAGED,
+    provider: "neon",
+    provider_project_name: sscManagedDatabaseName({ workspaceId, appId }),
+    status: ManagedDatabaseStatus.CREATE_REQUESTED,
+  };
+
+  const result = await persistManagedDatabaseReady(db, {
+    deployment,
+    row,
+    resource: {
+      providerProjectId: "neon-project-created-before-delete",
+      providerProjectName: row.provider_project_name,
+      providerBranchId: "branch-id",
+      providerEndpointId: "endpoint-id",
+      providerDatabaseId: "database-id",
+      providerDatabaseName: "neondb",
+      providerRoleName: "neondb_owner",
+    },
+    connectionUri: "postgres://user:pass@example.neon.tech/neondb",
+  });
+
+  assert.equal(result.result, "DATABASE_PROVIDER_RESULT_STALE");
+  assert.equal(result.staleReason, "DEPLOYMENT_DELETING_OR_DELETED");
+  assert.equal(db.state.encryptedSecretWrites, 0);
+  assert.equal(db.state.bindingWrites, 0);
+  assert.equal(db.state.appDatabaseStatus, ManagedDatabaseStatus.CREATE_REQUESTED);
+  assert.equal(db.state.deploymentProviderId, null);
+  assert.equal(db.state.events.some((event) => event.eventType === "DATABASE_READY"), false);
+  assert.equal(db.state.events.some((event) => event.eventType === "DATABASE_PROVIDER_RESULT_STALE"), true);
 });
 
 test("provider identity mismatch refuses destructive managed database delete", async () => {
@@ -413,6 +667,15 @@ test("production orchestration provisions managed database before runtime env an
   const orchestrator = readControlPlaneFile("trigger/orchestrate-deployment.ts");
   assert.ok(orchestrator.indexOf("ssc-control-plane-provision-database") < orchestrator.indexOf("ssc-control-plane-provision-runtime"));
   assert.ok(orchestrator.indexOf("ssc-control-plane-provision-database") < orchestrator.indexOf("ssc-control-plane-apply-runtime-env"));
+});
+
+test("managed database READY replay returns before provider enumeration", () => {
+  const provisionDatabase = readControlPlaneFile("trigger/provision-database.ts");
+  const readyReplay = provisionDatabase.indexOf("row.status === ManagedDatabaseStatus.READY && row.connection_secret_id");
+  const providerEnumeration = provisionDatabase.indexOf("const candidates = await listNeonProjectsByName");
+  assert.ok(readyReplay > 0);
+  assert.ok(readyReplay < providerEnumeration);
+  assert.match(provisionDatabase.slice(readyReplay, providerEnumeration), /NODE_15R_12A_MANAGED_DATABASE_READY/);
 });
 
 test("app deletion clears managed database secret reference before deleting encrypted secrets", () => {
