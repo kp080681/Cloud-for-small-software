@@ -392,7 +392,65 @@ test("managed database deletion reconciles an unbound reconciliation-required pr
   assert.equal(db.state.row.status, ManagedDatabaseStatus.DELETED);
 });
 
-test("managed database deletion fails closed when create was requested but provider identity is unresolved", async () => {
+test("managed database deletion fails closed when provider identity cannot be reconciled", async () => {
+  const row = {
+    id: "db-row",
+    workspace_id: workspaceId,
+    app_id: appId,
+    database_mode: DatabaseMode.SSC_MANAGED,
+    provider: "neon",
+    provider_project_id: null,
+    provider_project_name: sscManagedDatabaseName({ workspaceId, appId }),
+    status: ManagedDatabaseStatus.CREATE_REQUESTED,
+  };
+  const db = deleteDb(row);
+
+  await assert.rejects(
+    () => deleteManagedDatabaseForApp(db, {
+      workspaceId,
+      appId,
+      getProject: async () => { throw new Error("must not look up a missing provider id"); },
+      deleteProject: async () => { throw new Error("must not delete without provider identity"); },
+    }),
+    /requires provider identity/,
+  );
+  assert.equal(db.state.row.status, ManagedDatabaseStatus.CREATE_REQUESTED);
+});
+
+test("managed database deletion treats reconciliation-required zero-match lookup as no provider resource", async () => {
+  const row = {
+    id: "db-row",
+    workspace_id: workspaceId,
+    app_id: appId,
+    database_mode: DatabaseMode.SSC_MANAGED,
+    provider: "neon",
+    provider_project_id: null,
+    provider_project_name: sscManagedDatabaseName({ workspaceId, appId }),
+    status: ManagedDatabaseStatus.RECONCILIATION_REQUIRED,
+  };
+  const db = deleteDb(row, { providerMatches: [] });
+  let deleteCalls = 0;
+
+  const result = await deleteManagedDatabaseForApp(db, {
+    workspaceId,
+    appId,
+    listProjectsByName: db.listProjectsByName,
+    getProject: async () => { throw new Error("must not look up a missing provider id"); },
+    deleteProject: async () => {
+      deleteCalls += 1;
+      throw new Error("must not delete without provider identity");
+    },
+  });
+
+  assert.equal(result.action, "deleted");
+  assert.equal(result.providerDeleted, false);
+  assert.equal(result.providerNotFound, true);
+  assert.equal(result.reconciledMissingProvider, true);
+  assert.equal(db.state.row.status, ManagedDatabaseStatus.DELETED);
+  assert.equal(deleteCalls, 0);
+});
+
+test("managed database deletion treats create-requested zero-match lookup as no provider resource", async () => {
   const row = {
     id: "db-row",
     workspace_id: workspaceId,
@@ -404,18 +462,115 @@ test("managed database deletion fails closed when create was requested but provi
     status: ManagedDatabaseStatus.CREATE_REQUESTED,
   };
   const db = deleteDb(row, { providerMatches: [] });
+  let deleteCalls = 0;
+
+  const result = await deleteManagedDatabaseForApp(db, {
+    workspaceId,
+    appId,
+    listProjectsByName: db.listProjectsByName,
+    getProject: async () => { throw new Error("must not look up a missing provider id"); },
+    deleteProject: async () => {
+      deleteCalls += 1;
+      throw new Error("must not delete without provider identity");
+    },
+  });
+
+  assert.equal(result.action, "deleted");
+  assert.equal(result.providerDeleted, false);
+  assert.equal(result.providerNotFound, true);
+  assert.equal(result.reconciledMissingProvider, true);
+  assert.equal(db.state.row.status, ManagedDatabaseStatus.DELETED);
+  assert.equal(deleteCalls, 0);
+});
+
+test("managed database deletion retry treats delete-failed zero-match lookup as no provider resource", async () => {
+  const row = {
+    id: "db-row",
+    workspace_id: workspaceId,
+    app_id: appId,
+    database_mode: DatabaseMode.SSC_MANAGED,
+    provider: "neon",
+    provider_project_id: null,
+    provider_project_name: sscManagedDatabaseName({ workspaceId, appId }),
+    status: ManagedDatabaseStatus.DELETE_FAILED,
+    delete_error_code: "DATABASE_DELETE_RECONCILIATION_REQUIRED",
+  };
+  const db = deleteDb(row, { providerMatches: [] });
+  let deleteCalls = 0;
+
+  const result = await deleteManagedDatabaseForApp(db, {
+    workspaceId,
+    appId,
+    listProjectsByName: db.listProjectsByName,
+    getProject: async () => { throw new Error("must not look up a missing provider id"); },
+    deleteProject: async () => {
+      deleteCalls += 1;
+      throw new Error("must not delete without provider identity");
+    },
+  });
+
+  assert.equal(result.action, "deleted");
+  assert.equal(result.providerDeleted, false);
+  assert.equal(result.providerNotFound, true);
+  assert.equal(result.reconciledMissingProvider, true);
+  assert.equal(db.state.row.status, ManagedDatabaseStatus.DELETED);
+  assert.equal(deleteCalls, 0);
+});
+
+test("ambiguous managed database deletion reconciliation still fails closed", async () => {
+  const providerProjectName = sscManagedDatabaseName({ workspaceId, appId });
+  const row = {
+    id: "db-row",
+    workspace_id: workspaceId,
+    app_id: appId,
+    database_mode: DatabaseMode.SSC_MANAGED,
+    provider: "neon",
+    provider_project_id: null,
+    provider_project_name: providerProjectName,
+    status: ManagedDatabaseStatus.RECONCILIATION_REQUIRED,
+  };
+  const db = deleteDb(row, {
+    providerMatches: [
+      { id: "neon-a", name: providerProjectName },
+      { id: "neon-b", name: providerProjectName },
+    ],
+  });
 
   await assert.rejects(
     () => deleteManagedDatabaseForApp(db, {
       workspaceId,
       appId,
       listProjectsByName: db.listProjectsByName,
+      getProject: async () => { throw new Error("must not look up ambiguous provider id"); },
+      deleteProject: async () => { throw new Error("must not delete ambiguous provider id"); },
+    }),
+    /ambiguous provider identity/,
+  );
+  assert.equal(db.state.row.status, ManagedDatabaseStatus.DELETE_FAILED);
+});
+
+test("managed database deletion fails closed when zero-resource provider lookup fails", async () => {
+  const row = {
+    id: "db-row",
+    workspace_id: workspaceId,
+    app_id: appId,
+    database_mode: DatabaseMode.SSC_MANAGED,
+    provider: "neon",
+    provider_project_id: null,
+    provider_project_name: sscManagedDatabaseName({ workspaceId, appId }),
+    status: ManagedDatabaseStatus.RECONCILIATION_REQUIRED,
+  };
+
+  await assert.rejects(
+    () => deleteManagedDatabaseForApp(deleteDb(row), {
+      workspaceId,
+      appId,
+      listProjectsByName: async () => { throw new Error("Neon lookup unavailable"); },
       getProject: async () => { throw new Error("must not look up a missing provider id"); },
       deleteProject: async () => { throw new Error("must not delete without provider identity"); },
     }),
-    /requires provider reconciliation/,
+    /Neon lookup unavailable/,
   );
-  assert.equal(db.state.row.status, ManagedDatabaseStatus.DELETE_FAILED);
 });
 
 test("managed database deletion verifies tenant and provider identity before delete", async () => {

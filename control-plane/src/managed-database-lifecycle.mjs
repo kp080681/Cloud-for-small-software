@@ -387,7 +387,7 @@ export async function deleteManagedDatabaseForApp(db, { workspaceId, appId, getP
       );
       throw new Error("Managed database deletion found ambiguous provider identity");
     }
-    if (matches.length === 0 && row.status === ManagedDatabaseStatus.INTENT_RECORDED) {
+    if (matches.length === 0) {
       await db.query(
         `UPDATE app_databases
             SET status='DELETED',
@@ -398,19 +398,13 @@ export async function deleteManagedDatabaseForApp(db, { workspaceId, appId, getP
           WHERE id=$1`,
         [row.id],
       );
-      return { action: "deleted", databaseMode: DatabaseMode.SSC_MANAGED, providerDeleted: false, providerNotFound: true, reconciledMissingProvider: true };
-    }
-    if (matches.length === 0) {
-      await db.query(
-        `UPDATE app_databases
-            SET status='DELETE_FAILED',
-                delete_error_code='DATABASE_DELETE_RECONCILIATION_REQUIRED',
-                delete_error_message='Managed database provider identity is not yet resolved for deletion',
-                updated_at=now()
-          WHERE id=$1`,
-        [row.id],
-      );
-      throw new Error("Managed database deletion requires provider reconciliation");
+      return {
+        action: "deleted",
+        databaseMode: DatabaseMode.SSC_MANAGED,
+        providerDeleted: false,
+        providerNotFound: true,
+        reconciledMissingProvider: true,
+      };
     }
     row.provider_project_id = matches[0].id;
     row.provider_project_name = matches[0].name;
