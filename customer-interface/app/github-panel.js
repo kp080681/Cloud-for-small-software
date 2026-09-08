@@ -7,6 +7,7 @@ export function GitHubPanel({ workspaceId, github }) {
   const router = useRouter();
   const [isPending, startTransition] = useTransition();
   const [repositoryState, setRepositoryState] = useState(null);
+  const [analysisState, setAnalysisState] = useState({});
   const [message, setMessage] = useState("");
 
   async function loadRepositories() {
@@ -40,7 +41,37 @@ export function GitHubPanel({ workspaceId, github }) {
     await loadRepositories();
   }
 
+  async function analyseRepository(repositoryId) {
+    setMessage("");
+    setAnalysisState((current) => ({
+      ...current,
+      [repositoryId]: { pending: true },
+    }));
+    const response = await fetch(
+      `/api/workspaces/${encodeURIComponent(workspaceId)}/repositories/${encodeURIComponent(repositoryId)}/analysis`,
+      { method: "POST" },
+    );
+    const body = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      const error = body.message || body.error || "Repository analysis could not be completed.";
+      setAnalysisState((current) => ({
+        ...current,
+        [repositoryId]: { pending: false, error },
+      }));
+      setMessage(error);
+      return;
+    }
+    setAnalysisState((current) => ({
+      ...current,
+      [repositoryId]: { pending: false, analysis: body.analysis },
+    }));
+    startTransition(() => router.refresh());
+  }
+
   const groups = repositoryState?.installations ?? [];
+  const analysesByRepository = new Map(
+    (github.repositoryAnalyses ?? []).map((analysis) => [analysis.repositoryId, analysis]),
+  );
 
   return (
     <section id="github-connection" className="panel section-gap github-panel">
@@ -66,10 +97,38 @@ export function GitHubPanel({ workspaceId, github }) {
       </div>
 
       {github.selectedRepositories.length ? (
-        <div className="selected-repos">
-          {github.selectedRepositories.map((repository) => (
-            <span key={repository.id}>{repository.fullName}</span>
-          ))}
+        <div className="analysis-list">
+          {github.selectedRepositories.map((repository) => {
+            const transient = analysisState[repository.id];
+            const analysis = transient?.analysis ?? analysesByRepository.get(repository.id);
+            const isAnalysing = Boolean(transient?.pending);
+            return (
+              <div className="analysis-item" key={repository.id}>
+                <div className="row">
+                  <div>
+                    <h3>{repository.name}</h3>
+                    <small>{repository.fullName} - {repository.defaultBranch}</small>
+                  </div>
+                  <button type="button" onClick={() => analyseRepository(repository.id)} disabled={isPending || isAnalysing}>
+                    {analysis ? "Analyse again" : "Analyse project"}
+                  </button>
+                </div>
+
+                {isAnalysing ? (
+                  <div className="analysis-progress" role="status">
+                    <span>Analysing repository...</span>
+                    <span>Source identified</span>
+                    <span>Framework detected</span>
+                    <span>Requirements detected</span>
+                  </div>
+                ) : null}
+
+                {transient?.error ? <p className="helptext" role="status">{transient.error}</p> : null}
+
+                {analysis ? <AnalysisResult analysis={analysis} /> : null}
+              </div>
+            );
+          })}
         </div>
       ) : null}
 
@@ -113,5 +172,40 @@ export function GitHubPanel({ workspaceId, github }) {
         </div>
       ) : null}
     </section>
+  );
+}
+
+function AnalysisResult({ analysis }) {
+  const handled = [
+    analysis.framework ? `Framework ${analysis.framework}` : null,
+    analysis.runtime ? `Runtime ${analysis.runtime}` : null,
+    analysis.packageManager ? `Package manager ${analysis.packageManager}` : null,
+    analysis.buildCommand ? `Build ${analysis.buildCommand}` : null,
+    analysis.databaseRequired ? `PostgreSQL ${analysis.databaseMode || "required"}` : "No database required",
+  ].filter(Boolean);
+  const attention = [
+    analysis.errorCode ? `Unsupported: ${analysis.errorCode}` : null,
+    ...(analysis.envRequirementNames?.length
+      ? analysis.envRequirementNames.map((name) => `Environment ${name}`)
+      : []),
+  ].filter(Boolean);
+
+  return (
+    <div className="analysis-result">
+      <div>
+        <strong>Source identified</strong>
+        <small>{analysis.branch} - {analysis.shortCommitSha || "pending"}</small>
+      </div>
+      <div className="analysis-columns">
+        <div>
+          <strong>Handled by Utplava</strong>
+          {handled.length ? handled.map((item) => <small key={item}>{item}</small>) : <small>Analysis is pending.</small>}
+        </div>
+        <div>
+          <strong>Your attention</strong>
+          {attention.length ? attention.map((item) => <small key={item}>{item}</small>) : <small>No required action detected yet.</small>}
+        </div>
+      </div>
+    </div>
   );
 }

@@ -37,12 +37,14 @@ test("customer interface does not import provider lifecycle operations", async (
     "AWS_KMS_KEY_ID",
     "@trigger.dev",
     "queueDeployment",
-    "prepare-build-input",
     "execute-build",
     "provision-runtime",
     "provision-database",
     "delete-app",
-    "deployment_build_inputs",
+    "deployment_provider_operations",
+    "app_runtimes",
+    "deployment_builds",
+    "deployment_health_checks",
   ];
 
   for (const file of await sourceFiles()) {
