@@ -1,12 +1,12 @@
 import crypto from "node:crypto";
-import { detectProject } from "../../../control-plane/src/project-detection.mjs";
+import { detectProject } from "../shared/control-plane/project-detection.mjs";
 import {
   ENV_DETECTOR_VERSION,
   detectEnvReferencesInSource,
   isDetectableSourcePath,
   mergeEnvDetections,
-} from "../../../control-plane/src/env-requirement-detection.mjs";
-import { sourceDetectedRequirement } from "../../../control-plane/src/env-requirement-reconciliation.mjs";
+} from "../shared/control-plane/env-requirement-detection.mjs";
+import { sourceDetectedRequirement } from "../shared/control-plane/env-requirement-reconciliation.mjs";
 import {
   SOURCE_LIMITS,
   assertDetectableSourceFileCount,
@@ -14,10 +14,10 @@ import {
   assertUniqueRepositoryPaths,
   normalizeRootDirectory,
   relativePathUnderRoot,
-} from "../../../control-plane/src/source-boundary.mjs";
+} from "../shared/control-plane/source-boundary.mjs";
 import {
   enforceActiveAppLimit,
-} from "../../../control-plane/src/workspace-resource-policy.mjs";
+} from "../shared/control-plane/workspace-resource-policy.mjs";
 import { getAuthorizedWorkspace } from "./customer-workspaces.mjs";
 import { createInstallationOctokit } from "./github-app.mjs";
 
