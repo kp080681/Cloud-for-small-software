@@ -14,10 +14,10 @@ BEGIN
       AND t.relname = 'github_repositories'
       AND c.contype = 'u'
       AND (
-        SELECT array_agg(a.attname ORDER BY key_position.ordinality)
+        SELECT array_agg(a.attname::text ORDER BY key_position.ordinality)
         FROM unnest(c.conkey) WITH ORDINALITY AS key_position(attnum, ordinality)
         JOIN pg_attribute a ON a.attrelid = t.oid AND a.attnum = key_position.attnum
-      ) = ARRAY['github_installation_id', 'github_repository_id']
+      ) = ARRAY['github_installation_id', 'github_repository_id']::text[]
   LOOP
     EXECUTE format('ALTER TABLE public.github_repositories DROP CONSTRAINT %I', stale_constraint);
   END LOOP;
@@ -34,10 +34,10 @@ BEGIN
       AND ix.indisunique
       AND c.oid IS NULL
       AND (
-        SELECT array_agg(a.attname ORDER BY key_position.ordinality)
+        SELECT array_agg(a.attname::text ORDER BY key_position.ordinality)
         FROM unnest(ix.indkey) WITH ORDINALITY AS key_position(attnum, ordinality)
         JOIN pg_attribute a ON a.attrelid = t.oid AND a.attnum = key_position.attnum
-      ) = ARRAY['github_installation_id', 'github_repository_id']
+      ) = ARRAY['github_installation_id', 'github_repository_id']::text[]
   LOOP
     EXECUTE format('DROP INDEX IF EXISTS public.%I', stale_index);
   END LOOP;

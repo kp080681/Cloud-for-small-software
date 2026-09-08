@@ -14,6 +14,8 @@ test("GitHub repository mapping migration removes stale global repository unique
 
   assert.match(migration, /pg_constraint/);
   assert.match(migration, /c\.conkey/);
+  assert.match(migration, /a\.attname::text/);
+  assert.match(migration, /ARRAY\['github_installation_id', 'github_repository_id'\]::text\[\]/);
   assert.match(migration, /github_installation_id', 'github_repository_id/);
   assert.match(migration, /ALTER TABLE public\.github_repositories DROP CONSTRAINT/);
   assert.match(migration, /DROP INDEX IF EXISTS public\./);
