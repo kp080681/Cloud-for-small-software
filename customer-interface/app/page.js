@@ -132,7 +132,7 @@ export default async function Home({ searchParams }) {
         <aside>
           <button className="active">Applications</button>
           <div className="nav-caption">Workspace</div>
-          <button disabled>GitHub connection</button>
+          <a className="nav-link" href="#github-connection">GitHub connection</a>
         </aside>
         <main id="main-content">
           <div className="crumb"><span>Applications</span></div>

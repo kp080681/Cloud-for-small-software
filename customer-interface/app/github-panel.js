@@ -43,7 +43,7 @@ export function GitHubPanel({ workspaceId, github }) {
   const groups = repositoryState?.installations ?? [];
 
   return (
-    <section className="panel section-gap github-panel">
+    <section id="github-connection" className="panel section-gap github-panel">
       <div className="row">
         <div>
           <h2>GitHub</h2>

@@ -206,7 +206,8 @@ aside {
   background: #f2ede5;
 }
 
-aside button {
+aside button,
+aside .nav-link {
   width: 100%;
   justify-content: flex-start;
   margin-bottom: 8px;
@@ -216,6 +217,19 @@ aside button.active {
   color: white;
   border-color: var(--accent-strong);
   background: var(--accent-strong);
+}
+
+aside .nav-link {
+  min-height: 40px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fffaf2;
+  color: var(--ink);
+  padding: 0 14px;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  text-decoration: none;
 }
 
 .nav-caption {
@@ -454,7 +468,8 @@ main#main-content {
     padding: 10px 14px;
   }
 
-  aside button {
+  aside button,
+  aside .nav-link {
     width: auto;
     min-width: max-content;
     margin: 0;

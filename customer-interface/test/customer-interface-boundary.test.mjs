@@ -86,3 +86,12 @@ test("workspace and session APIs use the authenticated customer-session guard", 
     assert.equal(text.includes("requireCustomerSession"), true, `${relative} lacks customer-session guard`);
   }
 });
+
+test("sidebar GitHub connection control targets the rendered GitHub panel", async () => {
+  const page = await readFile(path.join(root, "app", "page.js"), "utf8");
+  const panel = await readFile(path.join(root, "app", "github-panel.js"), "utf8");
+
+  assert.equal(page.includes('href="#github-connection"'), true);
+  assert.equal(page.includes("<button disabled>GitHub connection</button>"), false);
+  assert.equal(panel.includes('id="github-connection"'), true);
+});
