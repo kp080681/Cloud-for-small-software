@@ -21,10 +21,11 @@ export async function listWorkspaceGitHubInstallations(db, { customerId, workspa
   await getAuthorizedWorkspace(db, { customerId, workspaceId });
   const result = await db.query(
     `
-      SELECT id, github_installation_id, account_login, account_type
-      FROM github_installations
-      WHERE workspace_id = $1
-      ORDER BY created_at ASC
+      SELECT gi.id, gi.github_installation_id, gi.account_login, gi.account_type
+      FROM workspace_github_installations wgi
+      JOIN github_installations gi ON gi.id = wgi.github_installation_id
+      WHERE wgi.workspace_id = $1
+      ORDER BY wgi.created_at ASC
     `,
     [workspaceId],
   );
@@ -63,9 +64,10 @@ export async function connectGitHubInstallationToWorkspace(
   await db.query("BEGIN");
   try {
     await getAuthorizedWorkspace(db, { customerId, workspaceId });
+    const identity = await loadGitHubCustomerIdentity(db, { customerId });
     const existing = await db.query(
       `
-        SELECT id, workspace_id
+        SELECT id, workspace_id, github_installation_id, account_login, account_type
         FROM github_installations
         WHERE github_installation_id = $1
         FOR UPDATE
@@ -73,48 +75,63 @@ export async function connectGitHubInstallationToWorkspace(
       [parsedInstallationId],
     );
 
-    if (existing.rows[0] && existing.rows[0].workspace_id !== workspaceId) {
-      throw Object.assign(new Error("GitHub installation already belongs to another workspace."), {
-        status: 409,
-        code: "GITHUB_INSTALLATION_ALREADY_CONNECTED",
-      });
-    }
-
     const installation = await getInstallation({ installationId: parsedInstallationId });
+    assertInstallationMatchesCustomerIdentity(installation, identity);
     const account = installation.account ?? {};
-    const saved = await db.query(
-      `
-        INSERT INTO github_installations
-          (workspace_id, github_installation_id, account_login, account_type)
-        VALUES ($1, $2, $3, $4)
-        ON CONFLICT (github_installation_id)
-        DO UPDATE SET
-          account_login = EXCLUDED.account_login,
-          account_type = EXCLUDED.account_type,
-          updated_at = now()
-        RETURNING id, workspace_id, github_installation_id, account_login, account_type
-      `,
-      [
-        workspaceId,
-        parsedInstallationId,
-        account.login ?? "unknown",
-        account.type ?? null,
-      ],
-    );
-
-    if (saved.rows[0].workspace_id !== workspaceId) {
-      throw Object.assign(new Error("GitHub installation workspace mapping changed unexpectedly."), {
-        status: 409,
-        code: "GITHUB_INSTALLATION_WORKSPACE_MISMATCH",
-      });
+    let saved = existing.rows[0];
+    if (saved) {
+      const updated = await db.query(
+        `
+          UPDATE github_installations
+          SET account_login = $1,
+              account_type = $2,
+              updated_at = now()
+          WHERE id = $3
+          RETURNING id, workspace_id, github_installation_id, account_login, account_type
+        `,
+        [account.login ?? "unknown", account.type ?? null, saved.id],
+      );
+      saved = updated.rows[0];
+    } else {
+      const inserted = await db.query(
+        `
+          INSERT INTO github_installations
+            (workspace_id, github_installation_id, account_login, account_type)
+          VALUES ($1, $2, $3, $4)
+          RETURNING id, workspace_id, github_installation_id, account_login, account_type
+        `,
+        [
+          workspaceId,
+          parsedInstallationId,
+          account.login ?? "unknown",
+          account.type ?? null,
+        ],
+      );
+      saved = inserted.rows[0];
     }
+
+    await db.query(
+      `
+        INSERT INTO workspace_github_installations (
+          workspace_id,
+          github_installation_id,
+          connected_by_customer_identity_id
+        )
+        VALUES ($1, $2, $3)
+        ON CONFLICT (workspace_id, github_installation_id)
+        DO UPDATE SET
+          connected_by_customer_identity_id = EXCLUDED.connected_by_customer_identity_id,
+          updated_at = now()
+      `,
+      [workspaceId, saved.id, customerId],
+    );
 
     await db.query("COMMIT");
     return {
-      id: saved.rows[0].id,
-      githubInstallationId: String(saved.rows[0].github_installation_id),
-      accountLogin: saved.rows[0].account_login,
-      accountType: saved.rows[0].account_type,
+      id: saved.id,
+      githubInstallationId: String(saved.github_installation_id),
+      accountLogin: saved.account_login,
+      accountType: saved.account_type,
     };
   } catch (error) {
     await db.query("ROLLBACK").catch(() => {});
@@ -177,10 +194,11 @@ export async function selectWorkspaceRepository(
   await getAuthorizedWorkspace(db, { customerId, workspaceId });
   const installation = await db.query(
     `
-      SELECT id, workspace_id, github_installation_id
-      FROM github_installations
-      WHERE workspace_id = $1
-        AND github_installation_id = $2
+      SELECT gi.id, gi.workspace_id, gi.github_installation_id
+      FROM workspace_github_installations wgi
+      JOIN github_installations gi ON gi.id = wgi.github_installation_id
+      WHERE wgi.workspace_id = $1
+        AND gi.github_installation_id = $2
       LIMIT 1
     `,
     [workspaceId, parsedInstallationId],
@@ -237,6 +255,40 @@ export function safeStoredRepository(row) {
     defaultBranch: row.default_branch || "main",
     private: Boolean(row.private),
   };
+}
+
+export async function loadGitHubCustomerIdentity(db, { customerId }) {
+  const result = await db.query(
+    `
+      SELECT id, provider, provider_account_id, login
+      FROM customer_identities
+      WHERE id = $1
+        AND provider = 'github'
+      LIMIT 1
+    `,
+    [customerId],
+  );
+  if (!result.rows[0]) {
+    throw Object.assign(new Error("GitHub customer identity not found."), {
+      status: 403,
+      code: "GITHUB_CUSTOMER_IDENTITY_REQUIRED",
+    });
+  }
+  return result.rows[0];
+}
+
+export function assertInstallationMatchesCustomerIdentity(installation, identity) {
+  const account = installation?.account ?? {};
+  const accountType = String(account.type ?? "").toLowerCase();
+  const accountId = account.id === null || account.id === undefined ? null : String(account.id);
+  const identityProviderId = String(identity.provider_account_id);
+  if (accountType !== "user" || accountId !== identityProviderId) {
+    throw Object.assign(new Error("GitHub installation does not belong to the authenticated customer."), {
+      status: 403,
+      code: "GITHUB_INSTALLATION_ACCOUNT_MISMATCH",
+    });
+  }
+  return installation;
 }
 
 export { safeGitHubRepository };

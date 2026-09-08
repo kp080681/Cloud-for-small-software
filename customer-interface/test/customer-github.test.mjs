@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  assertInstallationMatchesCustomerIdentity,
   connectGitHubInstallationToWorkspace,
   listWorkspaceInstallationRepositories,
   selectWorkspaceRepository,
@@ -17,7 +18,16 @@ class FakeDb {
   constructor() {
     this.workspaces = [{ id: "workspace-a", name: "A" }, { id: "workspace-b", name: "B" }];
     this.memberships = [{ customerId: "identity-a", workspaceId: "workspace-a" }];
+    this.identities = [
+      {
+        id: "identity-a",
+        provider: "github",
+        provider_account_id: "1",
+        login: "kp080681",
+      },
+    ];
     this.installations = [];
+    this.workspaceInstallations = [];
     this.repositories = [];
     this.queries = [];
     this.installationSeq = 0;
@@ -43,9 +53,19 @@ class FakeDb {
       return { rows: workspace ? [workspace] : [] };
     }
 
-    if (text.includes("FROM github_installations") && text.includes("WHERE workspace_id = $1") && !text.includes("github_installation_id = $2")) {
+    if (text.includes("FROM customer_identities")) {
+      const [customerId] = params;
+      return { rows: this.identities.filter((row) => row.id === customerId && row.provider === "github") };
+    }
+
+    if (text.includes("FROM workspace_github_installations wgi") && text.includes("ORDER BY wgi.created_at ASC")) {
       const [workspaceId] = params;
-      return { rows: this.installations.filter((row) => row.workspace_id === workspaceId) };
+      const installationIds = this.workspaceInstallations
+        .filter((row) => row.workspaceId === workspaceId)
+        .map((row) => row.githubInstallationId);
+      return {
+        rows: this.installations.filter((row) => installationIds.includes(row.id)),
+      };
     }
 
     if (text.includes("FROM github_repositories") && text.includes("WHERE workspace_id = $1")) {
@@ -83,16 +103,42 @@ class FakeDb {
       return { rows: [row] };
     }
 
+    if (text.includes("UPDATE github_installations")) {
+      const [accountLogin, accountType, rowId] = params;
+      const row = this.installations.find((candidate) => candidate.id === rowId);
+      row.account_login = accountLogin;
+      row.account_type = accountType;
+      return { rows: [row] };
+    }
+
+    if (text.includes("INSERT INTO workspace_github_installations")) {
+      const [workspaceId, githubInstallationId, customerId] = params;
+      let row = this.workspaceInstallations.find(
+        (candidate) =>
+          candidate.workspaceId === workspaceId &&
+          candidate.githubInstallationId === githubInstallationId,
+      );
+      if (!row) {
+        row = { workspaceId, githubInstallationId, customerId };
+        this.workspaceInstallations.push(row);
+      } else {
+        row.customerId = customerId;
+      }
+      return { rows: [] };
+    }
+
     if (
-      text.includes("FROM github_installations") &&
-      text.includes("workspace_id = $1") &&
-      text.includes("github_installation_id = $2")
+      text.includes("FROM workspace_github_installations wgi") &&
+      text.includes("gi.github_installation_id = $2")
     ) {
       const [workspaceId, installationId] = params;
+      const installationIds = this.workspaceInstallations
+        .filter((row) => row.workspaceId === workspaceId)
+        .map((row) => row.githubInstallationId);
       return {
         rows: this.installations.filter(
           (row) =>
-            row.workspace_id === workspaceId &&
+            installationIds.includes(row.id) &&
             Number(row.github_installation_id) === Number(installationId),
         ),
       };
@@ -146,7 +192,7 @@ test("authenticated non-member cannot connect GitHub for another workspace", asy
         customerId: "identity-a",
         workspaceId: "workspace-b",
         installationId: 123,
-        getInstallation: async () => ({ account: { login: "kp080681", type: "User" } }),
+        getInstallation: async () => ({ account: { id: 1, login: "kp080681", type: "User" } }),
       }),
     /Workspace not found/,
   );
@@ -197,6 +243,10 @@ test("repository listing comes from GitHub App installation authority and is wor
     account_login: "kp080681",
     account_type: "User",
   });
+  db.workspaceInstallations.push({
+    workspaceId: "workspace-a",
+    githubInstallationId: "installation-row-1",
+  });
   db.repositories.push({
     id: "repo-selected",
     workspace_id: "workspace-a",
@@ -240,6 +290,10 @@ test("provider errors are sanitized in repository listing", async () => {
     account_login: "kp080681",
     account_type: "User",
   });
+  db.workspaceInstallations.push({
+    workspaceId: "workspace-a",
+    githubInstallationId: "installation-row-1",
+  });
 
   const result = await listWorkspaceInstallationRepositories(db, {
     customerId: "identity-a",
@@ -261,6 +315,10 @@ test("arbitrary or inaccessible repository submitted by the browser is rejected"
     github_installation_id: 123,
     account_login: "kp080681",
     account_type: "User",
+  });
+  db.workspaceInstallations.push({
+    workspaceId: "workspace-a",
+    githubInstallationId: "installation-row-1",
   });
 
   await assert.rejects(
@@ -284,6 +342,10 @@ test("valid installation repository can be selected idempotently without leaking
     github_installation_id: 123,
     account_login: "kp080681",
     account_type: "User",
+  });
+  db.workspaceInstallations.push({
+    workspaceId: "workspace-a",
+    githubInstallationId: "installation-row-1",
   });
 
   const first = await selectWorkspaceRepository(db, {
@@ -314,11 +376,85 @@ test("repeated GitHub installation callback is idempotent for the same workspace
     customerId: "identity-a",
     workspaceId: "workspace-a",
     installationId: 123,
-    getInstallation: async () => ({ account: { login: "kp080681", type: "User" } }),
+    getInstallation: async () => ({ account: { id: 1, login: "kp080681", type: "User" } }),
   };
 
   const first = await connectGitHubInstallationToWorkspace(db, payload);
   const second = await connectGitHubInstallationToWorkspace(db, payload);
   assert.equal(first.id, second.id);
   assert.equal(db.installations.length, 1);
+});
+
+test("existing installation already associated with legacy workspace can be mapped to authorized customer workspace", async () => {
+  const db = new FakeDb();
+  db.workspaces.push({ id: "legacy-workspace", name: "Internal Alpha" });
+  db.installations.push({
+    id: "installation-row-legacy",
+    workspace_id: "legacy-workspace",
+    github_installation_id: 156659108,
+    account_login: "kp080681",
+    account_type: "User",
+  });
+  db.workspaceInstallations.push({
+    workspaceId: "legacy-workspace",
+    githubInstallationId: "installation-row-legacy",
+  });
+
+  const connected = await connectGitHubInstallationToWorkspace(db, {
+    customerId: "identity-a",
+    workspaceId: "workspace-a",
+    installationId: 156659108,
+    getInstallation: async () => ({ account: { id: 1, login: "kp080681", type: "User" } }),
+  });
+
+  assert.equal(connected.id, "installation-row-legacy");
+  assert.equal(db.installations[0].workspace_id, "legacy-workspace");
+  assert.equal(
+    db.workspaceInstallations.some(
+      (row) =>
+        row.workspaceId === "workspace-a" &&
+        row.githubInstallationId === "installation-row-legacy" &&
+        row.customerId === "identity-a",
+    ),
+    true,
+  );
+});
+
+test("unauthorized customer cannot claim an existing GitHub installation by id", async () => {
+  const db = new FakeDb();
+  db.installations.push({
+    id: "installation-row-legacy",
+    workspace_id: "legacy-workspace",
+    github_installation_id: 156659108,
+    account_login: "kp080681",
+    account_type: "User",
+  });
+
+  await assert.rejects(
+    () =>
+      connectGitHubInstallationToWorkspace(db, {
+        customerId: "identity-a",
+        workspaceId: "workspace-a",
+        installationId: 156659108,
+        getInstallation: async () => ({ account: { id: 2, login: "other-user", type: "User" } }),
+      }),
+    /does not belong to the authenticated customer/,
+  );
+});
+
+test("GitHub installation identity check is limited to authenticated user account installs for V1", () => {
+  assert.doesNotThrow(() =>
+    assertInstallationMatchesCustomerIdentity(
+      { account: { id: 1, login: "kp080681", type: "User" } },
+      { provider_account_id: "1", login: "kp080681" },
+    ),
+  );
+  assert.throws(
+    () =>
+      assertInstallationMatchesCustomerIdentity(
+        { account: { id: 99, login: "some-org", type: "Organization" } },
+        { provider_account_id: "1", login: "kp080681" },
+      ),
+    /does not belong to the authenticated customer/,
+  );
 });

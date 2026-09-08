@@ -108,14 +108,25 @@ try {
     throw new Error("GitHub installation workspace mapping changed unexpectedly");
   }
 
+  await db.query(
+    `INSERT INTO workspace_github_installations
+       (workspace_id, github_installation_id)
+     VALUES ($1, $2)
+     ON CONFLICT (workspace_id, github_installation_id)
+     DO UPDATE SET updated_at = now()`,
+    [workspace.id, installationRowId],
+  );
+
   const synced = [];
   for (const repository of repositories) {
     const result = await db.query(
       `INSERT INTO github_repositories
          (workspace_id, github_installation_id, github_repository_id, full_name, default_branch, private)
        VALUES ($1, $2, $3, $4, $5, $6)
-       ON CONFLICT (github_installation_id, github_repository_id)
+       ON CONFLICT (workspace_id, full_name)
        DO UPDATE SET
+         github_installation_id = EXCLUDED.github_installation_id,
+         github_repository_id = EXCLUDED.github_repository_id,
          full_name = EXCLUDED.full_name,
          default_branch = EXCLUDED.default_branch,
          private = EXCLUDED.private,

@@ -3,7 +3,10 @@ import fs from "node:fs";
 
 export const REQUIRED_CONTROL_PLANE_TABLES = Object.freeze([
   "workspaces",
+  "customer_identities",
+  "customer_workspace_memberships",
   "github_installations",
+  "workspace_github_installations",
   "github_repositories",
   "apps",
   "deployments",
@@ -50,8 +53,11 @@ export const REQUIRED_CONTROL_PLANE_COLUMNS = Object.freeze({
 });
 
 export const REQUIRED_CONTROL_PLANE_UNIQUE_CONSTRAINTS = Object.freeze([
+  { table: "customer_identities", columns: ["provider", "provider_account_id"] },
+  { table: "customer_workspace_memberships", columns: ["customer_identity_id", "workspace_id"] },
   { table: "github_installations", columns: ["github_installation_id"] },
-  { table: "github_repositories", columns: ["github_installation_id", "github_repository_id"] },
+  { table: "workspace_github_installations", columns: ["workspace_id", "github_installation_id"] },
+  { table: "github_repositories", columns: ["workspace_id", "github_installation_id", "github_repository_id"] },
   { table: "github_repositories", columns: ["workspace_id", "full_name"] },
   { table: "apps", columns: ["workspace_id", "slug"] },
   { table: "deployments", columns: ["deployment_key"] },
