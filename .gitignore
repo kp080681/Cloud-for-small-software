@@ -1,6 +1,7 @@
 node_modules/
 control-plane/node_modules/
 control-plane/.ssc-backups/
+customer-interface/.next/
 
 .env
 .env.*
