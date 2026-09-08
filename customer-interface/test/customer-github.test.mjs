@@ -124,7 +124,25 @@ class FakeDb {
       } else {
         row.customerId = customerId;
       }
-      return { rows: [] };
+      return { rows: [{ workspace_id: workspaceId, github_installation_id: githubInstallationId }] };
+    }
+
+    if (
+      text.includes("FROM workspace_github_installations") &&
+      text.includes("WHERE workspace_id = $1") &&
+      text.includes("AND github_installation_id = $2")
+    ) {
+      const [workspaceId, githubInstallationId] = params;
+      const row = this.workspaceInstallations.find(
+        (candidate) =>
+          candidate.workspaceId === workspaceId &&
+          candidate.githubInstallationId === githubInstallationId,
+      );
+      return {
+        rows: row
+          ? [{ workspace_id: row.workspaceId, github_installation_id: row.githubInstallationId }]
+          : [],
+      };
     }
 
     if (
@@ -418,6 +436,42 @@ test("existing installation already associated with legacy workspace can be mapp
     ),
     true,
   );
+});
+
+test("legacy global installation is not connected for a customer workspace until mapping is persisted", async () => {
+  const db = new FakeDb();
+  db.workspaces.push({ id: "legacy-workspace", name: "Internal Alpha" });
+  db.installations.push({
+    id: "installation-row-legacy",
+    workspace_id: "legacy-workspace",
+    github_installation_id: 156659108,
+    account_login: "kp080681",
+    account_type: "User",
+  });
+  db.workspaceInstallations.push({
+    workspaceId: "legacy-workspace",
+    githubInstallationId: "installation-row-legacy",
+  });
+
+  const before = await listWorkspaceInstallationRepositories(db, {
+    customerId: "identity-a",
+    workspaceId: "workspace-a",
+  });
+  assert.equal(before.connectionStatus, "NOT_CONNECTED");
+
+  await connectGitHubInstallationToWorkspace(db, {
+    customerId: "identity-a",
+    workspaceId: "workspace-a",
+    installationId: 156659108,
+    getInstallation: async () => ({ account: { id: 1, login: "kp080681", type: "User" } }),
+  });
+
+  const after = await listWorkspaceInstallationRepositories(db, {
+    customerId: "identity-a",
+    workspaceId: "workspace-a",
+  });
+  assert.equal(after.connectionStatus, "CONNECTED");
+  assert.equal(after.installations[0].installation.githubInstallationId, "156659108");
 });
 
 test("unauthorized customer cannot claim an existing GitHub installation by id", async () => {

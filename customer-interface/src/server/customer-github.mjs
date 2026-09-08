@@ -122,9 +122,26 @@ export async function connectGitHubInstallationToWorkspace(
         DO UPDATE SET
           connected_by_customer_identity_id = EXCLUDED.connected_by_customer_identity_id,
           updated_at = now()
+        RETURNING workspace_id, github_installation_id
       `,
       [workspaceId, saved.id, customerId],
     );
+    const mapping = await db.query(
+      `
+        SELECT workspace_id, github_installation_id
+        FROM workspace_github_installations
+        WHERE workspace_id = $1
+          AND github_installation_id = $2
+        LIMIT 1
+      `,
+      [workspaceId, saved.id],
+    );
+    if (!mapping.rows[0]) {
+      throw Object.assign(new Error("GitHub installation workspace mapping was not persisted."), {
+        status: 500,
+        code: "GITHUB_INSTALLATION_MAPPING_NOT_PERSISTED",
+      });
+    }
 
     await db.query("COMMIT");
     return {
