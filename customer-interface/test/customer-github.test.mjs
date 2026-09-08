@@ -6,6 +6,7 @@ import {
   selectWorkspaceRepository,
 } from "../src/server/customer-github.mjs";
 import {
+  githubInstallCallbackRedirectPath,
   sealGitHubInstallState,
   unsealGitHubInstallState,
 } from "../src/server/github-install-state.mjs";
@@ -159,6 +160,19 @@ test("tampered GitHub installation callback state is rejected by sealed state va
   const state = await unsealGitHubInstallState(sealed, secret);
   assert.notEqual("tampered", state.state);
   assert.equal(await unsealGitHubInstallState(`${sealed}x`, secret), null);
+});
+
+test("root setup URL handoff preserves GitHub installation callback parameters", () => {
+  assert.equal(
+    githubInstallCallbackRedirectPath({
+      workspace: "workspace-a",
+      installation_id: "123",
+      setup_action: "install",
+      state: "nonce",
+    }),
+    "/api/github/install/callback?state=nonce&installation_id=123&setup_action=install",
+  );
+  assert.equal(githubInstallCallbackRedirectPath({ workspace: "workspace-a" }), null);
 });
 
 test("OAuth login alone does not grant repository access", async () => {

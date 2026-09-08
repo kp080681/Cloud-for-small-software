@@ -48,3 +48,18 @@ export function clearGitHubInstallStateCookieOptions() {
     maxAge: 0,
   };
 }
+
+export function githubInstallCallbackRedirectPath(searchParams) {
+  const state = typeof searchParams?.state === "string" ? searchParams.state : null;
+  const installationId =
+    typeof searchParams?.installation_id === "string" ? searchParams.installation_id : null;
+  const setupAction =
+    typeof searchParams?.setup_action === "string" ? searchParams.setup_action : null;
+
+  if (!state && !installationId && !setupAction) return null;
+  const callback = new URLSearchParams();
+  if (state) callback.set("state", state);
+  if (installationId) callback.set("installation_id", installationId);
+  if (setupAction) callback.set("setup_action", setupAction);
+  return `/api/github/install/callback?${callback.toString()}`;
+}

@@ -1,5 +1,6 @@
 import { redirect } from "next/navigation";
 import { getCustomerShell } from "@/src/server/customer-shell.mjs";
+import { githubInstallCallbackRedirectPath } from "@/src/server/github-install-state.mjs";
 import { selectedWorkspaceCookieName } from "@/src/server/session.mjs";
 import { WorkspaceSelectForm, WorkspaceRenameForm } from "./workspace-forms.js";
 import { GitHubPanel } from "./github-panel.js";
@@ -104,6 +105,9 @@ function Applications({ apps }) {
 
 export default async function Home({ searchParams }) {
   const params = await searchParams;
+  const githubInstallCallback = githubInstallCallbackRedirectPath(params);
+  if (githubInstallCallback) redirect(githubInstallCallback);
+
   const workspaceId = typeof params?.workspace === "string" ? params.workspace : null;
   const shell = await getCustomerShell({ selectedWorkspaceId: workspaceId });
 
