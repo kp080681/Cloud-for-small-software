@@ -388,6 +388,91 @@ test("valid installation repository can be selected idempotently without leaking
   assert.equal(serialized.includes("privateKey"), false);
 });
 
+test("same installation repository can be selected in legacy and customer workspaces independently", async () => {
+  const db = new FakeDb();
+  db.workspaces.push({ id: "legacy-workspace", name: "Internal Alpha" });
+  db.installations.push({
+    id: "installation-row-legacy",
+    workspace_id: "legacy-workspace",
+    github_installation_id: 156659108,
+    account_login: "kp080681",
+    account_type: "User",
+  });
+  db.workspaceInstallations.push(
+    {
+      workspaceId: "legacy-workspace",
+      githubInstallationId: "installation-row-legacy",
+    },
+    {
+      workspaceId: "workspace-a",
+      githubInstallationId: "installation-row-legacy",
+    },
+  );
+  db.repositories.push({
+    id: "repo-legacy",
+    workspace_id: "legacy-workspace",
+    github_installation_id: "installation-row-legacy",
+    github_repository_id: 9001,
+    full_name: "kp080681/dealupwebsite",
+    default_branch: "main",
+    private: true,
+  });
+
+  const selected = await selectWorkspaceRepository(db, {
+    customerId: "identity-a",
+    workspaceId: "workspace-a",
+    installationId: 156659108,
+    repositoryId: "9001",
+    listRepositories: async () => [providerRepository],
+  });
+  const repeated = await selectWorkspaceRepository(db, {
+    customerId: "identity-a",
+    workspaceId: "workspace-a",
+    installationId: 156659108,
+    repositoryId: "9001",
+    listRepositories: async () => [providerRepository],
+  });
+  const after = await listWorkspaceInstallationRepositories(db, {
+    customerId: "identity-a",
+    workspaceId: "workspace-a",
+    listRepositories: async () => [providerRepository],
+  });
+
+  assert.equal(selected.id, repeated.id);
+  assert.equal(db.repositories.length, 2);
+  assert.equal(db.repositories.some((row) => row.workspace_id === "legacy-workspace"), true);
+  assert.equal(db.repositories.some((row) => row.workspace_id === "workspace-a"), true);
+  assert.equal(after.installations[0].repositories[0].selected, true);
+});
+
+test("workspace without installation mapping cannot select through a globally known installation", async () => {
+  const db = new FakeDb();
+  db.memberships.push({ customerId: "identity-a", workspaceId: "workspace-b" });
+  db.installations.push({
+    id: "installation-row-legacy",
+    workspace_id: "workspace-a",
+    github_installation_id: 156659108,
+    account_login: "kp080681",
+    account_type: "User",
+  });
+  db.workspaceInstallations.push({
+    workspaceId: "workspace-a",
+    githubInstallationId: "installation-row-legacy",
+  });
+
+  await assert.rejects(
+    () =>
+      selectWorkspaceRepository(db, {
+        customerId: "identity-a",
+        workspaceId: "workspace-b",
+        installationId: 156659108,
+        repositoryId: "9001",
+        listRepositories: async () => [providerRepository],
+      }),
+    /GitHub connection not found/,
+  );
+});
+
 test("repeated GitHub installation callback is idempotent for the same workspace", async () => {
   const db = new FakeDb();
   const payload = {
