@@ -32,7 +32,6 @@ test("customer interface does not import provider lifecycle operations", async (
     "VERCEL_TOKEN",
     "NEON_API_KEY",
     "TRIGGER_SECRET_KEY",
-    "GITHUB_APP_PRIVATE_KEY",
     "AWS_ACCESS_KEY_ID",
     "AWS_SECRET_ACCESS_KEY",
     "AWS_KMS_KEY_ID",
@@ -51,6 +50,18 @@ test("customer interface does not import provider lifecycle operations", async (
     for (const token of forbidden) {
       assert.equal(text.includes(token), false, `${path.relative(root, file)} contains ${token}`);
     }
+  }
+});
+
+test("GitHub App private key access is isolated to the server adapter", async () => {
+  for (const file of await sourceFiles()) {
+    const text = await readFile(file, "utf8");
+    if (!text.includes("GITHUB_APP_PRIVATE_KEY")) continue;
+    assert.equal(
+      path.relative(root, file),
+      path.join("src", "server", "github-app.mjs"),
+      "GitHub App private key must stay out of route/client modules",
+    );
   }
 });
 

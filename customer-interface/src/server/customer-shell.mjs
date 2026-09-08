@@ -14,6 +14,10 @@ import {
   listAuthorizedWorkspaces,
   listWorkspaceApplications,
 } from "./customer-workspaces.mjs";
+import {
+  listSelectedWorkspaceRepositories,
+  listWorkspaceGitHubInstallations,
+} from "./customer-github.mjs";
 
 export async function readCurrentSession(cookieStore = null) {
   const store = cookieStore ?? (await cookies());
@@ -53,6 +57,14 @@ export async function getCustomerShell({ selectedWorkspaceId = null } = {}) {
       customerId: session.customerId,
       workspaceId: currentWorkspace.id,
     });
+    const githubInstallations = await listWorkspaceGitHubInstallations(db, {
+      customerId: session.customerId,
+      workspaceId: currentWorkspace.id,
+    });
+    const selectedRepositories = await listSelectedWorkspaceRepositories(db, {
+      customerId: session.customerId,
+      workspaceId: currentWorkspace.id,
+    });
 
     return {
       ...publicSession(session),
@@ -60,6 +72,11 @@ export async function getCustomerShell({ selectedWorkspaceId = null } = {}) {
       selectedWorkspaceId: currentWorkspace.id,
       currentWorkspace,
       apps,
+      github: {
+        connected: githubInstallations.length > 0,
+        installations: githubInstallations,
+        selectedRepositories,
+      },
     };
   } finally {
     await db.end();

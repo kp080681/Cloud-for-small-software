@@ -386,6 +386,42 @@ main#main-content {
   padding: 0 12px;
 }
 
+.github-panel {
+  display: grid;
+  gap: 18px;
+}
+
+.github-actions {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.selected-repos {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.selected-repos span,
+.repo-group-title {
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 7px 10px;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.repository-list {
+  display: grid;
+  gap: 14px;
+}
+
+.repository-group {
+  display: grid;
+  gap: 8px;
+}
+
 @media (max-width: 760px) {
   header {
     height: auto;

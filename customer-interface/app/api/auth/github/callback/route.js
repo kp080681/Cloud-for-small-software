@@ -1,5 +1,4 @@
 import { cookies } from "next/headers";
-import { redirect } from "next/navigation";
 import { connectDatabase } from "@/src/server/db.mjs";
 import {
   exchangeGitHubCodeForToken,
@@ -30,7 +29,7 @@ export async function GET(request) {
   const expectedState = store.get(oauthStateCookieName)?.value;
 
   if (!code || !state || !expectedState || state !== expectedState) {
-    redirect("/?auth=failed");
+    return Response.redirect(new URL("/?auth=failed", request.url));
   }
 
   let db;
@@ -57,9 +56,9 @@ export async function GET(request) {
     store.set(sessionCookieName, session, sessionCookieOptions());
     store.set(selectedWorkspaceCookieName, workspace.id, sessionCookieOptions());
     store.set(oauthStateCookieName, "", clearCookieOptions());
-    redirect(`/?workspace=${encodeURIComponent(workspace.id)}`);
+    return Response.redirect(new URL(`/?workspace=${encodeURIComponent(workspace.id)}`, request.url));
   } catch {
-    redirect("/?auth=failed");
+    return Response.redirect(new URL("/?auth=failed", request.url));
   } finally {
     if (db) await db.end();
   }

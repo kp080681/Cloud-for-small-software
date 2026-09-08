@@ -2,6 +2,7 @@ import { redirect } from "next/navigation";
 import { getCustomerShell } from "@/src/server/customer-shell.mjs";
 import { selectedWorkspaceCookieName } from "@/src/server/session.mjs";
 import { WorkspaceSelectForm, WorkspaceRenameForm } from "./workspace-forms.js";
+import { GitHubPanel } from "./github-panel.js";
 
 export const dynamic = "force-dynamic";
 
@@ -146,6 +147,7 @@ export default async function Home({ searchParams }) {
             </div>
             <WorkspaceRenameForm workspace={active} />
           </section>
+          <GitHubPanel workspaceId={active.id} github={shell.github} />
         </main>
       </div>
     </>
