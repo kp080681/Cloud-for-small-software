@@ -11,6 +11,7 @@ const nextConfig = {
   turbopack: {
     root: repoRoot,
   },
+  transpilePackages: ["pg"],
 };
 
 export default nextConfig;

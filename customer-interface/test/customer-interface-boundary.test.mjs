@@ -97,3 +97,9 @@ test("sidebar GitHub connection control targets the rendered GitHub panel", asyn
   assert.equal(page.includes("<button disabled>GitHub connection</button>"), false);
   assert.equal(panel.includes('id="github-connection"'), true);
 });
+
+test("PostgreSQL client is bundled for Vercel server runtime resolution", async () => {
+  const config = await readFile(path.join(root, "next.config.mjs"), "utf8");
+
+  assert.match(config, /transpilePackages:\s*\[\s*"pg"\s*\]/);
+});
