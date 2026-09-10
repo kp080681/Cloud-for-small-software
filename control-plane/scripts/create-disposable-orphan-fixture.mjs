@@ -141,7 +141,7 @@ async function verifyDisposableProviderProject(projectId) {
   if (project?.id !== RECOVERY_TEST_PROVIDER_PROJECT_ID) {
     throw new Error(`Vercel project identity mismatch for disposable fixture target: ${project?.id ?? "missing"}`);
   }
-  if (!gitAutoDeploymentsDisabled(project)) {
+  if (!gitAutoDeploymentsDisabled(project, { trustedVercelProjectResponse: true })) {
     throw new Error("Refusing to create orphan fixture while Vercel Git automatic deployments are enabled");
   }
   return project;

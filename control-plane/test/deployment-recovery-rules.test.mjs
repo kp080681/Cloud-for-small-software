@@ -107,6 +107,8 @@ test("SSC-managed Vercel projects require disconnected Git linkage", () => {
   assert.equal(gitAutoDeploymentsDisabled({ git: null, link: null }), true);
   assert.equal(gitAutoDeploymentState({}), "unknown");
   assert.equal(gitAutoDeploymentsDisabled({}), false);
+  assert.equal(gitAutoDeploymentState({ id: "prj_1", name: "ssc-app" }, { trustedVercelProjectResponse: true }), "disconnected");
+  assert.equal(gitAutoDeploymentsDisabled({ id: "prj_1", name: "ssc-app" }), false);
   assert.equal(gitAutoDeploymentState({ git: null, link: { type: "github" } }), "connected");
   assert.equal(gitAutoDeploymentsDisabled({ git: { deploymentEnabled: false } }), false);
   assert.equal(gitAutoDeploymentsDisabled({ git: { deploymentEnabled: false }, link: { type: "github" } }), false);

@@ -85,6 +85,7 @@ async function enforceGitAutoDeployments(project: any) {
   const result = await ensureGitAutoDeploymentsDisabled({
     project,
     projectId: project?.id,
+    trustedVercelProjectResponse: true,
     getProject: getVercelProject,
     updateProject: updateVercelProject,
   });

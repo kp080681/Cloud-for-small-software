@@ -14,6 +14,15 @@ const root = path.resolve(import.meta.dirname, "..");
 test("git auto-deploy state classifies only disconnected projects as safe", () => {
   assert.equal(gitAutoDeploymentState({ git: null, link: null }), "disconnected");
   assert.equal(gitAutoDeploymentsDisabled({ git: null, link: null }), true);
+  assert.equal(
+    gitAutoDeploymentState({ id: "prj_1", name: "ssc-app" }, { trustedVercelProjectResponse: true }),
+    "disconnected",
+  );
+  assert.equal(gitAutoDeploymentsDisabled({ id: "prj_1", name: "ssc-app" }), false);
+  assert.equal(
+    gitAutoDeploymentsDisabled({ id: "prj_1", name: "ssc-app" }, { trustedVercelProjectResponse: true }),
+    true,
+  );
 
   assert.equal(gitAutoDeploymentState({ git: null, link: { type: "github" } }), "connected");
   assert.equal(gitAutoDeploymentsDisabled({ git: null, link: { type: "github" } }), false);
@@ -23,9 +32,32 @@ test("git auto-deploy state classifies only disconnected projects as safe", () =
 
   assert.equal(gitAutoDeploymentState({ git: { deploymentEnabled: true }, link: { type: "github" } }), "connected");
   assert.equal(gitAutoDeploymentsDisabled({ git: { deploymentEnabled: true }, link: { type: "github" } }), false);
+  assert.equal(gitAutoDeploymentState({ id: "prj_1", name: "ssc-app", gitRepository: { type: "github" } }, { trustedVercelProjectResponse: true }), "connected");
 
   assert.equal(gitAutoDeploymentState({}), "unknown");
+  assert.equal(gitAutoDeploymentState({}, { trustedVercelProjectResponse: true }), "unknown");
   assert.equal(gitAutoDeploymentsDisabled({}), false);
+});
+
+test("current Vercel disconnected project response shape is safe only from trusted project API", async () => {
+  const project = {
+    id: "prj_current",
+    name: "ssc-ab4f73c5b38d-751febb15fe0-dealupwebsite",
+    framework: "nextjs",
+    rootDirectory: ".",
+  };
+
+  assert.equal(gitAutoDeploymentState(project), "unknown");
+  assert.equal(gitAutoDeploymentState(project, { trustedVercelProjectResponse: true }), "disconnected");
+
+  const result = await ensureGitAutoDeploymentsDisabled({
+    project,
+    trustedVercelProjectResponse: true,
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(result.result, GitAutoDeployContainment.ALREADY_DISCONNECTED);
+  assert.equal(result.state, "disconnected");
 });
 
 test("disconnected project passes without provider mutation", async () => {
@@ -78,6 +110,7 @@ test("unknown project Git state is blocked without provider mutation", async () 
   let updateCalled = false;
   const result = await ensureGitAutoDeploymentsDisabled({
     project: { id: "prj_unknown" },
+    trustedVercelProjectResponse: true,
     updateProject: async () => {
       updateCalled = true;
     },
@@ -108,6 +141,7 @@ test("SSC production paths enforce Git auto-deploy containment before secrets an
   const executeBuild = fs.readFileSync(path.join(root, "trigger/execute-build.ts"), "utf8");
 
   assert.match(provisionRuntime, /ensureGitAutoDeploymentsDisabled/);
+  assert.match(provisionRuntime, /trustedVercelProjectResponse:true/);
   assert.doesNotMatch(
     provisionRuntime,
     /gitRepository:\s*\{/,
@@ -119,12 +153,14 @@ test("SSC production paths enforce Git auto-deploy containment before secrets an
   );
 
   assert.match(applyRuntimeEnv, /ensureGitAutoDeploymentsDisabled/);
+  assert.match(applyRuntimeEnv, /trustedVercelProjectResponse: true/);
   assert.ok(
     applyRuntimeEnv.indexOf("enforceGitAutoDeployments(remoteProject)") < applyRuntimeEnv.indexOf("const plaintext = await decryptAppSecret"),
     "runtime env application must verify Git auto-deploy containment before decrypting secrets",
   );
 
   assert.match(executeBuild, /ensureGitAutoDeploymentsDisabled/);
+  assert.match(executeBuild, /trustedVercelProjectResponse: true/);
   assert.ok(
     executeBuild.indexOf("await enforceGitAutoDeployments(remoteProject)") < executeBuild.indexOf("const operationResult=await ensureBuildOperation"),
     "build execution must verify Git auto-deploy containment before provider deployment intent/create",
