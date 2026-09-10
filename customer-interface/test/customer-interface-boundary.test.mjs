@@ -31,7 +31,6 @@ test("customer interface does not import provider lifecycle operations", async (
   const forbidden = [
     "VERCEL_TOKEN",
     "NEON_API_KEY",
-    "TRIGGER_SECRET_KEY",
     "AWS_ACCESS_KEY_ID",
     "AWS_SECRET_ACCESS_KEY",
     "@trigger.dev",
@@ -51,6 +50,18 @@ test("customer interface does not import provider lifecycle operations", async (
     for (const token of forbidden) {
       assert.equal(text.includes(token), false, `${path.relative(root, file)} contains ${token}`);
     }
+  }
+});
+
+test("Trigger credential access is isolated to the deployment-start boundary", async () => {
+  for (const file of await sourceFiles()) {
+    const text = await readFile(file, "utf8");
+    if (!text.includes("TRIGGER_SECRET_KEY")) continue;
+    assert.equal(
+      path.relative(root, file),
+      path.join("src", "server", "customer-deployments.mjs"),
+      "Trigger secret must stay inside the server deployment-start boundary",
+    );
   }
 });
 
@@ -94,6 +105,8 @@ test("workspace and session APIs use the authenticated customer-session guard", 
     "app/api/workspaces/[workspaceId]/route.js",
     "app/api/workspaces/[workspaceId]/applications/[appId]/configuration/route.js",
     "app/api/workspaces/[workspaceId]/applications/[appId]/configuration/secrets/route.js",
+    "app/api/workspaces/[workspaceId]/applications/[appId]/deployments/[deploymentId]/route.js",
+    "app/api/workspaces/[workspaceId]/applications/[appId]/deployments/[deploymentId]/start/route.js",
   ];
 
   for (const relative of apiFiles) {

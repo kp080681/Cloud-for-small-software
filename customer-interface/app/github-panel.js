@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useTransition } from "react";
+import { useEffect, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 
 export function GitHubPanel({ workspaceId, github }) {
@@ -9,6 +9,8 @@ export function GitHubPanel({ workspaceId, github }) {
   const [repositoryState, setRepositoryState] = useState(null);
   const [analysisState, setAnalysisState] = useState({});
   const [configurationState, setConfigurationState] = useState({});
+  const [deploymentState, setDeploymentState] = useState({});
+  const [deploymentPending, setDeploymentPending] = useState({});
   const [secretInputs, setSecretInputs] = useState({});
   const [message, setMessage] = useState("");
 
@@ -113,6 +115,43 @@ export function GitHubPanel({ workspaceId, github }) {
     startTransition(() => router.refresh());
   }
 
+  async function loadDeploymentProgress(appId, deploymentId, { silent = false } = {}) {
+    const response = await fetch(
+      `/api/workspaces/${encodeURIComponent(workspaceId)}/applications/${encodeURIComponent(appId)}/deployments/${encodeURIComponent(deploymentId)}`,
+    );
+    const body = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      if (!silent) setMessage(body.error || "DEPLOYMENT_STATUS_UNAVAILABLE");
+      return null;
+    }
+    setDeploymentState((current) => ({
+      ...current,
+      [deploymentId]: body.deployment,
+    }));
+    return body.deployment;
+  }
+
+  async function startDeployment(appId, deploymentId) {
+    setMessage("");
+    setDeploymentPending((current) => ({ ...current, [deploymentId]: true }));
+    const response = await fetch(
+      `/api/workspaces/${encodeURIComponent(workspaceId)}/applications/${encodeURIComponent(appId)}/deployments/${encodeURIComponent(deploymentId)}/start`,
+      { method: "POST" },
+    );
+    const body = await response.json().catch(() => ({}));
+    setDeploymentPending((current) => ({ ...current, [deploymentId]: false }));
+    if (!response.ok) {
+      setMessage(body.error || "DEPLOYMENT_START_FAILED");
+      return;
+    }
+    setDeploymentState((current) => ({
+      ...current,
+      [deploymentId]: body.deployment,
+    }));
+    setMessage("Deployment started.");
+    startTransition(() => router.refresh());
+  }
+
   const groups = repositoryState?.installations ?? [];
   const analysesByRepository = new Map(
     (github.repositoryAnalyses ?? []).map((analysis) => [analysis.repositoryId, analysis]),
@@ -180,6 +219,10 @@ export function GitHubPanel({ workspaceId, github }) {
                     secretInputs={secretInputs}
                     setSecretInputs={setSecretInputs}
                     saveSecret={saveSecret}
+                    deployment={deploymentState[analysis.deploymentId]}
+                    deploymentPending={Boolean(deploymentPending[analysis.deploymentId])}
+                    startDeployment={startDeployment}
+                    loadDeploymentProgress={loadDeploymentProgress}
                     isPending={isPending}
                   />
                 ) : null}
@@ -232,7 +275,18 @@ export function GitHubPanel({ workspaceId, github }) {
   );
 }
 
-function AnalysisResult({ analysis, configuration, secretInputs, setSecretInputs, saveSecret, isPending }) {
+function AnalysisResult({
+  analysis,
+  configuration,
+  secretInputs,
+  setSecretInputs,
+  saveSecret,
+  deployment,
+  deploymentPending,
+  startDeployment,
+  loadDeploymentProgress,
+  isPending,
+}) {
   const handled = [
     analysis.framework ? `Framework ${analysis.framework}` : null,
     analysis.runtime ? `Runtime ${analysis.runtime}` : null,
@@ -246,6 +300,40 @@ function AnalysisResult({ analysis, configuration, secretInputs, setSecretInputs
   const managed = requirements.filter((item) => item.managed);
   const optional = requirements.filter((item) => !item.required && !item.managed);
   const ready = configuration?.readiness === "READY_TO_DEPLOY";
+  const currentDeployment = deployment ?? {
+    deploymentId: analysis.deploymentId,
+    appId: analysis.appId,
+    status: analysis.status,
+    stage: stageForStatus(analysis.status),
+    active: false,
+    terminal: terminalDeploymentStatus(analysis.status),
+    liveUrl: null,
+    events: [],
+    diagnostic: null,
+  };
+  const active = Boolean(currentDeployment.active);
+  const live = currentDeployment.status === "LIVE";
+  const failed = currentDeployment.status === "FAILED";
+
+  useEffect(() => {
+    if (!active || !analysis.appId || !analysis.deploymentId) return undefined;
+    let cancelled = false;
+    let timer = null;
+
+    async function poll() {
+      const progress = await loadDeploymentProgress(analysis.appId, analysis.deploymentId, { silent: true });
+      if (cancelled) return;
+      if (progress?.active) {
+        timer = setTimeout(poll, 2000);
+      }
+    }
+
+    timer = setTimeout(poll, deployment ? 2000 : 500);
+    return () => {
+      cancelled = true;
+      if (timer) clearTimeout(timer);
+    };
+  }, [active, analysis.appId, analysis.deploymentId, deployment?.status]);
 
   return (
     <div className="analysis-result">
@@ -293,6 +381,56 @@ function AnalysisResult({ analysis, configuration, secretInputs, setSecretInputs
         {optional.map((item) => <small key={item.envKey}>{item.envKey} detected, optional / not blocking</small>)}
         <small>{ready ? "Ready to deploy" : configuration?.readiness || "Configuration status pending"}</small>
       </div>
+      <div className="deployment-state">
+        <div>
+          <strong>Deployment</strong>
+          <small>{currentDeployment.stage}</small>
+        </div>
+        {currentDeployment.events?.length ? (
+          <div className="deployment-events">
+            {currentDeployment.events.slice(-5).map((event) => (
+              <small key={event.id}>{event.title}</small>
+            ))}
+          </div>
+        ) : null}
+        {live && currentDeployment.liveUrl ? (
+          <div className="live-result">
+            <small>Your app is live.</small>
+            <a href={currentDeployment.liveUrl} target="_blank" rel="noreferrer">Open app</a>
+          </div>
+        ) : null}
+        {failed && currentDeployment.diagnostic ? (
+          <small>{currentDeployment.diagnostic.title}: {currentDeployment.diagnostic.action}</small>
+        ) : null}
+        {ready && !active && !live && !failed ? (
+          <button
+            type="button"
+            onClick={() => startDeployment(analysis.appId, analysis.deploymentId)}
+            disabled={isPending || deploymentPending}
+          >
+            {deploymentPending ? "Starting..." : "Deploy"}
+          </button>
+        ) : null}
+        {active ? <small role="status">Deployment is running...</small> : null}
+      </div>
     </div>
   );
+}
+
+function terminalDeploymentStatus(status) {
+  return ["LIVE", "FAILED", "DELETED"].includes(status);
+}
+
+function stageForStatus(status) {
+  const labels = {
+    ANALYZING: "Preparing deployment",
+    PROVISIONING: "Provisioning runtime",
+    BUILDING: "Building application",
+    DEPLOYING: "Preparing application",
+    HEALTH_CHECKING: "Checking application",
+    LIVE: "Live",
+    FAILED: "Deployment failed",
+    DELETED: "Deleted",
+  };
+  return labels[status] || "Not started";
 }

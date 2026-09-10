@@ -457,7 +457,10 @@ main#main-content {
 .analysis-progress,
 .analysis-result,
 .analysis-columns,
-.configuration-state {
+.configuration-state,
+.deployment-state,
+.deployment-events,
+.live-result {
   display: grid;
   gap: 10px;
 }
@@ -485,6 +488,22 @@ main#main-content {
   display: block;
   color: var(--muted);
   margin-top: 5px;
+}
+
+.deployment-state {
+  border-top: 1px solid var(--line);
+  padding-top: 10px;
+}
+
+.deployment-state button {
+  justify-self: start;
+}
+
+.live-result a {
+  color: var(--ink);
+  font-size: 13px;
+  font-weight: 700;
+  text-decoration: none;
 }
 
 .secret-field {

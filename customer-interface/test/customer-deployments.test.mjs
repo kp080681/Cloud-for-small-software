@@ -1,0 +1,317 @@
+import assert from "node:assert/strict";
+import test from "node:test";
+import {
+  deploymentStartIdempotencyKey,
+  getCustomerDeploymentProgress,
+  startCustomerDeployment,
+  triggerDeploymentOrchestrator,
+} from "../src/server/customer-deployments.mjs";
+
+class FakeDb {
+  constructor() {
+    this.workspaces = [{ id: "workspace-a", name: "A" }, { id: "workspace-b", name: "B" }];
+    this.memberships = [{ customerId: "identity-a", workspaceId: "workspace-a" }];
+    this.apps = [{
+      id: "app-a",
+      workspace_id: "workspace-a",
+      repository_id: "repo-a",
+      name: "App A",
+      slug: "app-a",
+      database_required: false,
+      database_mode: "NONE",
+      deleted_at: null,
+      created_at: 1,
+    }];
+    this.deployments = [{
+      id: "deployment-a",
+      workspace_id: "workspace-a",
+      app_id: "app-a",
+      status: "ANALYZING",
+      error_code: null,
+      source_commit_sha: "a".repeat(40),
+      source_branch: "main",
+      orchestrator_run_id: null,
+      live_url: null,
+      created_at: 1,
+    }];
+    this.buildInputs = [{
+      id: "build-input-a",
+      deployment_id: "deployment-a",
+      build_command: "npm run build",
+    }];
+    this.requirements = [];
+    this.bindings = [];
+    this.detections = [];
+    this.events = [{
+      id: 1,
+      deployment_id: "deployment-a",
+      event_type: "PROJECT_ANALYSIS_COMPLETED",
+      from_status: "ANALYZING",
+      to_status: "ANALYZING",
+      metadata: { sourceCommitSha: "a".repeat(40), token: "must-not-leak" },
+      created_at: new Date("2026-09-10T00:00:00.000Z"),
+    }];
+    this.queries = [];
+  }
+
+  async query(sql, params = []) {
+    const text = sql.replace(/\s+/g, " ").trim();
+    this.queries.push({ text, params });
+
+    if (["BEGIN", "COMMIT", "ROLLBACK"].includes(text)) return { rowCount: 0, rows: [] };
+
+    if (text.includes("FROM customer_workspace_memberships cwm") && text.includes("AND w.id = $2")) {
+      const [customerId, workspaceId] = params;
+      const authorized = this.memberships.some(
+        (membership) => membership.customerId === customerId && membership.workspaceId === workspaceId,
+      );
+      const workspace = authorized ? this.workspaces.find((row) => row.id === workspaceId) : null;
+      return { rowCount: workspace ? 1 : 0, rows: workspace ? [workspace] : [] };
+    }
+
+    if (
+      text.includes("FROM deployments d") &&
+      text.includes("LEFT JOIN deployment_build_inputs") &&
+      text.includes("WHERE d.app_id = $1")
+    ) {
+      const [appId] = params;
+      const deployment = this.deployments
+        .filter((row) => row.app_id === appId)
+        .sort((a, b) => b.created_at - a.created_at)[0];
+      if (!deployment) return { rowCount: 0, rows: [] };
+      const input = this.buildInputs.find((row) => row.deployment_id === deployment.id);
+      return { rowCount: 1, rows: [{ ...deployment, build_input_id: input?.id ?? null }] };
+    }
+
+    if (text.includes("FROM apps") && text.includes("workspace_id = $1") && text.includes("id = $2")) {
+      const [workspaceId, appId] = params;
+      const app = this.apps.find((row) => row.workspace_id === workspaceId && row.id === appId);
+      return { rowCount: app ? 1 : 0, rows: app ? [app] : [] };
+    }
+
+    if (text.includes("FROM app_env_requirements r")) {
+      const [appId] = params;
+      const rows = this.requirements
+        .filter((row) => row.app_id === appId)
+        .map((row) => ({
+          ...row,
+          configured: this.bindings.some(
+            (binding) => binding.app_id === appId && binding.env_key === row.env_key,
+          ),
+        }));
+      return { rowCount: rows.length, rows };
+    }
+
+    if (text.includes("FROM deployment_env_requirement_detections det")) {
+      const [deploymentId] = params;
+      const rows = this.detections.filter((row) => row.deployment_id === deploymentId);
+      return { rowCount: rows.length, rows };
+    }
+
+    if (text.includes("FROM deployments d") && text.includes("JOIN apps a") && text.includes("d.id = $3")) {
+      const [workspaceId, appId, deploymentId] = params;
+      const deployment = this.deployments.find(
+        (row) => row.workspace_id === workspaceId && row.app_id === appId && row.id === deploymentId,
+      );
+      if (!deployment) return { rowCount: 0, rows: [] };
+      const app = this.apps.find((row) => row.id === appId);
+      const input = this.buildInputs.find((row) => row.deployment_id === deploymentId);
+      return {
+        rowCount: 1,
+        rows: [{
+          ...deployment,
+          app_deleted_at: app?.deleted_at ?? null,
+          build_input_id: input?.id ?? null,
+          build_command: input?.build_command ?? null,
+        }],
+      };
+    }
+
+    if (text.startsWith("SELECT id FROM deployments WHERE app_id = $1")) {
+      const [appId] = params;
+      const deployment = this.deployments
+        .filter((row) => row.app_id === appId)
+        .sort((a, b) => b.created_at - a.created_at)[0];
+      return { rowCount: deployment ? 1 : 0, rows: deployment ? [{ id: deployment.id }] : [] };
+    }
+
+    if (text.startsWith("UPDATE deployments SET orchestrator_run_id = $1")) {
+      const [runId, deploymentId, expected] = params;
+      const deployment = this.deployments.find((row) => row.id === deploymentId);
+      if (!deployment) return { rowCount: 0, rows: [] };
+      if (params.length === 2 || deployment.orchestrator_run_id === null || deployment.orchestrator_run_id === expected || deployment.orchestrator_run_id === runId) {
+        deployment.orchestrator_run_id = runId;
+        return { rowCount: 1, rows: [{ id: deployment.id }] };
+      }
+      return { rowCount: 0, rows: [] };
+    }
+
+    if (text.startsWith("UPDATE deployments SET orchestrator_run_id = NULL")) {
+      const [deploymentId, marker] = params;
+      const deployment = this.deployments.find((row) => row.id === deploymentId);
+      if (deployment?.orchestrator_run_id === marker) {
+        deployment.orchestrator_run_id = null;
+        return { rowCount: 1, rows: [{ id: deployment.id }] };
+      }
+      return { rowCount: 0, rows: [] };
+    }
+
+    if (text.includes("FROM deployment_events")) {
+      const [deploymentId, limit] = params;
+      const rows = this.events
+        .filter((row) => row.deployment_id === deploymentId)
+        .sort((a, b) => b.created_at - a.created_at || b.id - a.id)
+        .slice(0, limit);
+      return { rowCount: rows.length, rows };
+    }
+
+    throw new Error(`Unhandled fake query: ${text}`);
+  }
+}
+
+function startArgs(overrides = {}) {
+  return {
+    customerId: "identity-a",
+    workspaceId: "workspace-a",
+    appId: "app-a",
+    deploymentId: "deployment-a",
+    ...overrides,
+  };
+}
+
+test("ready deployment invokes the approved orchestrator with deterministic idempotency", async () => {
+  const db = new FakeDb();
+  const calls = [];
+  const deployment = await startCustomerDeployment(db, {
+    ...startArgs(),
+    triggerOrchestrator: async (input) => {
+      calls.push(input);
+      return { id: "run-a" };
+    },
+  });
+
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].deploymentId, "deployment-a");
+  assert.equal(calls[0].idempotencyKey, deploymentStartIdempotencyKey("deployment-a"));
+  assert.equal(db.deployments[0].orchestrator_run_id, "run-a");
+  assert.equal(deployment.start.started, true);
+  assert.equal(JSON.stringify(calls).includes("npm run build"), false);
+});
+
+test("cross-workspace and arbitrary deployment start are denied", async () => {
+  const db = new FakeDb();
+  await assert.rejects(
+    () => startCustomerDeployment(db, { ...startArgs({ workspaceId: "workspace-b" }), triggerOrchestrator: async () => ({ id: "run" }) }),
+    /Workspace not found/,
+  );
+  await assert.rejects(
+    () => startCustomerDeployment(db, { ...startArgs({ deploymentId: "deployment-other" }), triggerOrchestrator: async () => ({ id: "run" }) }),
+    /Deployment is not the current deployment/,
+  );
+});
+
+test("not-ready deployment cannot start", async () => {
+  const db = new FakeDb();
+  db.requirements.push({
+    id: "requirement-a",
+    workspace_id: "workspace-a",
+    app_id: "app-a",
+    env_key: "API_KEY",
+    required: true,
+    public: false,
+    source: "user-confirmed",
+  });
+
+  await assert.rejects(
+    () => startCustomerDeployment(db, { ...startArgs(), triggerOrchestrator: async () => ({ id: "run" }) }),
+    /Deployment is not ready/,
+  );
+});
+
+test("active and live deployment starts are idempotent no-ops", async () => {
+  const db = new FakeDb();
+  db.deployments[0].status = "BUILDING";
+  db.deployments[0].orchestrator_run_id = "run-existing";
+  let triggerCount = 0;
+  const active = await startCustomerDeployment(db, {
+    ...startArgs(),
+    triggerOrchestrator: async () => {
+      triggerCount += 1;
+      return { id: "run-new" };
+    },
+  });
+
+  db.deployments[0].status = "LIVE";
+  db.deployments[0].live_url = "https://example.vercel.app";
+  const live = await startCustomerDeployment(db, {
+    ...startArgs(),
+    triggerOrchestrator: async () => {
+      triggerCount += 1;
+      return { id: "run-new" };
+    },
+  });
+
+  assert.equal(triggerCount, 0);
+  assert.equal(active.start.alreadyStarted, true);
+  assert.equal(active.status, "BUILDING");
+  assert.equal(live.liveUrl, "https://example.vercel.app");
+});
+
+test("Trigger invocation failure clears the start marker for safe retry", async () => {
+  const db = new FakeDb();
+  await assert.rejects(
+    () => startCustomerDeployment(db, {
+      ...startArgs(),
+      triggerOrchestrator: async () => {
+        throw Object.assign(new Error("trigger down"), { code: "TRIGGER_DOWN" });
+      },
+    }),
+    /trigger down/,
+  );
+
+  assert.equal(db.deployments[0].orchestrator_run_id, null);
+});
+
+test("progress read enforces tenancy and redacts unsafe event metadata", async () => {
+  const db = new FakeDb();
+  const progress = await getCustomerDeploymentProgress(db, startArgs());
+
+  assert.equal(progress.deploymentId, "deployment-a");
+  assert.equal(progress.status, "ANALYZING");
+  assert.equal(progress.active, false);
+  assert.equal(progress.stage, "Preparing deployment");
+  assert.equal(JSON.stringify(progress).includes("must-not-leak"), false);
+  await assert.rejects(
+    () => getCustomerDeploymentProgress(db, startArgs({ workspaceId: "workspace-b" })),
+    /Workspace not found/,
+  );
+});
+
+test("Trigger HTTP boundary sends only fixed task, deployment id, and idempotency key", async () => {
+  const calls = [];
+  const handle = await triggerDeploymentOrchestrator({
+    deploymentId: "deployment-a",
+    idempotencyKey: "ui06:orchestrate:deployment-a",
+    env: {
+      TRIGGER_SECRET_KEY: "secret-value",
+      TRIGGER_API_URL: "https://trigger.test",
+    },
+    fetchImpl: async (url, init) => {
+      calls.push({ url, init });
+      return {
+        ok: true,
+        json: async () => ({ id: "run-a" }),
+      };
+    },
+  });
+
+  assert.equal(handle.id, "run-a");
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].url, "https://trigger.test/api/v1/tasks/ssc-control-plane-orchestrate-deployment/trigger");
+  const body = JSON.parse(calls[0].init.body);
+  assert.deepEqual(body.payload, { deploymentId: "deployment-a" });
+  assert.equal(body.options.idempotencyKey, "ui06:orchestrate:deployment-a");
+  assert.equal(calls[0].init.headers.Authorization, "Bearer secret-value");
+  assert.equal(JSON.stringify(body).includes("sourceCommitSha"), false);
+  assert.equal(JSON.stringify(body).includes("providerProjectId"), false);
+});
