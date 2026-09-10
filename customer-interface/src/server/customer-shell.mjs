@@ -18,6 +18,7 @@ import {
   listSelectedWorkspaceRepositories,
   listWorkspaceGitHubInstallations,
 } from "./customer-github.mjs";
+import { listWorkspaceConfigurationStatuses } from "./customer-configuration.mjs";
 import { listWorkspaceRepositoryAnalyses } from "./repository-analysis.mjs";
 
 export async function readCurrentSession(cookieStore = null) {
@@ -70,6 +71,10 @@ export async function getCustomerShell({ selectedWorkspaceId = null } = {}) {
       customerId: session.customerId,
       workspaceId: currentWorkspace.id,
     });
+    const configurationStatuses = await listWorkspaceConfigurationStatuses(db, {
+      customerId: session.customerId,
+      workspaceId: currentWorkspace.id,
+    });
 
     return {
       ...publicSession(session),
@@ -82,6 +87,7 @@ export async function getCustomerShell({ selectedWorkspaceId = null } = {}) {
         installations: githubInstallations,
         selectedRepositories,
         repositoryAnalyses,
+        configurationStatuses,
       },
     };
   } finally {

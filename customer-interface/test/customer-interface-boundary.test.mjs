@@ -34,7 +34,6 @@ test("customer interface does not import provider lifecycle operations", async (
     "TRIGGER_SECRET_KEY",
     "AWS_ACCESS_KEY_ID",
     "AWS_SECRET_ACCESS_KEY",
-    "AWS_KMS_KEY_ID",
     "@trigger.dev",
     "queueDeployment",
     "execute-build",
@@ -52,6 +51,18 @@ test("customer interface does not import provider lifecycle operations", async (
     for (const token of forbidden) {
       assert.equal(text.includes(token), false, `${path.relative(root, file)} contains ${token}`);
     }
+  }
+});
+
+test("KMS key access is isolated to the customer secret-store boundary", async () => {
+  for (const file of await sourceFiles()) {
+    const text = await readFile(file, "utf8");
+    if (!text.includes("AWS_KMS_KEY_ID")) continue;
+    assert.equal(
+      path.relative(root, file),
+      path.join("src", "shared", "control-plane", "secret-store.mjs"),
+      "KMS key id must stay inside the server secret-store boundary",
+    );
   }
 });
 
@@ -81,6 +92,8 @@ test("workspace and session APIs use the authenticated customer-session guard", 
     "app/api/auth/session/route.js",
     "app/api/workspaces/route.js",
     "app/api/workspaces/[workspaceId]/route.js",
+    "app/api/workspaces/[workspaceId]/applications/[appId]/configuration/route.js",
+    "app/api/workspaces/[workspaceId]/applications/[appId]/configuration/secrets/route.js",
   ];
 
   for (const relative of apiFiles) {

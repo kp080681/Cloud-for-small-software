@@ -8,6 +8,8 @@ export function GitHubPanel({ workspaceId, github }) {
   const [isPending, startTransition] = useTransition();
   const [repositoryState, setRepositoryState] = useState(null);
   const [analysisState, setAnalysisState] = useState({});
+  const [configurationState, setConfigurationState] = useState({});
+  const [secretInputs, setSecretInputs] = useState({});
   const [message, setMessage] = useState("");
 
   async function loadRepositories() {
@@ -65,12 +67,58 @@ export function GitHubPanel({ workspaceId, github }) {
       ...current,
       [repositoryId]: { pending: false, analysis: body.analysis },
     }));
+    if (body.analysis?.appId) {
+      await loadConfiguration(body.analysis.appId);
+    }
+    startTransition(() => router.refresh());
+  }
+
+  async function loadConfiguration(appId) {
+    const response = await fetch(
+      `/api/workspaces/${encodeURIComponent(workspaceId)}/applications/${encodeURIComponent(appId)}/configuration`,
+    );
+    const body = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      setMessage(body.error || "CONFIGURATION_STATUS_UNAVAILABLE");
+      return;
+    }
+    setConfigurationState((current) => ({
+      ...current,
+      [appId]: body.configuration,
+    }));
+  }
+
+  async function saveSecret(appId, envKey) {
+    setMessage("");
+    const inputKey = `${appId}:${envKey}`;
+    const response = await fetch(
+      `/api/workspaces/${encodeURIComponent(workspaceId)}/applications/${encodeURIComponent(appId)}/configuration/secrets`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ envKey, value: secretInputs[inputKey] || "" }),
+      },
+    );
+    const body = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      setMessage(body.error || "SECRET_CONFIGURATION_FAILED");
+      return;
+    }
+    setConfigurationState((current) => ({
+      ...current,
+      [appId]: body.configuration,
+    }));
+    setSecretInputs((current) => ({ ...current, [inputKey]: "" }));
+    setMessage(`${envKey} configured.`);
     startTransition(() => router.refresh());
   }
 
   const groups = repositoryState?.installations ?? [];
   const analysesByRepository = new Map(
     (github.repositoryAnalyses ?? []).map((analysis) => [analysis.repositoryId, analysis]),
+  );
+  const configurationByApp = new Map(
+    (github.configurationStatuses ?? []).map((configuration) => [configuration.appId, configuration]),
   );
 
   return (
@@ -125,7 +173,16 @@ export function GitHubPanel({ workspaceId, github }) {
 
                 {transient?.error ? <p className="helptext" role="status">{transient.error}</p> : null}
 
-                {analysis ? <AnalysisResult analysis={analysis} /> : null}
+                {analysis ? (
+                  <AnalysisResult
+                    analysis={analysis}
+                    configuration={configurationState[analysis.appId] ?? configurationByApp.get(analysis.appId)}
+                    secretInputs={secretInputs}
+                    setSecretInputs={setSecretInputs}
+                    saveSecret={saveSecret}
+                    isPending={isPending}
+                  />
+                ) : null}
               </div>
             );
           })}
@@ -175,7 +232,7 @@ export function GitHubPanel({ workspaceId, github }) {
   );
 }
 
-function AnalysisResult({ analysis }) {
+function AnalysisResult({ analysis, configuration, secretInputs, setSecretInputs, saveSecret, isPending }) {
   const handled = [
     analysis.framework ? `Framework ${analysis.framework}` : null,
     analysis.runtime ? `Runtime ${analysis.runtime}` : null,
@@ -183,12 +240,12 @@ function AnalysisResult({ analysis }) {
     analysis.buildCommand ? `Build ${analysis.buildCommand}` : null,
     analysis.databaseRequired ? `PostgreSQL ${analysis.databaseMode || "required"}` : "No database required",
   ].filter(Boolean);
-  const attention = [
-    analysis.errorCode ? `Unsupported: ${analysis.errorCode}` : null,
-    ...(analysis.envRequirementNames?.length
-      ? analysis.envRequirementNames.map((name) => `Environment ${name}`)
-      : []),
-  ].filter(Boolean);
+  const requirements = configuration?.requirements ?? [];
+  const requiredMissing = requirements.filter((item) => item.required && !item.managed && !item.configured);
+  const configured = requirements.filter((item) => item.required && !item.managed && item.configured);
+  const managed = requirements.filter((item) => item.managed);
+  const optional = requirements.filter((item) => !item.required && !item.managed);
+  const ready = configuration?.readiness === "READY_TO_DEPLOY";
 
   return (
     <div className="analysis-result">
@@ -200,11 +257,41 @@ function AnalysisResult({ analysis }) {
         <div>
           <strong>Handled by Utplava</strong>
           {handled.length ? handled.map((item) => <small key={item}>{item}</small>) : <small>Analysis is pending.</small>}
+          {managed.map((item) => <small key={item.envKey}>{item.envKey} handled by Utplava</small>)}
         </div>
         <div>
           <strong>Your attention</strong>
-          {attention.length ? attention.map((item) => <small key={item}>{item}</small>) : <small>No required action detected yet.</small>}
+          {analysis.errorCode ? <small>Unsupported: {analysis.errorCode}</small> : null}
+          {requiredMissing.map((item) => {
+            const inputKey = `${analysis.appId}:${item.envKey}`;
+            return (
+              <label className="secret-field" key={item.envKey}>
+                <span>{item.envKey} Required</span>
+                <span className="secret-entry">
+                  <input
+                    type="password"
+                    value={secretInputs[inputKey] || ""}
+                    onChange={(event) =>
+                      setSecretInputs((current) => ({ ...current, [inputKey]: event.target.value }))
+                    }
+                    autoComplete="off"
+                  />
+                  <button type="button" onClick={() => saveSecret(analysis.appId, item.envKey)} disabled={isPending}>
+                    Save
+                  </button>
+                </span>
+              </label>
+            );
+          })}
+          {configured.map((item) => <small key={item.envKey}>{item.envKey} Configured</small>)}
+          {!analysis.errorCode && !requiredMissing.length && !configured.length ? <small>No required action detected.</small> : null}
         </div>
+      </div>
+      <div className="configuration-state">
+        <strong>Configuration</strong>
+        {requirements.length ? null : <small>No configuration required.</small>}
+        {optional.map((item) => <small key={item.envKey}>{item.envKey} detected, optional / not blocking</small>)}
+        <small>{ready ? "Ready to deploy" : configuration?.readiness || "Configuration status pending"}</small>
       </div>
     </div>
   );

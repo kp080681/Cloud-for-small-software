@@ -456,7 +456,8 @@ main#main-content {
 
 .analysis-progress,
 .analysis-result,
-.analysis-columns {
+.analysis-columns,
+.configuration-state {
   display: grid;
   gap: 10px;
 }
@@ -479,10 +480,33 @@ main#main-content {
 }
 
 .analysis-columns small,
-.analysis-result small {
+.analysis-result small,
+.configuration-state small {
   display: block;
   color: var(--muted);
   margin-top: 5px;
+}
+
+.secret-field {
+  display: grid;
+  gap: 8px;
+  margin-top: 8px;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.secret-entry {
+  display: flex;
+  gap: 8px;
+}
+
+.secret-entry input {
+  min-width: 0;
+  min-height: 40px;
+  flex: 1;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 0 12px;
 }
 
 @media (max-width: 760px) {
