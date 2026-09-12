@@ -2,15 +2,91 @@ import { task } from "@trigger.dev/sdk";
 import pg from "pg";
 import { healthAttemptAction } from "../src/deployment-recovery-rules.mjs";
 import { fetchWorkloadUrl, healthCheckRequestInit } from "../src/workload-http.mjs";
+import { assertRemoteProjectMatchesSscApp } from "../src/provider-project-identity.mjs";
+import { ensureVercelAuthenticationDisabled } from "../src/vercel-public-access.mjs";
 
 const { Client } = pg;
 const TIMEOUT_MS = 8000;
+const API = "https://api.vercel.com";
 
 function safeErrorCode(error: any) {
   if (typeof error?.code === "string" && error.code.startsWith("WORKLOAD_")) return error.code;
   if (error?.name === "AbortError") return "HEALTH_CHECK_TIMEOUT";
   if (error instanceof TypeError) return "HEALTH_CHECK_NETWORK_ERROR";
   return "HEALTH_CHECK_ERROR";
+}
+
+function teamQuery(extra: Record<string, string> = {}) {
+  const query = new URLSearchParams(extra);
+  if (process.env.VERCEL_TEAM_ID) query.set("teamId", process.env.VERCEL_TEAM_ID);
+  const text = query.toString();
+  return text ? `?${text}` : "";
+}
+
+function safeProviderErrorBody(body: any) {
+  if (!body || typeof body !== "object") return null;
+  const error = body.error && typeof body.error === "object" ? body.error : null;
+  return {
+    error: error ? { code: error.code ?? null, message: error.message ?? null } : null,
+    code: body.code ?? null,
+    message: body.message ?? null,
+  };
+}
+
+async function vercelRequest(path: string, options: RequestInit = {}) {
+  const token = process.env.VERCEL_TOKEN;
+  if (!token) throw new Error("Missing VERCEL_TOKEN");
+  const response = await fetch(`${API}${path}`, {
+    ...options,
+    headers: {
+      Authorization: `Bearer ${token}`,
+      "Content-Type": "application/json",
+      ...(options.headers ?? {}),
+    },
+  });
+  const text = await response.text();
+  let body: any = null;
+  if (text) { try { body = JSON.parse(text); } catch { body = null; } }
+  if (!response.ok) {
+    const safe = safeProviderErrorBody(body);
+    const error: any = new Error(`Vercel API ${response.status} ${response.statusText}${safe ? `: ${JSON.stringify(safe)}` : ""}`);
+    error.status = response.status;
+    throw error;
+  }
+  return body;
+}
+
+async function getVercelProject(projectId: string) {
+  return vercelRequest(`/v9/projects/${encodeURIComponent(projectId)}${teamQuery()}`);
+}
+
+async function updateVercelProject(projectId: string, body: any) {
+  return vercelRequest(`/v9/projects/${encodeURIComponent(projectId)}${teamQuery()}`, {
+    method: "PATCH",
+    body: JSON.stringify(body),
+  });
+}
+
+async function enforceAnonymousProductionAccess(deployment: any) {
+  if (deployment.provider !== "vercel") throw new Error(`Unsupported runtime provider: ${deployment.provider}`);
+  if (deployment.runtime_project_id !== deployment.provider_project_id) throw new Error("Runtime project binding mismatch");
+  const project = await getVercelProject(deployment.provider_project_id);
+  assertRemoteProjectMatchesSscApp(project, {
+    workspaceId: deployment.workspace_id,
+    appId: deployment.app_id,
+    slug: deployment.slug,
+    storedProjectName: deployment.provider_project_name,
+    allowLegacyStoredBinding: true,
+  });
+  const result = await ensureVercelAuthenticationDisabled({
+    project,
+    projectId: project.id,
+    trustedVercelProjectResponse: true,
+    getProject: getVercelProject,
+    updateProject: updateVercelProject,
+  });
+  if (!result.ok) throw new Error(`Vercel anonymous public access could not be ensured: ${result.result}`);
+  return result;
 }
 
 export const healthCheck = task({
@@ -22,9 +98,15 @@ export const healthCheck = task({
     await db.connect();
     try {
       const result = await db.query(
-        `SELECT d.id,d.status,d.live_url,b.provider_deployment_url,
+        `SELECT d.id,d.workspace_id,d.app_id,d.status,d.live_url,d.runtime_project_id,
+                a.slug,
+                rt.provider,rt.provider_project_id,rt.provider_project_name,
+                b.provider_deployment_url,
                 COALESCE(p.max_health_attempts,3) AS max_health_attempts
-           FROM deployments d JOIN deployment_builds b ON b.deployment_id=d.id
+           FROM deployments d
+           JOIN apps a ON a.id=d.app_id
+           JOIN app_runtimes rt ON rt.app_id=d.app_id
+           JOIN deployment_builds b ON b.deployment_id=d.id
            LEFT JOIN app_resource_policies p ON p.app_id=d.app_id
           WHERE d.id=$1`,
         [payload.deploymentId],
@@ -38,11 +120,13 @@ export const healthCheck = task({
       const checkUrl = deployment.provider_deployment_url;
       if (!checkUrl) throw new Error("Provider deployment URL is unavailable");
 
+      const publicAccess = await enforceAnonymousProductionAccess(deployment);
+
       if (deployment.status === "DEPLOYING") {
         await db.query("BEGIN");
         try {
           const started = await db.query(`UPDATE deployments SET status='HEALTH_CHECKING',updated_at=now() WHERE id=$1 AND status='DEPLOYING' RETURNING id`,[payload.deploymentId]);
-          if (started.rowCount === 1) await db.query(`INSERT INTO deployment_events (deployment_id,from_status,to_status,event_type,message,metadata) VALUES ($1,'DEPLOYING','HEALTH_CHECKING','HEALTH_CHECK_STARTED','Application readiness checks started',$2::jsonb)`,[payload.deploymentId,JSON.stringify({checkUrl,responseBodyStored:false})]);
+          if (started.rowCount === 1) await db.query(`INSERT INTO deployment_events (deployment_id,from_status,to_status,event_type,message,metadata) VALUES ($1,'DEPLOYING','HEALTH_CHECKING','HEALTH_CHECK_STARTED','Application readiness checks started',$2::jsonb)`,[payload.deploymentId,JSON.stringify({checkUrl,responseBodyStored:false,publicAccess})]);
           await db.query("COMMIT");
         } catch (error) {
           await db.query("ROLLBACK");
