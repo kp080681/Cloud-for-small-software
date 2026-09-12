@@ -3,6 +3,7 @@ import test from "node:test";
 import {
   deploymentStartIdempotencyKey,
   getCustomerDeploymentProgress,
+  retryFailedCustomerDeployment,
   startCustomerDeployment,
   triggerDeploymentOrchestrator,
 } from "../src/server/customer-deployments.mjs";
@@ -24,14 +25,17 @@ class FakeDb {
     }];
     this.deployments = [{
       id: "deployment-a",
+      deployment_key: "dep_a",
       workspace_id: "workspace-a",
       app_id: "app-a",
       status: "ANALYZING",
       error_code: null,
       source_commit_sha: "a".repeat(40),
       source_branch: "main",
+      parent_deployment_id: null,
       orchestrator_run_id: null,
       live_url: null,
+      provider_deployment_id: null,
       created_at: 1,
     }];
     this.buildInputs = [{
@@ -72,7 +76,8 @@ class FakeDb {
     if (
       text.includes("FROM deployments d") &&
       text.includes("LEFT JOIN deployment_build_inputs") &&
-      text.includes("WHERE d.app_id = $1")
+      text.includes("WHERE d.app_id = $1") &&
+      !text.includes("d.parent_deployment_id = $2")
     ) {
       const [appId] = params;
       const deployment = this.deployments
@@ -135,6 +140,45 @@ class FakeDb {
       return { rowCount: deployment ? 1 : 0, rows: deployment ? [{ id: deployment.id }] : [] };
     }
 
+    if (text.includes("FROM deployments d") && text.includes("d.parent_deployment_id = $2")) {
+      const [appId, parentDeploymentId] = params;
+      const deployment = this.deployments
+        .filter((row) => row.app_id === appId && row.parent_deployment_id === parentDeploymentId)
+        .sort((a, b) => b.created_at - a.created_at)[0];
+      if (!deployment) return { rowCount: 0, rows: [] };
+      const input = this.buildInputs.find((row) => row.deployment_id === deployment.id);
+      return {
+        rowCount: 1,
+        rows: [{
+          ...deployment,
+          app_deleted_at: null,
+          build_input_id: input?.id ?? null,
+          build_command: input?.build_command ?? null,
+        }],
+      };
+    }
+
+    if (text.startsWith("INSERT INTO deployments") && text.includes("parent_deployment_id")) {
+      const [deploymentKey, workspaceId, appId, commitSha, branch, parentDeploymentId] = params;
+      const deployment = {
+        id: `deployment-retry-${this.deployments.length}`,
+        deployment_key: deploymentKey,
+        workspace_id: workspaceId,
+        app_id: appId,
+        status: "ANALYZING",
+        error_code: null,
+        source_commit_sha: commitSha,
+        source_branch: branch,
+        parent_deployment_id: parentDeploymentId,
+        orchestrator_run_id: null,
+        live_url: null,
+        provider_deployment_id: null,
+        created_at: Math.max(...this.deployments.map((row) => row.created_at)) + 1,
+      };
+      this.deployments.push(deployment);
+      return { rowCount: 1, rows: [deployment] };
+    }
+
     if (text.startsWith("UPDATE deployments SET orchestrator_run_id = $1")) {
       const [runId, deploymentId, expected] = params;
       const deployment = this.deployments.find((row) => row.id === deploymentId);
@@ -154,6 +198,24 @@ class FakeDb {
         return { rowCount: 1, rows: [{ id: deployment.id }] };
       }
       return { rowCount: 0, rows: [] };
+    }
+
+    if (text.includes("INSERT INTO deployment_events")) {
+      const [deploymentId, message, metadata] = params;
+      const eventTypeMatch = text.match(/'([A-Z_]+)'/g);
+      const eventType = eventTypeMatch?.map((value) => value.replaceAll("'", "")).find((value) => value.endsWith("_CREATED"))
+        ?? "STATUS_CHANGED";
+      this.events.push({
+        id: this.events.length + 1,
+        deployment_id: deploymentId,
+        event_type: eventType,
+        from_status: "DRAFT",
+        to_status: "ANALYZING",
+        message,
+        metadata: metadata ? JSON.parse(metadata) : {},
+        created_at: new Date("2026-09-10T00:00:01.000Z"),
+      });
+      return { rowCount: 1, rows: [] };
     }
 
     if (text.includes("FROM deployment_events")) {
@@ -314,4 +376,172 @@ test("Trigger HTTP boundary sends only fixed task, deployment id, and idempotenc
   assert.equal(calls[0].init.headers.Authorization, "Bearer secret-value");
   assert.equal(JSON.stringify(body).includes("sourceCommitSha"), false);
   assert.equal(JSON.stringify(body).includes("providerProjectId"), false);
+});
+
+test("failed deployment retry creates a new same-source child and leaves parent unchanged", async () => {
+  const db = new FakeDb();
+  db.deployments[0].status = "FAILED";
+  db.deployments[0].error_code = "HEALTH_CHECK_FAILED";
+  db.deployments[0].live_url = "https://old.example";
+  db.deployments[0].provider_deployment_id = "dpl_old";
+  const calls = [];
+
+  const deployment = await retryFailedCustomerDeployment(db, {
+    ...startArgs(),
+    deploymentKeyFactory: () => "dep_retry",
+    triggerOrchestrator: async (input) => {
+      calls.push(input);
+      return { id: "run-retry" };
+    },
+  });
+  const parent = db.deployments.find((row) => row.id === "deployment-a");
+  const child = db.deployments.find((row) => row.id === deployment.deploymentId);
+
+  assert.equal(db.deployments.length, 2);
+  assert.equal(parent.status, "FAILED");
+  assert.equal(parent.error_code, "HEALTH_CHECK_FAILED");
+  assert.notEqual(child.id, parent.id);
+  assert.equal(child.deployment_key, "dep_retry");
+  assert.equal(child.workspace_id, parent.workspace_id);
+  assert.equal(child.app_id, parent.app_id);
+  assert.equal(child.source_commit_sha, parent.source_commit_sha);
+  assert.equal(child.source_branch, parent.source_branch);
+  assert.equal(child.parent_deployment_id, parent.id);
+  assert.equal(child.status, "ANALYZING");
+  assert.equal(child.error_code, null);
+  assert.equal(child.live_url, null);
+  assert.equal(child.provider_deployment_id, null);
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].deploymentId, child.id);
+  assert.equal(calls[0].idempotencyKey, deploymentStartIdempotencyKey(child.id));
+  assert.equal(deployment.retry.created, true);
+  assert.equal(JSON.stringify(deployment).includes("dpl_old"), false);
+});
+
+test("failed deployment retry returns an existing active child without creating another", async () => {
+  const db = new FakeDb();
+  db.deployments[0].status = "FAILED";
+  db.deployments[0].error_code = "HEALTH_CHECK_FAILED";
+  db.deployments.push({
+    id: "deployment-child",
+    deployment_key: "dep_child",
+    workspace_id: "workspace-a",
+    app_id: "app-a",
+    status: "BUILDING",
+    error_code: null,
+    source_commit_sha: "a".repeat(40),
+    source_branch: "main",
+    parent_deployment_id: "deployment-a",
+    orchestrator_run_id: "run-child",
+    live_url: null,
+    provider_deployment_id: null,
+    created_at: 2,
+  });
+  let triggerCount = 0;
+
+  const deployment = await retryFailedCustomerDeployment(db, {
+    ...startArgs(),
+    deploymentKeyFactory: () => "dep_should_not_create",
+    triggerOrchestrator: async () => {
+      triggerCount += 1;
+      return { id: "run-new" };
+    },
+  });
+
+  assert.equal(db.deployments.length, 2);
+  assert.equal(deployment.deploymentId, "deployment-child");
+  assert.equal(deployment.status, "BUILDING");
+  assert.equal(deployment.retry.created, false);
+  assert.equal(deployment.retry.alreadyStarted, true);
+  assert.equal(triggerCount, 0);
+});
+
+test("failed deployment retry returns a live child and refuses failed retry chains", async () => {
+  const db = new FakeDb();
+  db.deployments[0].status = "FAILED";
+  db.deployments[0].error_code = "HEALTH_CHECK_FAILED";
+  db.deployments.push({
+    id: "deployment-child",
+    deployment_key: "dep_child",
+    workspace_id: "workspace-a",
+    app_id: "app-a",
+    status: "LIVE",
+    error_code: null,
+    source_commit_sha: "a".repeat(40),
+    source_branch: "main",
+    parent_deployment_id: "deployment-a",
+    orchestrator_run_id: "run-child",
+    live_url: "https://child.example",
+    provider_deployment_id: null,
+    created_at: 2,
+  });
+
+  const live = await retryFailedCustomerDeployment(db, {
+    ...startArgs(),
+    triggerOrchestrator: async () => {
+      throw new Error("should not trigger");
+    },
+  });
+  assert.equal(live.deploymentId, "deployment-child");
+  assert.equal(live.status, "LIVE");
+  assert.equal(live.liveUrl, "https://child.example");
+
+  db.deployments[1].status = "FAILED";
+  await assert.rejects(
+    () => retryFailedCustomerDeployment(db, { ...startArgs(), triggerOrchestrator: async () => ({ id: "run" }) }),
+    /retry deployment has already failed/i,
+  );
+});
+
+test("failed deployment retry denies cross-workspace, non-failed, and stale parent attempts", async () => {
+  const db = new FakeDb();
+  await assert.rejects(
+    () => retryFailedCustomerDeployment(db, { ...startArgs({ workspaceId: "workspace-b" }), triggerOrchestrator: async () => ({ id: "run" }) }),
+    /Workspace not found/,
+  );
+  await assert.rejects(
+    () => retryFailedCustomerDeployment(db, { ...startArgs(), triggerOrchestrator: async () => ({ id: "run" }) }),
+    /Only failed deployments/,
+  );
+
+  db.deployments[0].status = "FAILED";
+  db.deployments.push({
+    id: "deployment-newer",
+    deployment_key: "dep_newer",
+    workspace_id: "workspace-a",
+    app_id: "app-a",
+    status: "ANALYZING",
+    error_code: null,
+    source_commit_sha: "b".repeat(40),
+    source_branch: "main",
+    parent_deployment_id: null,
+    orchestrator_run_id: null,
+    live_url: null,
+    provider_deployment_id: null,
+    created_at: 2,
+  });
+  await assert.rejects(
+    () => retryFailedCustomerDeployment(db, { ...startArgs(), triggerOrchestrator: async () => ({ id: "run" }) }),
+    /latest analysed deployment/,
+  );
+});
+
+test("retry trigger failure clears only the child start marker", async () => {
+  const db = new FakeDb();
+  db.deployments[0].status = "FAILED";
+  db.deployments[0].error_code = "HEALTH_CHECK_FAILED";
+
+  await assert.rejects(
+    () => retryFailedCustomerDeployment(db, {
+      ...startArgs(),
+      triggerOrchestrator: async () => {
+        throw new Error("trigger down");
+      },
+    }),
+    /trigger down/,
+  );
+
+  const child = db.deployments.find((row) => row.parent_deployment_id === "deployment-a");
+  assert.equal(db.deployments[0].status, "FAILED");
+  assert.equal(child.orchestrator_run_id, null);
 });

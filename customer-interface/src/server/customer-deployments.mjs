@@ -1,5 +1,6 @@
 import { getDeploymentReadiness } from "./customer-configuration.mjs";
 import { getAuthorizedWorkspace } from "./customer-workspaces.mjs";
+import crypto from "node:crypto";
 
 const ORCHESTRATOR_TASK_ID = "ssc-control-plane-orchestrate-deployment";
 const START_MARKER_PREFIX = "UI06_START_REQUESTED";
@@ -130,6 +131,7 @@ function safeDeployment(row, events = []) {
   const terminal = TERMINAL_STATUSES.has(row.status);
   return {
     deploymentId: row.id,
+    parentDeploymentId: row.parent_deployment_id ?? null,
     appId: row.app_id,
     status: row.status,
     stage: safeStage(row.status),
@@ -154,6 +156,7 @@ async function loadAuthorizedDeployment(db, { customerId, workspaceId, appId, de
              d.error_code,
              d.source_commit_sha,
              d.source_branch,
+             d.parent_deployment_id,
              d.orchestrator_run_id,
              d.live_url,
              d.created_at,
@@ -181,6 +184,37 @@ async function loadAuthorizedDeployment(db, { customerId, workspaceId, appId, de
     });
   }
   return deployment;
+}
+
+async function loadRetryChildDeployment(db, { appId, parentDeploymentId }) {
+  const result = await db.query(
+    `
+      SELECT d.id,
+             d.workspace_id,
+             d.app_id,
+             d.status,
+             d.error_code,
+             d.source_commit_sha,
+             d.source_branch,
+             d.parent_deployment_id,
+             d.orchestrator_run_id,
+             d.live_url,
+             d.created_at,
+             NULL AS app_deleted_at,
+             bi.id AS build_input_id,
+             bi.build_command
+        FROM deployments d
+        LEFT JOIN deployment_build_inputs bi
+          ON bi.deployment_id = d.id
+       WHERE d.app_id = $1
+         AND d.parent_deployment_id = $2
+       ORDER BY d.created_at DESC
+       LIMIT 1
+       FOR UPDATE OF d
+    `,
+    [appId, parentDeploymentId],
+  );
+  return result.rows[0] ?? null;
 }
 
 async function assertLatestDeployment(db, { appId, deploymentId }) {
@@ -377,6 +411,179 @@ export async function startCustomerDeployment(
   return {
     ...deployment,
     start: {
+      started: shouldTrigger,
+      alreadyStarted,
+    },
+  };
+}
+
+export async function retryFailedCustomerDeployment(
+  db,
+  {
+    customerId,
+    workspaceId,
+    appId,
+    deploymentId,
+    triggerOrchestrator = triggerDeploymentOrchestrator,
+    deploymentKeyFactory = () => `dep_${crypto.randomUUID().replaceAll("-", "")}`,
+  },
+) {
+  let childDeploymentId = null;
+  let shouldTrigger = false;
+  let alreadyStarted = false;
+  let created = false;
+
+  await db.query("BEGIN");
+  try {
+    const parent = await loadAuthorizedDeployment(db, {
+      customerId,
+      workspaceId,
+      appId,
+      deploymentId,
+      forUpdate: true,
+    });
+    if (parent.status !== "FAILED") {
+      throw Object.assign(new Error("Only failed deployments can be retried."), {
+        status: 409,
+        code: "DEPLOYMENT_RETRY_NOT_ELIGIBLE",
+      });
+    }
+    if (!parent.source_commit_sha) {
+      throw Object.assign(new Error("Failed deployment has no immutable source commit."), {
+        status: 409,
+        code: "DEPLOYMENT_SOURCE_MISSING",
+      });
+    }
+
+    let child = await loadRetryChildDeployment(db, { appId, parentDeploymentId: deploymentId });
+    if (!child) {
+      await assertLatestDeployment(db, { appId, deploymentId });
+      const createdChild = await db.query(
+        `INSERT INTO deployments
+           (deployment_key, workspace_id, app_id, source_commit_sha, source_branch,
+            status, parent_deployment_id, deployment_reason)
+         VALUES ($1,$2,$3,$4,$5,'ANALYZING',$6,'redeploy')
+         RETURNING id,
+                   workspace_id,
+                   app_id,
+                   status,
+                   error_code,
+                   source_commit_sha,
+                   source_branch,
+                   parent_deployment_id,
+                   orchestrator_run_id,
+                   live_url,
+                   created_at`,
+        [
+          deploymentKeyFactory(),
+          parent.workspace_id,
+          parent.app_id,
+          parent.source_commit_sha,
+          parent.source_branch,
+          parent.id,
+        ],
+      );
+      child = {
+        ...createdChild.rows[0],
+        app_deleted_at: null,
+        build_input_id: null,
+        build_command: null,
+      };
+      await db.query(
+        `INSERT INTO deployment_events
+           (deployment_id, from_status, to_status, event_type, message, metadata)
+         VALUES ($1,'DRAFT','ANALYZING','REDEPLOY_CREATED',$2,$3::jsonb)`,
+        [
+          child.id,
+          "Retry deployment created from failed immutable source",
+          JSON.stringify({
+            parentDeploymentId: parent.id,
+            sourceCommitSha: parent.source_commit_sha,
+            sourceBranch: parent.source_branch,
+          }),
+        ],
+      );
+      created = true;
+    }
+
+    childDeploymentId = child.id;
+    if (child.status === "FAILED") {
+      throw Object.assign(new Error("The retry deployment has already failed."), {
+        status: 409,
+        code: "DEPLOYMENT_RETRY_ALREADY_FAILED",
+      });
+    }
+    if (child.status === "LIVE") {
+      alreadyStarted = true;
+    } else if (ACTIVE_STATUSES.has(child.status) && child.status !== "ANALYZING") {
+      alreadyStarted = true;
+    } else if (child.status !== "ANALYZING") {
+      throw Object.assign(new Error("Retry deployment is not eligible to start."), {
+        status: 409,
+        code: "DEPLOYMENT_RETRY_NOT_ELIGIBLE",
+      });
+    } else if (child.orchestrator_run_id && !isStartMarker(child.orchestrator_run_id, child.id)) {
+      alreadyStarted = true;
+    } else {
+      const marker = startMarker(child.id);
+      await db.query(
+        `UPDATE deployments
+            SET orchestrator_run_id = $1,
+                updated_at = now()
+          WHERE id = $2
+            AND (orchestrator_run_id IS NULL OR orchestrator_run_id = $1)`,
+        [marker, child.id],
+      );
+      shouldTrigger = true;
+    }
+
+    await db.query("COMMIT");
+  } catch (error) {
+    await db.query("ROLLBACK").catch(() => {});
+    throw error;
+  }
+
+  let triggerRunId = null;
+  if (shouldTrigger) {
+    const marker = startMarker(childDeploymentId);
+    try {
+      const handle = await triggerOrchestrator({
+        deploymentId: childDeploymentId,
+        idempotencyKey: deploymentStartIdempotencyKey(childDeploymentId),
+      });
+      triggerRunId = handle.id;
+      await db.query(
+        `UPDATE deployments
+            SET orchestrator_run_id = $1,
+                updated_at = now()
+          WHERE id = $2
+            AND (orchestrator_run_id IS NULL OR orchestrator_run_id = $3 OR orchestrator_run_id = $1)`,
+        [triggerRunId, childDeploymentId, marker],
+      );
+    } catch (error) {
+      await db.query(
+        `UPDATE deployments
+            SET orchestrator_run_id = NULL,
+                updated_at = now()
+          WHERE id = $1
+            AND orchestrator_run_id = $2`,
+        [childDeploymentId, marker],
+      ).catch(() => {});
+      throw error;
+    }
+  }
+
+  const deployment = await getCustomerDeploymentProgress(db, {
+    customerId,
+    workspaceId,
+    appId,
+    deploymentId: childDeploymentId,
+  });
+  return {
+    ...deployment,
+    retry: {
+      parentDeploymentId: deploymentId,
+      created,
       started: shouldTrigger,
       alreadyStarted,
     },

@@ -152,6 +152,28 @@ export function GitHubPanel({ workspaceId, github }) {
     startTransition(() => router.refresh());
   }
 
+  async function retryDeployment(appId, deploymentId, analysisDeploymentId = deploymentId) {
+    setMessage("");
+    setDeploymentPending((current) => ({ ...current, [deploymentId]: true }));
+    const response = await fetch(
+      `/api/workspaces/${encodeURIComponent(workspaceId)}/applications/${encodeURIComponent(appId)}/deployments/${encodeURIComponent(deploymentId)}/retry`,
+      { method: "POST" },
+    );
+    const body = await response.json().catch(() => ({}));
+    setDeploymentPending((current) => ({ ...current, [deploymentId]: false }));
+    if (!response.ok) {
+      setMessage(body.error || "DEPLOYMENT_RETRY_FAILED");
+      return;
+    }
+    setDeploymentState((current) => ({
+      ...current,
+      [analysisDeploymentId]: body.deployment,
+      [body.deployment.deploymentId]: body.deployment,
+    }));
+    setMessage("Deployment retry started.");
+    startTransition(() => router.refresh());
+  }
+
   const groups = repositoryState?.installations ?? [];
   const analysesByRepository = new Map(
     (github.repositoryAnalyses ?? []).map((analysis) => [analysis.repositoryId, analysis]),
@@ -222,6 +244,7 @@ export function GitHubPanel({ workspaceId, github }) {
                     deployment={deploymentState[analysis.deploymentId]}
                     deploymentPending={Boolean(deploymentPending[analysis.deploymentId])}
                     startDeployment={startDeployment}
+                    retryDeployment={retryDeployment}
                     loadDeploymentProgress={loadDeploymentProgress}
                     isPending={isPending}
                   />
@@ -284,6 +307,7 @@ function AnalysisResult({
   deployment,
   deploymentPending,
   startDeployment,
+  retryDeployment,
   loadDeploymentProgress,
   isPending,
 }) {
@@ -316,12 +340,12 @@ function AnalysisResult({
   const failed = currentDeployment.status === "FAILED";
 
   useEffect(() => {
-    if (!active || !analysis.appId || !analysis.deploymentId) return undefined;
+    if (!active || !currentDeployment.appId || !currentDeployment.deploymentId) return undefined;
     let cancelled = false;
     let timer = null;
 
     async function poll() {
-      const progress = await loadDeploymentProgress(analysis.appId, analysis.deploymentId, { silent: true });
+      const progress = await loadDeploymentProgress(currentDeployment.appId, currentDeployment.deploymentId, { silent: true });
       if (cancelled) return;
       if (progress?.active) {
         timer = setTimeout(poll, 2000);
@@ -333,7 +357,7 @@ function AnalysisResult({
       cancelled = true;
       if (timer) clearTimeout(timer);
     };
-  }, [active, analysis.appId, analysis.deploymentId, deployment?.status]);
+  }, [active, currentDeployment.appId, currentDeployment.deploymentId, deployment?.status]);
 
   return (
     <div className="analysis-result">
@@ -401,6 +425,15 @@ function AnalysisResult({
         ) : null}
         {failed && currentDeployment.diagnostic ? (
           <small>{currentDeployment.diagnostic.title}: {currentDeployment.diagnostic.action}</small>
+        ) : null}
+        {failed ? (
+          <button
+            type="button"
+            onClick={() => retryDeployment(currentDeployment.appId, currentDeployment.deploymentId, analysis.deploymentId)}
+            disabled={isPending || deploymentPending}
+          >
+            {deploymentPending ? "Starting..." : "Deploy again"}
+          </button>
         ) : null}
         {ready && !active && !live && !failed ? (
           <button

@@ -107,6 +107,7 @@ test("workspace and session APIs use the authenticated customer-session guard", 
     "app/api/workspaces/[workspaceId]/applications/[appId]/configuration/secrets/route.js",
     "app/api/workspaces/[workspaceId]/applications/[appId]/deployments/[deploymentId]/route.js",
     "app/api/workspaces/[workspaceId]/applications/[appId]/deployments/[deploymentId]/start/route.js",
+    "app/api/workspaces/[workspaceId]/applications/[appId]/deployments/[deploymentId]/retry/route.js",
   ];
 
   for (const relative of apiFiles) {
@@ -128,4 +129,13 @@ test("PostgreSQL client is bundled for Vercel server runtime resolution", async 
   const config = await readFile(path.join(root, "next.config.mjs"), "utf8");
 
   assert.match(config, /transpilePackages:\s*\[\s*"pg"\s*\]/);
+});
+
+test("failed deployment UI exposes retry and follows the returned child deployment", async () => {
+  const panel = await readFile(path.join(root, "app", "github-panel.js"), "utf8");
+
+  assert.equal(panel.includes("/retry`"), true);
+  assert.equal(panel.includes("Deploy again"), true);
+  assert.equal(panel.includes("[analysisDeploymentId]: body.deployment"), true);
+  assert.equal(panel.includes("loadDeploymentProgress(currentDeployment.appId, currentDeployment.deploymentId"), true);
 });
