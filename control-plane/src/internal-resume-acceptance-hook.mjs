@@ -12,11 +12,44 @@ function enabled(value) {
 export function internalResumeAcceptanceHookEnabled({
   env = process.env,
   deploymentId,
+  workspaceId,
+  appId,
   point = INTERNAL_RESUME_ACCEPTANCE_POINT_AFTER_ENV,
 } = {}) {
-  return enabled(env.UTPLAVA_INTERNAL_RESUME_TEST_MODE)
-    && env.UTPLAVA_INTERNAL_RESUME_TEST_DEPLOYMENT_ID === deploymentId
-    && (env.UTPLAVA_INTERNAL_RESUME_TEST_POINT || INTERNAL_RESUME_ACCEPTANCE_POINT_AFTER_ENV) === point;
+  return internalResumeAcceptanceSelector({ env, deploymentId, workspaceId, appId, point }).enabled;
+}
+
+export function internalResumeAcceptanceSelector({
+  env = process.env,
+  deploymentId,
+  workspaceId,
+  appId,
+  point = INTERNAL_RESUME_ACCEPTANCE_POINT_AFTER_ENV,
+} = {}) {
+  if (!enabled(env.UTPLAVA_INTERNAL_RESUME_TEST_MODE)) {
+    return { enabled: false, reason: "mode-disabled" };
+  }
+  if ((env.UTPLAVA_INTERNAL_RESUME_TEST_POINT || INTERNAL_RESUME_ACCEPTANCE_POINT_AFTER_ENV) !== point) {
+    return { enabled: false, reason: "point-mismatch" };
+  }
+  if (env.UTPLAVA_INTERNAL_RESUME_TEST_DEPLOYMENT_ID) {
+    return env.UTPLAVA_INTERNAL_RESUME_TEST_DEPLOYMENT_ID === deploymentId
+      ? { enabled: true, selectorType: "deployment", deploymentId, point }
+      : { enabled: false, reason: "deployment-mismatch" };
+  }
+  if (!enabled(env.UTPLAVA_INTERNAL_RESUME_TEST_ONCE)) {
+    return { enabled: false, reason: "app-selector-not-once" };
+  }
+  if (!env.UTPLAVA_INTERNAL_RESUME_TEST_WORKSPACE_ID || !env.UTPLAVA_INTERNAL_RESUME_TEST_APP_ID) {
+    return { enabled: false, reason: "app-selector-incomplete" };
+  }
+  if (
+    env.UTPLAVA_INTERNAL_RESUME_TEST_WORKSPACE_ID !== workspaceId
+    || env.UTPLAVA_INTERNAL_RESUME_TEST_APP_ID !== appId
+  ) {
+    return { enabled: false, reason: "app-selector-mismatch" };
+  }
+  return { enabled: true, selectorType: "app-once", workspaceId, appId, point };
 }
 
 async function defaultConnectDatabase(env) {
@@ -26,9 +59,36 @@ async function defaultConnectDatabase(env) {
   return db;
 }
 
-export async function recordInternalResumeAcceptanceInterruption(db, { deploymentId, status, point }) {
+export async function recordInternalResumeAcceptanceInterruption(
+  db,
+  {
+    deploymentId,
+    workspaceId = null,
+    appId = null,
+    status,
+    point,
+    selector = { selectorType: "deployment" },
+  },
+) {
   if (status !== "ANALYZING") {
     return { interrupted: false, reason: "not-safe-state", status, point };
+  }
+
+  if (selector.selectorType === "app-once") {
+    const consumed = await db.query(
+      `SELECT e.id
+         FROM deployment_events e
+         JOIN deployments d
+           ON d.id = e.deployment_id
+        WHERE d.workspace_id = $1
+          AND d.app_id = $2
+          AND e.event_type = $3
+        LIMIT 1`,
+      [workspaceId, appId, INTERNAL_RESUME_ACCEPTANCE_EVENT],
+    );
+    if (consumed.rowCount > 0) {
+      return { interrupted: false, reason: "selector-already-consumed", status, point };
+    }
   }
 
   const existing = await db.query(
@@ -54,6 +114,9 @@ export async function recordInternalResumeAcceptanceInterruption(db, { deploymen
       JSON.stringify({
         point,
         status,
+        selectorType: selector.selectorType ?? "deployment",
+        workspaceId: selector.selectorType === "app-once" ? workspaceId : undefined,
+        appId: selector.selectorType === "app-once" ? appId : undefined,
         responseBodyStored: false,
       }),
     ],
@@ -64,18 +127,28 @@ export async function recordInternalResumeAcceptanceInterruption(db, { deploymen
 
 export async function maybeInterruptInternalResumeAcceptance({
   deploymentId,
+  workspaceId,
+  appId,
   status,
   point = INTERNAL_RESUME_ACCEPTANCE_POINT_AFTER_ENV,
   env = process.env,
   connectDatabase = defaultConnectDatabase,
 } = {}) {
-  if (!internalResumeAcceptanceHookEnabled({ env, deploymentId, point })) {
-    return { interrupted: false, reason: "disabled", status, point };
+  const selector = internalResumeAcceptanceSelector({ env, deploymentId, workspaceId, appId, point });
+  if (!selector.enabled) {
+    return { interrupted: false, reason: selector.reason ?? "disabled", status, point };
   }
 
   const db = await connectDatabase(env);
   try {
-    return await recordInternalResumeAcceptanceInterruption(db, { deploymentId, status, point });
+    return await recordInternalResumeAcceptanceInterruption(db, {
+      deploymentId,
+      workspaceId,
+      appId,
+      status,
+      point,
+      selector,
+    });
   } finally {
     await db.end?.();
   }

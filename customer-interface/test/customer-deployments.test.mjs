@@ -537,6 +537,41 @@ test("internal resume acceptance stale override applies only to the selected ser
     deploymentId: "deployment-a",
     env: { ...env, UTPLAVA_INTERNAL_RESUME_TEST_STALE_AFTER_MS: "90000" },
   }), 60 * 1000);
+
+  const appEnv = {
+    UTPLAVA_INTERNAL_RESUME_TEST_MODE: "true",
+    UTPLAVA_INTERNAL_RESUME_TEST_WORKSPACE_ID: "workspace-a",
+    UTPLAVA_INTERNAL_RESUME_TEST_APP_ID: "app-a",
+    UTPLAVA_INTERNAL_RESUME_TEST_ONCE: "true",
+    UTPLAVA_INTERNAL_RESUME_TEST_STALE_AFTER_MS: "45000",
+  };
+  assert.equal(customerResumeStaleThresholdMs({
+    deploymentId: "deployment-new",
+    workspaceId: "workspace-a",
+    appId: "app-a",
+    env: appEnv,
+  }), 45000);
+  assert.equal(customerResumeStaleThresholdMs({
+    deploymentId: "deployment-new",
+    workspaceId: "workspace-b",
+    appId: "app-a",
+    env: appEnv,
+  }), 5 * 60 * 1000);
+  assert.equal(customerResumeStaleThresholdMs({
+    deploymentId: "deployment-new",
+    workspaceId: "workspace-a",
+    appId: "app-b",
+    env: appEnv,
+  }), 5 * 60 * 1000);
+  assert.equal(customerResumeStaleThresholdMs({
+    deploymentId: "deployment-new",
+    workspaceId: "workspace-a",
+    appId: "app-a",
+    env: {
+      ...appEnv,
+      UTPLAVA_INTERNAL_RESUME_TEST_DEPLOYMENT_ID: "deployment-other",
+    },
+  }), 5 * 60 * 1000);
 });
 
 test("internal resume acceptance stale override can drive auto-resume without customer input", async () => {
@@ -554,7 +589,9 @@ test("internal resume acceptance stale override can drive auto-resume without cu
     now: new Date("2026-09-10T00:10:00.000Z").getTime(),
     env: {
       UTPLAVA_INTERNAL_RESUME_TEST_MODE: "true",
-      UTPLAVA_INTERNAL_RESUME_TEST_DEPLOYMENT_ID: "deployment-a",
+      UTPLAVA_INTERNAL_RESUME_TEST_WORKSPACE_ID: "workspace-a",
+      UTPLAVA_INTERNAL_RESUME_TEST_APP_ID: "app-a",
+      UTPLAVA_INTERNAL_RESUME_TEST_ONCE: "true",
       UTPLAVA_INTERNAL_RESUME_TEST_STALE_AFTER_MS: "30000",
     },
     triggerOrchestrator: async () => {

@@ -87,11 +87,20 @@ export function deploymentResumeIdempotencyKey(deploymentId, marker) {
 export function customerResumeStaleThresholdMs({
   env = process.env,
   deploymentId,
+  workspaceId,
+  appId,
   staleAfterMs,
 } = {}) {
   if (Number.isFinite(staleAfterMs)) return staleAfterMs;
   const internalMode = String(env.UTPLAVA_INTERNAL_RESUME_TEST_MODE || "").toLowerCase() === "true";
-  if (!internalMode || env.UTPLAVA_INTERNAL_RESUME_TEST_DEPLOYMENT_ID !== deploymentId) {
+  const deploymentSelected = env.UTPLAVA_INTERNAL_RESUME_TEST_DEPLOYMENT_ID === deploymentId;
+  if (internalMode && env.UTPLAVA_INTERNAL_RESUME_TEST_DEPLOYMENT_ID) {
+    if (!deploymentSelected) return DEFAULT_RESUME_STALE_AFTER_MS;
+  }
+  const appSelected = String(env.UTPLAVA_INTERNAL_RESUME_TEST_ONCE || "").toLowerCase() === "true"
+    && env.UTPLAVA_INTERNAL_RESUME_TEST_WORKSPACE_ID === workspaceId
+    && env.UTPLAVA_INTERNAL_RESUME_TEST_APP_ID === appId;
+  if (!internalMode || (!deploymentSelected && !appSelected)) {
     return DEFAULT_RESUME_STALE_AFTER_MS;
   }
   const configured = Number(env.UTPLAVA_INTERNAL_RESUME_TEST_STALE_AFTER_MS);
@@ -392,7 +401,13 @@ export async function resumeCustomerDeployment(
     env = process.env,
   },
 ) {
-  const effectiveStaleAfterMs = customerResumeStaleThresholdMs({ env, deploymentId, staleAfterMs });
+  const effectiveStaleAfterMs = customerResumeStaleThresholdMs({
+    env,
+    deploymentId,
+    workspaceId,
+    appId,
+    staleAfterMs,
+  });
   let shouldTrigger = false;
   let marker = null;
   let resumeStatus = null;
@@ -519,7 +534,13 @@ export async function getCustomerDeploymentProgressWithResume(
     env = process.env,
   },
 ) {
-  const effectiveStaleAfterMs = customerResumeStaleThresholdMs({ env, deploymentId, staleAfterMs });
+  const effectiveStaleAfterMs = customerResumeStaleThresholdMs({
+    env,
+    deploymentId,
+    workspaceId,
+    appId,
+    staleAfterMs,
+  });
   const current = await loadAuthorizedDeployment(db, { customerId, workspaceId, appId, deploymentId });
   const eligibility = resumeEligibility(current, { now, staleAfterMs: effectiveStaleAfterMs });
   if (eligibility.eligible) {
