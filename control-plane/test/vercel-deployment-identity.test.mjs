@@ -8,6 +8,7 @@ import {
   PublicBindingStatus,
   SourceIdentityStatus,
   providerObservedSourceSha,
+  publicBindingHostCandidates,
   verifyProviderDeploymentIdentity,
   verifyProviderSourceIdentity,
   verifyPublicBinding,
@@ -114,6 +115,34 @@ test("exact deployment healthy and canonical alias on same deployment can become
   assert.equal(result.status, PublicBindingStatus.MATCH);
 });
 
+test("current Vercel string alias response shape proves shortened production binding", () => {
+  const host = "ssc-ab4f73c5b38d-751febb15fe0-dealu.vercel.app";
+  const providerDeployment = deployment({
+    name: "ssc-ab4f73c5b38d-751febb15fe0-dealupwebsite",
+    alias: [
+      host,
+      "ssc-ab4f73c5b38d-751febb15fe0-dealupwebsite-kp080681s-projects.vercel.app",
+      "ssc-ab4f73c5b38d-751febb15fe0-dea-git-bce877-kp080681s-projects.vercel.app",
+    ],
+  });
+  const project = { id: "prj_dealup", name: "ssc-ab4f73c5b38d-751febb15fe0-dealupwebsite" };
+
+  const candidates = publicBindingHostCandidates({ providerDeployment, project });
+  const binding = verifyPublicBinding({
+    canonicalHost: candidates[0],
+    providerDeploymentId: "dpl_new",
+    providerProjectId: "prj_dealup",
+    alias: { alias: host, deployment: { id: "dpl_new" }, project: { id: "prj_dealup" } },
+    deploymentAliases: { aliases: providerDeployment.alias },
+  });
+
+  assert.equal(candidates[0], host);
+  assert.equal(candidates.includes("ssc-ab4f73c5b38d-751febb15fe0-dealupwebsite.vercel.app"), true);
+  assert.equal(binding.status, PublicBindingStatus.MATCH);
+  assert.equal(binding.canonicalHost, host);
+  assert.equal(binding.listedOnDeployment, true);
+});
+
 test("stale canonical alias returning HTTP 200 cannot mark the new deployment live", () => {
   const result = verifyPublicBinding({
     canonicalHost: "ssc-dealup.vercel.app",
@@ -150,6 +179,38 @@ test("canonical HTTP 200 without provider binding proof remains not live", () =>
   });
 
   assert.equal(binding.status, PublicBindingStatus.UNAVAILABLE);
+});
+
+test("hostname string alone remains insufficient without alias lookup identity", () => {
+  const binding = verifyPublicBinding({
+    canonicalHost: "ssc-ab4f73c5b38d-751febb15fe0-dealu.vercel.app",
+    providerDeploymentId: "dpl_new",
+    providerProjectId: "prj_dealup",
+    alias: null,
+    deploymentAliases: { aliases: ["ssc-ab4f73c5b38d-751febb15fe0-dealu.vercel.app"] },
+  });
+
+  assert.equal(binding.status, PublicBindingStatus.UNAVAILABLE);
+});
+
+test("alias pointing to another project or deployment remains blocked", () => {
+  const deploymentMismatch = verifyPublicBinding({
+    canonicalHost: "ssc-ab4f73c5b38d-751febb15fe0-dealu.vercel.app",
+    providerDeploymentId: "dpl_new",
+    providerProjectId: "prj_dealup",
+    alias: { alias: "ssc-ab4f73c5b38d-751febb15fe0-dealu.vercel.app", deploymentId: "dpl_old", projectId: "prj_dealup" },
+    deploymentAliases: { aliases: ["ssc-ab4f73c5b38d-751febb15fe0-dealu.vercel.app"] },
+  });
+  const projectMismatch = verifyPublicBinding({
+    canonicalHost: "ssc-ab4f73c5b38d-751febb15fe0-dealu.vercel.app",
+    providerDeploymentId: "dpl_new",
+    providerProjectId: "prj_dealup",
+    alias: { alias: "ssc-ab4f73c5b38d-751febb15fe0-dealu.vercel.app", deploymentId: "dpl_new", projectId: "prj_other" },
+    deploymentAliases: { aliases: ["ssc-ab4f73c5b38d-751febb15fe0-dealu.vercel.app"] },
+  });
+
+  assert.equal(deploymentMismatch.status, PublicBindingStatus.MISMATCH);
+  assert.equal(projectMismatch.status, PublicBindingStatus.MISMATCH);
 });
 
 test("omitted provider identity fields fail closed", () => {

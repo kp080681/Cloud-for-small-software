@@ -105,6 +105,7 @@ function aliasProjectId(alias) {
 }
 
 function aliasName(alias) {
+  if (typeof alias === "string") return alias;
   return stringOrNull(alias?.alias ?? alias?.domain ?? alias?.hostname);
 }
 
@@ -161,4 +162,20 @@ export function verifyPublicBinding({ alias, deploymentAliases, canonicalHost, p
     aliasProjectId: actualProjectId,
     listedOnDeployment,
   };
+}
+
+export function publicBindingHostCandidates({ providerDeployment, project }) {
+  const projectName = stringOrNull(project?.name);
+  const aliases = Array.isArray(providerDeployment?.alias)
+    ? providerDeployment.alias
+    : Array.isArray(providerDeployment?.aliases)
+      ? providerDeployment.aliases
+      : [];
+  const projectDomains = Array.isArray(project?.domains) ? project.domains : [];
+  const hosts = [
+    ...aliases.map(aliasName),
+    ...projectDomains.map(aliasName),
+    projectName ? `${projectName}.vercel.app` : null,
+  ].filter(Boolean);
+  return [...new Set(hosts)];
 }

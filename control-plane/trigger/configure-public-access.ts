@@ -9,6 +9,7 @@ import {
   verifyProviderDeploymentIdentity,
   verifyProviderSourceIdentity,
   verifyPublicBinding,
+  publicBindingHostCandidates,
 } from "../src/vercel-deployment-identity.mjs";
 
 const { Client } = pg;
@@ -34,10 +35,10 @@ export const configurePublicAccess=task({id:"ssc-control-plane-configure-public-
   if(providerDeployment?.target!=="production")throw new Error(`Provider deployment is not production-targeted; target is ${providerDeployment?.target??"null"}`);
   if((providerDeployment?.readyState??providerDeployment?.state)!=="READY")throw new Error(`Provider production deployment is not READY`);
   const project=await vercelRequest(`/v9/projects/${encodeURIComponent(row.provider_project_id)}${teamQuery()}`);
-  const productionHost=(Array.isArray(providerDeployment?.alias)&&providerDeployment.alias.find((a:string)=>a===`${project.name}.vercel.app`))||(Array.isArray(project?.domains)&&project.domains.find((d:string)=>d===`${project.name}.vercel.app`))||`${project.name}.vercel.app`;
+  const productionHosts=publicBindingHostCandidates({providerDeployment,project});
   const deploymentAliases=await vercelRequestOptional(`/v2/deployments/${encodeURIComponent(row.provider_deployment_id)}/aliases${teamQuery()}`);
-  const alias=await vercelRequestOptional(`/v4/aliases/${encodeURIComponent(productionHost)}${teamQuery({projectId:row.provider_project_id})}`);
-  const publicBinding=verifyPublicBinding({alias,deploymentAliases,canonicalHost:productionHost,providerDeploymentId:row.provider_deployment_id,providerProjectId:row.provider_project_id});
+  let publicBinding:any={status:PublicBindingStatus.UNAVAILABLE,canonicalHost:productionHosts[0]??null};let productionHost=productionHosts[0]??`${project.name}.vercel.app`;
+  for(const candidateHost of productionHosts){const alias=await vercelRequestOptional(`/v4/aliases/${encodeURIComponent(candidateHost)}${teamQuery({projectId:row.provider_project_id})}`);const candidateBinding=verifyPublicBinding({alias,deploymentAliases,canonicalHost:candidateHost,providerDeploymentId:row.provider_deployment_id,providerProjectId:row.provider_project_id});if(candidateBinding.status===PublicBindingStatus.MATCH){publicBinding=candidateBinding;productionHost=candidateHost;break}if(publicBinding.status===PublicBindingStatus.UNAVAILABLE)publicBinding=candidateBinding}
   const checkUrl=`https://${productionHost}`;
   if(publicBinding.status!==PublicBindingStatus.MATCH){await db.query(`INSERT INTO deployment_events (deployment_id,from_status,to_status,event_type,message,metadata) VALUES ($1,$2,$2,'PUBLIC_BINDING_UNVERIFIED','Production URL is not proven to point at the verified provider deployment',$3::jsonb)`,[payload.deploymentId,row.status,JSON.stringify({checkUrl,providerDeploymentId:row.provider_deployment_id,providerProjectId:row.provider_project_id,publicBindingStatus:publicBinding.status,aliasDeploymentId:publicBinding.aliasDeploymentId??null,aliasProjectId:publicBinding.aliasProjectId??null,listedOnDeployment:publicBinding.listedOnDeployment??false,responseBodyStored:false,target:"production"})]);return{result:"NODE_15R_7_PUBLIC_BINDING_UNVERIFIED",deploymentId:payload.deploymentId,providerProjectId:row.provider_project_id,providerDeploymentId:row.provider_deployment_id,checkUrl,publicBindingStatus:publicBinding.status,publiclyReachable:false,status:row.status,responseBodyStored:false,target:"production"}}
   const checked=await anonymousCheck(checkUrl);const redirectLocationHost=checked.location?(()=>{try{return new URL(checked.location,checkUrl).hostname}catch{return null}})():null;
