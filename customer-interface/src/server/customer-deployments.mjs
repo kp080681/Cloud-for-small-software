@@ -4,8 +4,11 @@ import crypto from "node:crypto";
 
 const ORCHESTRATOR_TASK_ID = "ssc-control-plane-orchestrate-deployment";
 const START_MARKER_PREFIX = "UI06_START_REQUESTED";
+const RESUME_MARKER_PREFIX = "UI06_RESUME_REQUESTED";
 const ACTIVE_STATUSES = new Set(["ANALYZING", "PROVISIONING", "BUILDING", "DEPLOYING", "HEALTH_CHECKING"]);
 const TERMINAL_STATUSES = new Set(["LIVE", "FAILED", "DELETED"]);
+const RESUMABLE_STATUSES = new Set(["ANALYZING", "PROVISIONING", "BUILDING", "DEPLOYING", "HEALTH_CHECKING"]);
+const DEFAULT_RESUME_STALE_AFTER_MS = 5 * 60 * 1000;
 
 const stageByStatus = Object.freeze({
   ANALYZING: "Preparing deployment",
@@ -36,6 +39,9 @@ const eventTitles = Object.freeze({
   PUBLIC_ACCESS_VERIFIED: "Public URL verified",
   PUBLIC_ACCESS_BLOCKED: "Public access blocked",
   DEPLOYMENT_ABANDONED: "Deployment abandoned",
+  DEPLOYMENT_RESUME_REQUESTED: "Deployment continuing",
+  DEPLOYMENT_RESUME_STARTED: "Deployment continuing",
+  DEPLOYMENT_RESUME_FAILED: "Deployment needs attention",
 });
 
 const safeEvidenceKeys = new Set([
@@ -71,8 +77,17 @@ export function deploymentStartIdempotencyKey(deploymentId) {
   return `ui06:orchestrate:${deploymentId}`;
 }
 
+export function deploymentResumeIdempotencyKey(deploymentId, marker) {
+  const attemptId = String(marker || "").split(":").at(-1) || "unknown";
+  return `ui06:resume:${deploymentId}:${attemptId}`;
+}
+
 function startMarker(deploymentId) {
   return `${START_MARKER_PREFIX}:${deploymentId}`;
+}
+
+function resumeMarker(deploymentId) {
+  return `${RESUME_MARKER_PREFIX}:${deploymentId}:${crypto.randomUUID()}`;
 }
 
 function isStartMarker(value, deploymentId) {
@@ -160,6 +175,8 @@ async function loadAuthorizedDeployment(db, { customerId, workspaceId, appId, de
              d.orchestrator_run_id,
              d.live_url,
              d.created_at,
+             d.updated_at,
+             (SELECT max(e.created_at) FROM deployment_events e WHERE e.deployment_id = d.id) AS latest_event_at,
              a.deleted_at AS app_deleted_at,
              bi.id AS build_input_id,
              bi.build_command
@@ -200,6 +217,8 @@ async function loadRetryChildDeployment(db, { appId, parentDeploymentId }) {
              d.orchestrator_run_id,
              d.live_url,
              d.created_at,
+             d.updated_at,
+             (SELECT max(e.created_at) FROM deployment_events e WHERE e.deployment_id = d.id) AS latest_event_at,
              NULL AS app_deleted_at,
              bi.id AS build_input_id,
              bi.build_command
@@ -215,6 +234,39 @@ async function loadRetryChildDeployment(db, { appId, parentDeploymentId }) {
     [appId, parentDeploymentId],
   );
   return result.rows[0] ?? null;
+}
+
+function timestampMs(value) {
+  if (!value) return 0;
+  const time = new Date(value).getTime();
+  return Number.isFinite(time) ? time : 0;
+}
+
+function latestProgressMs(deployment) {
+  return Math.max(
+    timestampMs(deployment.updated_at),
+    timestampMs(deployment.latest_event_at),
+    timestampMs(deployment.created_at),
+  );
+}
+
+function resumeEligibility(deployment, { now = Date.now(), staleAfterMs = DEFAULT_RESUME_STALE_AFTER_MS } = {}) {
+  if (!RESUMABLE_STATUSES.has(deployment.status)) return { eligible: false, reason: "not-resumable-status" };
+  if (deployment.error_code) return { eligible: false, reason: "deployment-has-error" };
+  if (!deployment.source_commit_sha) return { eligible: false, reason: "source-identity-missing" };
+  const lastProgressMs = latestProgressMs(deployment);
+  const ageMs = Math.max(0, now - lastProgressMs);
+  if (ageMs < staleAfterMs) return { eligible: false, reason: "recent-progress", ageMs };
+  return { eligible: true, reason: "stale-recoverable", ageMs };
+}
+
+async function recordDeploymentEvent(db, { deploymentId, fromStatus, toStatus, eventType, message, metadata = {} }) {
+  await db.query(
+    `INSERT INTO deployment_events
+       (deployment_id, from_status, to_status, event_type, message, metadata)
+     VALUES ($1,$2,$3,$4,$5,$6::jsonb)`,
+    [deploymentId, fromStatus, toStatus, eventType, message, JSON.stringify(metadata)],
+  );
 }
 
 async function assertLatestDeployment(db, { appId, deploymentId }) {
@@ -303,6 +355,163 @@ export async function getCustomerDeploymentProgress(db, { customerId, workspaceI
   const deployment = await loadAuthorizedDeployment(db, { customerId, workspaceId, appId, deploymentId });
   const events = await loadDeploymentEvents(db, deploymentId);
   return safeDeployment(deployment, events);
+}
+
+export async function resumeCustomerDeployment(
+  db,
+  {
+    customerId,
+    workspaceId,
+    appId,
+    deploymentId,
+    triggerOrchestrator = triggerDeploymentOrchestrator,
+    staleAfterMs = DEFAULT_RESUME_STALE_AFTER_MS,
+    now = Date.now(),
+  },
+) {
+  let shouldTrigger = false;
+  let marker = null;
+  let resumeStatus = null;
+  let outcome = { attempted: false, started: false, suppressed: false, reason: null };
+
+  await db.query("BEGIN");
+  try {
+    const deployment = await loadAuthorizedDeployment(db, {
+      customerId,
+      workspaceId,
+      appId,
+      deploymentId,
+      forUpdate: true,
+    });
+    await assertLatestDeployment(db, { appId, deploymentId });
+
+    const eligibility = resumeEligibility(deployment, { now, staleAfterMs });
+    if (!eligibility.eligible) {
+      outcome = { attempted: false, started: false, suppressed: true, reason: eligibility.reason };
+    } else {
+      marker = resumeMarker(deploymentId);
+      const claimed = await db.query(
+        `UPDATE deployments
+            SET orchestrator_run_id = $1,
+                updated_at = now()
+          WHERE id = $2
+            AND status = $3
+            AND error_code IS NULL
+          RETURNING id`,
+        [marker, deploymentId, deployment.status],
+      );
+      if (claimed.rowCount === 1) {
+        resumeStatus = deployment.status;
+        await recordDeploymentEvent(db, {
+          deploymentId,
+          fromStatus: deployment.status,
+          toStatus: deployment.status,
+          eventType: "DEPLOYMENT_RESUME_REQUESTED",
+          message: "Recoverable deployment orchestration resume requested",
+          metadata: {
+            reason: eligibility.reason,
+            ageMs: eligibility.ageMs,
+            resumeMarker: marker,
+            responseBodyStored: false,
+          },
+        });
+        shouldTrigger = true;
+        outcome = { attempted: true, started: false, suppressed: false, reason: eligibility.reason };
+      } else {
+        outcome = { attempted: false, started: false, suppressed: true, reason: "resume-claim-lost" };
+      }
+    }
+    await db.query("COMMIT");
+  } catch (error) {
+    await db.query("ROLLBACK").catch(() => {});
+    throw error;
+  }
+
+  if (shouldTrigger) {
+    try {
+      const handle = await triggerOrchestrator({
+        deploymentId,
+        idempotencyKey: deploymentResumeIdempotencyKey(deploymentId, marker),
+      });
+      await db.query(
+        `UPDATE deployments
+            SET orchestrator_run_id = $1,
+                updated_at = now()
+          WHERE id = $2
+            AND orchestrator_run_id = $3`,
+        [handle.id, deploymentId, marker],
+      );
+      await recordDeploymentEvent(db, {
+        deploymentId,
+        fromStatus: resumeStatus,
+        toStatus: resumeStatus,
+        eventType: "DEPLOYMENT_RESUME_STARTED",
+        message: "Recoverable deployment orchestration resume started",
+        metadata: {
+          responseBodyStored: false,
+        },
+      });
+      outcome = { ...outcome, started: true };
+    } catch (error) {
+      await db.query(
+        `UPDATE deployments
+            SET orchestrator_run_id = NULL,
+                updated_at = now()
+          WHERE id = $1
+            AND orchestrator_run_id = $2`,
+        [deploymentId, marker],
+      ).catch(() => {});
+      await recordDeploymentEvent(db, {
+        deploymentId,
+        fromStatus: resumeStatus,
+        toStatus: resumeStatus,
+        eventType: "DEPLOYMENT_RESUME_FAILED",
+        message: "Recoverable deployment orchestration resume could not be started",
+        metadata: {
+          responseBodyStored: false,
+        },
+      }).catch(() => {});
+      throw error;
+    }
+  }
+
+  const deployment = await getCustomerDeploymentProgress(db, { customerId, workspaceId, appId, deploymentId });
+  return {
+    ...deployment,
+    resume: outcome,
+  };
+}
+
+export async function getCustomerDeploymentProgressWithResume(
+  db,
+  {
+    customerId,
+    workspaceId,
+    appId,
+    deploymentId,
+    triggerOrchestrator = triggerDeploymentOrchestrator,
+    staleAfterMs = DEFAULT_RESUME_STALE_AFTER_MS,
+    now = Date.now(),
+  },
+) {
+  const current = await loadAuthorizedDeployment(db, { customerId, workspaceId, appId, deploymentId });
+  const eligibility = resumeEligibility(current, { now, staleAfterMs });
+  if (eligibility.eligible) {
+    return resumeCustomerDeployment(db, {
+      customerId,
+      workspaceId,
+      appId,
+      deploymentId,
+      triggerOrchestrator,
+      staleAfterMs,
+      now,
+    });
+  }
+  const events = await loadDeploymentEvents(db, deploymentId);
+  return {
+    ...safeDeployment(current, events),
+    resume: { attempted: false, started: false, suppressed: !eligibility.eligible, reason: eligibility.reason },
+  };
 }
 
 export async function startCustomerDeployment(

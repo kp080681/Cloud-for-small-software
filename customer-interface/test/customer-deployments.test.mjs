@@ -1,9 +1,12 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  deploymentResumeIdempotencyKey,
   deploymentStartIdempotencyKey,
   getCustomerDeploymentProgress,
+  getCustomerDeploymentProgressWithResume,
   retryFailedCustomerDeployment,
+  resumeCustomerDeployment,
   startCustomerDeployment,
   triggerDeploymentOrchestrator,
 } from "../src/server/customer-deployments.mjs";
@@ -37,6 +40,7 @@ class FakeDb {
       live_url: null,
       provider_deployment_id: null,
       created_at: 1,
+      updated_at: new Date("2026-09-10T00:00:00.000Z"),
     }];
     this.buildInputs = [{
       id: "build-input-a",
@@ -85,7 +89,7 @@ class FakeDb {
         .sort((a, b) => b.created_at - a.created_at)[0];
       if (!deployment) return { rowCount: 0, rows: [] };
       const input = this.buildInputs.find((row) => row.deployment_id === deployment.id);
-      return { rowCount: 1, rows: [{ ...deployment, build_input_id: input?.id ?? null }] };
+      return { rowCount: 1, rows: [{ ...deployment, latest_event_at: this.latestEventAt(deployment.id), build_input_id: input?.id ?? null }] };
     }
 
     if (text.includes("FROM apps") && text.includes("workspace_id = $1") && text.includes("id = $2")) {
@@ -125,6 +129,7 @@ class FakeDb {
         rowCount: 1,
         rows: [{
           ...deployment,
+          latest_event_at: this.latestEventAt(deployment.id),
           app_deleted_at: app?.deleted_at ?? null,
           build_input_id: input?.id ?? null,
           build_command: input?.build_command ?? null,
@@ -151,6 +156,7 @@ class FakeDb {
         rowCount: 1,
         rows: [{
           ...deployment,
+          latest_event_at: this.latestEventAt(deployment.id),
           app_deleted_at: null,
           build_input_id: input?.id ?? null,
           build_command: input?.build_command ?? null,
@@ -174,6 +180,7 @@ class FakeDb {
         live_url: null,
         provider_deployment_id: null,
         created_at: Math.max(...this.deployments.map((row) => row.created_at)) + 1,
+        updated_at: new Date("2026-09-10T00:00:00.000Z"),
       };
       this.deployments.push(deployment);
       return { rowCount: 1, rows: [deployment] };
@@ -183,8 +190,15 @@ class FakeDb {
       const [runId, deploymentId, expected] = params;
       const deployment = this.deployments.find((row) => row.id === deploymentId);
       if (!deployment) return { rowCount: 0, rows: [] };
+      if (text.includes("AND status = $3")) {
+        if (deployment.status !== expected || deployment.error_code) return { rowCount: 0, rows: [] };
+        deployment.orchestrator_run_id = runId;
+        deployment.updated_at = new Date();
+        return { rowCount: 1, rows: [{ id: deployment.id }] };
+      }
       if (params.length === 2 || deployment.orchestrator_run_id === null || deployment.orchestrator_run_id === expected || deployment.orchestrator_run_id === runId) {
         deployment.orchestrator_run_id = runId;
+        deployment.updated_at = new Date();
         return { rowCount: 1, rows: [{ id: deployment.id }] };
       }
       return { rowCount: 0, rows: [] };
@@ -195,22 +209,27 @@ class FakeDb {
       const deployment = this.deployments.find((row) => row.id === deploymentId);
       if (deployment?.orchestrator_run_id === marker) {
         deployment.orchestrator_run_id = null;
+        deployment.updated_at = new Date();
         return { rowCount: 1, rows: [{ id: deployment.id }] };
       }
       return { rowCount: 0, rows: [] };
     }
 
     if (text.includes("INSERT INTO deployment_events")) {
-      const [deploymentId, message, metadata] = params;
+      const deploymentId = params[0];
+      const message = params.at(-2);
+      const metadata = params.at(-1);
+      const explicitEventType = params.length >= 6 ? params[3] : null;
       const eventTypeMatch = text.match(/'([A-Z_]+)'/g);
-      const eventType = eventTypeMatch?.map((value) => value.replaceAll("'", "")).find((value) => value.endsWith("_CREATED"))
+      const eventType = explicitEventType
+        ?? eventTypeMatch?.map((value) => value.replaceAll("'", "")).find((value) => value.endsWith("_CREATED"))
         ?? "STATUS_CHANGED";
       this.events.push({
         id: this.events.length + 1,
         deployment_id: deploymentId,
         event_type: eventType,
-        from_status: "DRAFT",
-        to_status: "ANALYZING",
+        from_status: params.length >= 6 ? params[1] : "DRAFT",
+        to_status: params.length >= 6 ? params[2] : "ANALYZING",
         message,
         metadata: metadata ? JSON.parse(metadata) : {},
         created_at: new Date("2026-09-10T00:00:01.000Z"),
@@ -229,6 +248,13 @@ class FakeDb {
 
     throw new Error(`Unhandled fake query: ${text}`);
   }
+
+  latestEventAt(deploymentId) {
+    const latest = this.events
+      .filter((row) => row.deployment_id === deploymentId)
+      .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())[0];
+    return latest?.created_at ?? null;
+  }
 }
 
 function startArgs(overrides = {}) {
@@ -239,6 +265,17 @@ function startArgs(overrides = {}) {
     deploymentId: "deployment-a",
     ...overrides,
   };
+}
+
+function makeDeploymentStale(db, status) {
+  db.deployments[0].status = status;
+  db.deployments[0].error_code = null;
+  db.deployments[0].orchestrator_run_id = "run-exited";
+  db.deployments[0].updated_at = new Date("2026-09-10T00:00:00.000Z");
+  db.events = db.events.map((event) => ({
+    ...event,
+    created_at: new Date("2026-09-10T00:00:00.000Z"),
+  }));
 }
 
 test("ready deployment invokes the approved orchestrator with deterministic idempotency", async () => {
@@ -376,6 +413,164 @@ test("Trigger HTTP boundary sends only fixed task, deployment id, and idempotenc
   assert.equal(calls[0].init.headers.Authorization, "Bearer secret-value");
   assert.equal(JSON.stringify(body).includes("sourceCommitSha"), false);
   assert.equal(JSON.stringify(body).includes("providerProjectId"), false);
+});
+
+for (const status of ["ANALYZING", "PROVISIONING", "BUILDING", "DEPLOYING", "HEALTH_CHECKING"]) {
+  test(`stale ${status} deployment resumes the same deployment`, async () => {
+    const db = new FakeDb();
+    makeDeploymentStale(db, status);
+    const calls = [];
+    const deployment = await resumeCustomerDeployment(db, {
+      ...startArgs(),
+      staleAfterMs: 1000,
+      now: new Date("2026-09-10T00:10:00.000Z").getTime(),
+      triggerOrchestrator: async (input) => {
+        calls.push(input);
+        return { id: `run-resume-${status}` };
+      },
+    });
+
+    assert.equal(deployment.deploymentId, "deployment-a");
+    assert.equal(deployment.sourceCommitSha, "a".repeat(40));
+    assert.equal(db.deployments.length, 1);
+    assert.equal(db.deployments[0].status, status);
+    assert.equal(db.deployments[0].orchestrator_run_id, `run-resume-${status}`);
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0].deploymentId, "deployment-a");
+    const marker = db.events.find((event) => event.event_type === "DEPLOYMENT_RESUME_REQUESTED").metadata.resumeMarker;
+    assert.equal(calls[0].idempotencyKey, deploymentResumeIdempotencyKey("deployment-a", marker));
+    assert.equal(deployment.resume.started, true);
+    assert.equal(db.events.some((event) => event.event_type === "DEPLOYMENT_RESUME_REQUESTED"), true);
+    assert.equal(db.events.some((event) => event.event_type === "DEPLOYMENT_RESUME_STARTED"), true);
+  });
+}
+
+test("polling can automatically resume a stale deployment and suppress repeated requests", async () => {
+  const db = new FakeDb();
+  makeDeploymentStale(db, "HEALTH_CHECKING");
+  let triggerCount = 0;
+
+  const first = await getCustomerDeploymentProgressWithResume(db, {
+    ...startArgs(),
+    staleAfterMs: 1000,
+    now: new Date("2026-09-10T00:10:00.000Z").getTime(),
+    triggerOrchestrator: async () => {
+      triggerCount += 1;
+      return { id: "run-resume" };
+    },
+  });
+  const second = await getCustomerDeploymentProgressWithResume(db, {
+    ...startArgs(),
+    staleAfterMs: 1000,
+    now: new Date("2026-09-10T00:10:01.000Z").getTime(),
+    triggerOrchestrator: async () => {
+      triggerCount += 1;
+      return { id: "run-duplicate" };
+    },
+  });
+
+  assert.equal(first.resume.started, true);
+  assert.equal(second.resume.started, false);
+  assert.equal(second.resume.suppressed, true);
+  assert.equal(triggerCount, 1);
+  assert.equal(db.events.filter((event) => event.event_type === "DEPLOYMENT_RESUME_REQUESTED").length, 1);
+});
+
+test("recent active deployment does not unnecessarily resume", async () => {
+  const db = new FakeDb();
+  db.deployments[0].status = "BUILDING";
+  db.deployments[0].orchestrator_run_id = "run-active";
+  db.deployments[0].updated_at = new Date("2026-09-10T00:09:59.000Z");
+  let triggerCount = 0;
+
+  const deployment = await getCustomerDeploymentProgressWithResume(db, {
+    ...startArgs(),
+    staleAfterMs: 5000,
+    now: new Date("2026-09-10T00:10:00.000Z").getTime(),
+    triggerOrchestrator: async () => {
+      triggerCount += 1;
+      return { id: "run-should-not-start" };
+    },
+  });
+
+  assert.equal(triggerCount, 0);
+  assert.equal(deployment.resume.reason, "recent-progress");
+});
+
+test("live failed and configuration-blocked deployments cannot resume", async () => {
+  for (const status of ["LIVE", "FAILED"]) {
+    const db = new FakeDb();
+    makeDeploymentStale(db, status);
+    let triggerCount = 0;
+    const deployment = await getCustomerDeploymentProgressWithResume(db, {
+      ...startArgs(),
+      staleAfterMs: 1000,
+      now: new Date("2026-09-10T00:10:00.000Z").getTime(),
+      triggerOrchestrator: async () => {
+        triggerCount += 1;
+        return { id: "run-should-not-start" };
+      },
+    });
+    assert.equal(triggerCount, 0);
+    assert.equal(deployment.resume.reason, "not-resumable-status");
+  }
+
+  const db = new FakeDb();
+  makeDeploymentStale(db, "ANALYZING");
+  db.deployments[0].error_code = "ENV_CONFIGURATION_REQUIRED";
+  const deployment = await getCustomerDeploymentProgressWithResume(db, {
+    ...startArgs(),
+    staleAfterMs: 1000,
+    now: new Date("2026-09-10T00:10:00.000Z").getTime(),
+    triggerOrchestrator: async () => {
+      throw new Error("should not trigger");
+    },
+  });
+  assert.equal(deployment.resume.reason, "deployment-has-error");
+});
+
+test("resume enforces workspace and deployment ownership", async () => {
+  const db = new FakeDb();
+  makeDeploymentStale(db, "PROVISIONING");
+  await assert.rejects(
+    () => resumeCustomerDeployment(db, {
+      ...startArgs({ workspaceId: "workspace-b" }),
+      staleAfterMs: 1000,
+      now: new Date("2026-09-10T00:10:00.000Z").getTime(),
+      triggerOrchestrator: async () => ({ id: "run" }),
+    }),
+    /Workspace not found/,
+  );
+  await assert.rejects(
+    () => resumeCustomerDeployment(db, {
+      ...startArgs({ appId: "app-other" }),
+      staleAfterMs: 1000,
+      now: new Date("2026-09-10T00:10:00.000Z").getTime(),
+      triggerOrchestrator: async () => ({ id: "run" }),
+    }),
+    /Deployment not found/,
+  );
+});
+
+test("resume Trigger failure clears marker and records failure evidence", async () => {
+  const db = new FakeDb();
+  makeDeploymentStale(db, "BUILDING");
+
+  await assert.rejects(
+    () => resumeCustomerDeployment(db, {
+      ...startArgs(),
+      staleAfterMs: 1000,
+      now: new Date("2026-09-10T00:10:00.000Z").getTime(),
+      triggerOrchestrator: async () => {
+        throw new Error("trigger down");
+      },
+    }),
+    /trigger down/,
+  );
+
+  assert.equal(db.deployments[0].orchestrator_run_id, null);
+  assert.equal(db.events.some((event) => event.event_type === "DEPLOYMENT_RESUME_FAILED"), true);
+  assert.equal(JSON.stringify(db.events).includes("secret"), false);
 });
 
 test("failed deployment retry creates a new same-source child and leaves parent unchanged", async () => {

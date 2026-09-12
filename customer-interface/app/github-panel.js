@@ -115,9 +115,10 @@ export function GitHubPanel({ workspaceId, github }) {
     startTransition(() => router.refresh());
   }
 
-  async function loadDeploymentProgress(appId, deploymentId, { silent = false } = {}) {
+  async function loadDeploymentProgress(appId, deploymentId, { silent = false, autoResume = false } = {}) {
+    const query = autoResume ? "?resume=auto" : "";
     const response = await fetch(
-      `/api/workspaces/${encodeURIComponent(workspaceId)}/applications/${encodeURIComponent(appId)}/deployments/${encodeURIComponent(deploymentId)}`,
+      `/api/workspaces/${encodeURIComponent(workspaceId)}/applications/${encodeURIComponent(appId)}/deployments/${encodeURIComponent(deploymentId)}${query}`,
     );
     const body = await response.json().catch(() => ({}));
     if (!response.ok) {
@@ -345,7 +346,10 @@ function AnalysisResult({
     let timer = null;
 
     async function poll() {
-      const progress = await loadDeploymentProgress(currentDeployment.appId, currentDeployment.deploymentId, { silent: true });
+      const progress = await loadDeploymentProgress(currentDeployment.appId, currentDeployment.deploymentId, {
+        silent: true,
+        autoResume: true,
+      });
       if (cancelled) return;
       if (progress?.active) {
         timer = setTimeout(poll, 2000);
