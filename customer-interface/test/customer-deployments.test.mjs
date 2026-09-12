@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  customerResumeStaleThresholdMs,
   deploymentResumeIdempotencyKey,
   deploymentStartIdempotencyKey,
   getCustomerDeploymentProgress,
@@ -373,6 +374,15 @@ test("Trigger invocation failure clears the start marker for safe retry", async 
 
 test("progress read enforces tenancy and redacts unsafe event metadata", async () => {
   const db = new FakeDb();
+  db.events.push({
+    id: 2,
+    deployment_id: "deployment-a",
+    event_type: "INTERNAL_RESUME_ACCEPTANCE_INTERRUPTED",
+    from_status: "ANALYZING",
+    to_status: "ANALYZING",
+    metadata: { point: "AFTER_ENV_VERIFIED", responseBodyStored: false },
+    created_at: new Date("2026-09-10T00:00:01.000Z"),
+  });
   const progress = await getCustomerDeploymentProgress(db, startArgs());
 
   assert.equal(progress.deploymentId, "deployment-a");
@@ -380,6 +390,8 @@ test("progress read enforces tenancy and redacts unsafe event metadata", async (
   assert.equal(progress.active, false);
   assert.equal(progress.stage, "Preparing deployment");
   assert.equal(JSON.stringify(progress).includes("must-not-leak"), false);
+  assert.equal(JSON.stringify(progress).includes("INTERNAL_RESUME_ACCEPTANCE"), false);
+  assert.equal(progress.events.some((event) => event.type === "DEPLOYMENT_RESUME_REQUESTED"), true);
   await assert.rejects(
     () => getCustomerDeploymentProgress(db, startArgs({ workspaceId: "workspace-b" })),
     /Workspace not found/,
@@ -495,6 +507,66 @@ test("recent active deployment does not unnecessarily resume", async () => {
 
   assert.equal(triggerCount, 0);
   assert.equal(deployment.resume.reason, "recent-progress");
+});
+
+test("normal resume stale threshold remains five minutes by default", () => {
+  assert.equal(customerResumeStaleThresholdMs({
+    deploymentId: "deployment-a",
+    env: {},
+  }), 5 * 60 * 1000);
+});
+
+test("internal resume acceptance stale override applies only to the selected server-configured deployment", () => {
+  const env = {
+    UTPLAVA_INTERNAL_RESUME_TEST_MODE: "true",
+    UTPLAVA_INTERNAL_RESUME_TEST_DEPLOYMENT_ID: "deployment-a",
+    UTPLAVA_INTERNAL_RESUME_TEST_STALE_AFTER_MS: "45000",
+  };
+
+  assert.equal(customerResumeStaleThresholdMs({ deploymentId: "deployment-a", env }), 45000);
+  assert.equal(customerResumeStaleThresholdMs({ deploymentId: "deployment-b", env }), 5 * 60 * 1000);
+  assert.equal(customerResumeStaleThresholdMs({
+    deploymentId: "deployment-a",
+    env: { ...env, UTPLAVA_INTERNAL_RESUME_TEST_MODE: "false" },
+  }), 5 * 60 * 1000);
+  assert.equal(customerResumeStaleThresholdMs({
+    deploymentId: "deployment-a",
+    env: { ...env, UTPLAVA_INTERNAL_RESUME_TEST_STALE_AFTER_MS: "1000" },
+  }), 30 * 1000);
+  assert.equal(customerResumeStaleThresholdMs({
+    deploymentId: "deployment-a",
+    env: { ...env, UTPLAVA_INTERNAL_RESUME_TEST_STALE_AFTER_MS: "90000" },
+  }), 60 * 1000);
+});
+
+test("internal resume acceptance stale override can drive auto-resume without customer input", async () => {
+  const db = new FakeDb();
+  makeDeploymentStale(db, "ANALYZING");
+  db.deployments[0].updated_at = new Date("2026-09-10T00:09:20.000Z");
+  db.events = db.events.map((event) => ({
+    ...event,
+    created_at: new Date("2026-09-10T00:09:20.000Z"),
+  }));
+  let triggerCount = 0;
+
+  const deployment = await getCustomerDeploymentProgressWithResume(db, {
+    ...startArgs(),
+    now: new Date("2026-09-10T00:10:00.000Z").getTime(),
+    env: {
+      UTPLAVA_INTERNAL_RESUME_TEST_MODE: "true",
+      UTPLAVA_INTERNAL_RESUME_TEST_DEPLOYMENT_ID: "deployment-a",
+      UTPLAVA_INTERNAL_RESUME_TEST_STALE_AFTER_MS: "30000",
+    },
+    triggerOrchestrator: async () => {
+      triggerCount += 1;
+      return { id: "run-resume" };
+    },
+  });
+
+  assert.equal(triggerCount, 1);
+  assert.equal(deployment.deploymentId, "deployment-a");
+  assert.equal(deployment.resume.started, true);
+  assert.equal(JSON.stringify(deployment).includes("UTPLAVA_INTERNAL_RESUME_TEST"), false);
 });
 
 test("live failed and configuration-blocked deployments cannot resume", async () => {

@@ -9,6 +9,8 @@ const ACTIVE_STATUSES = new Set(["ANALYZING", "PROVISIONING", "BUILDING", "DEPLO
 const TERMINAL_STATUSES = new Set(["LIVE", "FAILED", "DELETED"]);
 const RESUMABLE_STATUSES = new Set(["ANALYZING", "PROVISIONING", "BUILDING", "DEPLOYING", "HEALTH_CHECKING"]);
 const DEFAULT_RESUME_STALE_AFTER_MS = 5 * 60 * 1000;
+const MIN_INTERNAL_RESUME_TEST_STALE_AFTER_MS = 30 * 1000;
+const MAX_INTERNAL_RESUME_TEST_STALE_AFTER_MS = 60 * 1000;
 
 const stageByStatus = Object.freeze({
   ANALYZING: "Preparing deployment",
@@ -82,6 +84,23 @@ export function deploymentResumeIdempotencyKey(deploymentId, marker) {
   return `ui06:resume:${deploymentId}:${attemptId}`;
 }
 
+export function customerResumeStaleThresholdMs({
+  env = process.env,
+  deploymentId,
+  staleAfterMs,
+} = {}) {
+  if (Number.isFinite(staleAfterMs)) return staleAfterMs;
+  const internalMode = String(env.UTPLAVA_INTERNAL_RESUME_TEST_MODE || "").toLowerCase() === "true";
+  if (!internalMode || env.UTPLAVA_INTERNAL_RESUME_TEST_DEPLOYMENT_ID !== deploymentId) {
+    return DEFAULT_RESUME_STALE_AFTER_MS;
+  }
+  const configured = Number(env.UTPLAVA_INTERNAL_RESUME_TEST_STALE_AFTER_MS);
+  if (!Number.isFinite(configured)) return DEFAULT_RESUME_STALE_AFTER_MS;
+  if (configured < MIN_INTERNAL_RESUME_TEST_STALE_AFTER_MS) return MIN_INTERNAL_RESUME_TEST_STALE_AFTER_MS;
+  if (configured > MAX_INTERNAL_RESUME_TEST_STALE_AFTER_MS) return MAX_INTERNAL_RESUME_TEST_STALE_AFTER_MS;
+  return configured;
+}
+
 function startMarker(deploymentId) {
   return `${START_MARKER_PREFIX}:${deploymentId}`;
 }
@@ -114,11 +133,14 @@ function safeEvidence(metadata = {}) {
 
 function safeEvent(row) {
   const type = row.event_type;
+  const customerType = type === "INTERNAL_RESUME_ACCEPTANCE_INTERRUPTED"
+    ? "DEPLOYMENT_RESUME_REQUESTED"
+    : type;
   return {
     id: Number(row.id),
     at: safeTimestamp(row.created_at),
-    type,
-    title: eventTitles[type] ?? "Deployment event recorded",
+    type: customerType,
+    title: eventTitles[customerType] ?? "Deployment event recorded",
     fromStatus: row.from_status,
     toStatus: row.to_status,
     evidence: safeEvidence(row.metadata && typeof row.metadata === "object" ? row.metadata : {}),
@@ -365,10 +387,12 @@ export async function resumeCustomerDeployment(
     appId,
     deploymentId,
     triggerOrchestrator = triggerDeploymentOrchestrator,
-    staleAfterMs = DEFAULT_RESUME_STALE_AFTER_MS,
+    staleAfterMs,
     now = Date.now(),
+    env = process.env,
   },
 ) {
+  const effectiveStaleAfterMs = customerResumeStaleThresholdMs({ env, deploymentId, staleAfterMs });
   let shouldTrigger = false;
   let marker = null;
   let resumeStatus = null;
@@ -385,7 +409,7 @@ export async function resumeCustomerDeployment(
     });
     await assertLatestDeployment(db, { appId, deploymentId });
 
-    const eligibility = resumeEligibility(deployment, { now, staleAfterMs });
+    const eligibility = resumeEligibility(deployment, { now, staleAfterMs: effectiveStaleAfterMs });
     if (!eligibility.eligible) {
       outcome = { attempted: false, started: false, suppressed: true, reason: eligibility.reason };
     } else {
@@ -490,12 +514,14 @@ export async function getCustomerDeploymentProgressWithResume(
     appId,
     deploymentId,
     triggerOrchestrator = triggerDeploymentOrchestrator,
-    staleAfterMs = DEFAULT_RESUME_STALE_AFTER_MS,
+    staleAfterMs,
     now = Date.now(),
+    env = process.env,
   },
 ) {
+  const effectiveStaleAfterMs = customerResumeStaleThresholdMs({ env, deploymentId, staleAfterMs });
   const current = await loadAuthorizedDeployment(db, { customerId, workspaceId, appId, deploymentId });
-  const eligibility = resumeEligibility(current, { now, staleAfterMs });
+  const eligibility = resumeEligibility(current, { now, staleAfterMs: effectiveStaleAfterMs });
   if (eligibility.eligible) {
     return resumeCustomerDeployment(db, {
       customerId,
@@ -503,8 +529,9 @@ export async function getCustomerDeploymentProgressWithResume(
       appId,
       deploymentId,
       triggerOrchestrator,
-      staleAfterMs,
+      staleAfterMs: effectiveStaleAfterMs,
       now,
+      env,
     });
   }
   const events = await loadDeploymentEvents(db, deploymentId);
