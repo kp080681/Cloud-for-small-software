@@ -14,3 +14,7 @@ export function redeploySuccessMessage(deployment) {
   }
   return "Redeployment started.";
 }
+
+export function redeployFailureMessage() {
+  return "Redeployment could not be started. Please try again.";
+}

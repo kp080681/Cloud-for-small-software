@@ -139,3 +139,21 @@ test("failed deployment UI exposes retry and follows the returned child deployme
   assert.equal(panel.includes("[analysisDeploymentId]: body.deployment"), true);
   assert.equal(panel.includes("loadDeploymentProgress(currentDeployment.appId, currentDeployment.deploymentId"), true);
 });
+
+test("live redeploy UI exposes inline failure and server route logs only safe fields", async () => {
+  const panel = await readFile(path.join(root, "app", "github-panel.js"), "utf8");
+  const route = await readFile(
+    path.join(root, "app", "api", "workspaces", "[workspaceId]", "applications", "[appId]", "redeploy", "route.js"),
+    "utf8",
+  );
+
+  assert.equal(panel.includes("Redeployment could not be started. Please try again."), false);
+  assert.equal(panel.includes("redeployFailureMessage"), true);
+  assert.equal(panel.includes("deploymentErrors[analysis.deploymentId]"), true);
+  assert.equal(panel.includes("live && deploymentError"), true);
+  assert.equal(route.includes("customer_live_redeploy_failed"), true);
+  assert.equal(route.includes("sqlstate"), true);
+  assert.equal(route.includes("constraint"), true);
+  assert.equal(route.includes("DATABASE_URL"), false);
+  assert.equal(route.includes("TRIGGER_SECRET_KEY"), false);
+});

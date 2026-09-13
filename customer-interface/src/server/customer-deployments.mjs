@@ -151,6 +151,33 @@ function safeEvidence(metadata = {}) {
   return evidence;
 }
 
+function isPostgresError(error) {
+  return typeof error?.code === "string" && /^[0-9A-Z]{5}$/.test(error.code);
+}
+
+function redeployDatabaseError(error, stage) {
+  if (!isPostgresError(error)) return error;
+  const code = stage === "deployment_insert"
+    ? "REDEPLOYMENT_INSERT_FAILED"
+    : stage === "event_insert"
+      ? "REDEPLOYMENT_EVENT_INSERT_FAILED"
+      : stage === "commit"
+        ? "REDEPLOYMENT_COMMIT_FAILED"
+        : "REDEPLOYMENT_START_FAILED";
+  return Object.assign(new Error("Redeployment could not be started."), {
+    status: 500,
+    code,
+    redeployStage: stage,
+    postgres: {
+      sqlstate: error.code,
+      constraint: error.constraint ?? null,
+      table: error.table ?? null,
+      column: error.column ?? null,
+    },
+    cause: error,
+  });
+}
+
 function safeEvent(row) {
   const type = row.event_type;
   const customerType = type === "INTERNAL_RESUME_ACCEPTANCE_INTERRUPTED"
@@ -338,7 +365,7 @@ async function loadRedeploymentInProgress(db, { appId }) {
         LEFT JOIN deployment_build_inputs bi
           ON bi.deployment_id = d.id
        WHERE d.app_id = $1
-         AND d.status = ANY($2::text[])
+         AND d.status = ANY($2::deployment_status[])
        ORDER BY d.created_at DESC
        LIMIT 1
        FOR UPDATE OF d
@@ -944,6 +971,7 @@ export async function redeployLiveCustomerApp(
   let alreadyStarted = false;
   let created = false;
   let reusedActive = false;
+  let operationStage = "before_insert";
 
   await db.query("BEGIN");
   try {
@@ -960,6 +988,7 @@ export async function redeployLiveCustomerApp(
     if (deployment) {
       reusedActive = true;
     } else {
+      operationStage = "deployment_insert";
       const createdDeployment = await db.query(
         `INSERT INTO deployments
            (deployment_key, workspace_id, app_id, source_commit_sha, source_branch,
@@ -991,6 +1020,7 @@ export async function redeployLiveCustomerApp(
         build_input_id: null,
         build_command: null,
       };
+      operationStage = "event_insert";
       await db.query(
         `INSERT INTO deployment_events
            (deployment_id, from_status, to_status, event_type, message, metadata)
@@ -1008,6 +1038,7 @@ export async function redeployLiveCustomerApp(
       created = true;
     }
 
+    operationStage = "before_insert";
     deploymentId = deployment.id;
     if (deployment.status === "FAILED") {
       throw Object.assign(new Error("The existing redeployment has already failed."), {
@@ -1039,10 +1070,12 @@ export async function redeployLiveCustomerApp(
       shouldTrigger = true;
     }
 
+    operationStage = "commit";
     await db.query("COMMIT");
   } catch (error) {
     await db.query("ROLLBACK").catch(() => {});
-    throw error;
+    if (!error.redeployStage) error.redeployStage = operationStage;
+    throw redeployDatabaseError(error, operationStage);
   }
 
   let triggerRunId = null;

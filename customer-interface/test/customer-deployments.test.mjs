@@ -12,7 +12,7 @@ import {
   startCustomerDeployment,
   triggerDeploymentOrchestrator,
 } from "../src/server/customer-deployments.mjs";
-import { retrySuccessMessage } from "../src/shared/deployment-ui-state.mjs";
+import { redeployFailureMessage, retrySuccessMessage } from "../src/shared/deployment-ui-state.mjs";
 
 class FakeDb {
   constructor() {
@@ -106,6 +106,7 @@ class FakeDb {
       text.includes("WHERE d.app_id = $1") &&
       text.includes("d.status = ANY")
     ) {
+      assert.equal(text.includes("d.status = ANY($2::deployment_status[])"), true);
       const [appId, statuses] = params;
       const deployment = this.deployments
         .filter((row) => row.app_id === appId && statuses.includes(row.status))
@@ -865,6 +866,11 @@ test("retry success copy reflects existing live child instead of claiming a new 
     }),
     "Deployment retry started.",
   );
+});
+
+test("redeploy failure copy is safe and customer-actionable", () => {
+  assert.equal(redeployFailureMessage("42883"), "Redeployment could not be started. Please try again.");
+  assert.equal(redeployFailureMessage("REDEPLOYMENT_INSERT_FAILED"), "Redeployment could not be started. Please try again.");
 });
 
 test("failed deployment retry denies cross-workspace, non-failed, and stale parent attempts", async () => {

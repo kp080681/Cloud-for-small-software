@@ -2,7 +2,7 @@
 
 import { useEffect, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
-import { redeploySuccessMessage, retrySuccessMessage } from "@/src/shared/deployment-ui-state.mjs";
+import { redeployFailureMessage, redeploySuccessMessage, retrySuccessMessage } from "@/src/shared/deployment-ui-state.mjs";
 
 export function GitHubPanel({ workspaceId, github }) {
   const router = useRouter();
@@ -11,6 +11,7 @@ export function GitHubPanel({ workspaceId, github }) {
   const [analysisState, setAnalysisState] = useState({});
   const [configurationState, setConfigurationState] = useState({});
   const [deploymentState, setDeploymentState] = useState({});
+  const [deploymentErrors, setDeploymentErrors] = useState({});
   const [deploymentPending, setDeploymentPending] = useState({});
   const [secretInputs, setSecretInputs] = useState({});
   const [message, setMessage] = useState("");
@@ -178,6 +179,7 @@ export function GitHubPanel({ workspaceId, github }) {
 
   async function redeployApp(appId, analysisDeploymentId) {
     setMessage("");
+    setDeploymentErrors((current) => ({ ...current, [analysisDeploymentId]: "" }));
     setDeploymentPending((current) => ({ ...current, [analysisDeploymentId]: true }));
     const response = await fetch(
       `/api/workspaces/${encodeURIComponent(workspaceId)}/applications/${encodeURIComponent(appId)}/redeploy`,
@@ -186,7 +188,9 @@ export function GitHubPanel({ workspaceId, github }) {
     const body = await response.json().catch(() => ({}));
     setDeploymentPending((current) => ({ ...current, [analysisDeploymentId]: false }));
     if (!response.ok) {
-      setMessage(body.error || "REDEPLOYMENT_START_FAILED");
+      const error = redeployFailureMessage(body.error);
+      setDeploymentErrors((current) => ({ ...current, [analysisDeploymentId]: error }));
+      setMessage(error);
       return;
     }
     setDeploymentState((current) => ({
@@ -194,6 +198,7 @@ export function GitHubPanel({ workspaceId, github }) {
       [analysisDeploymentId]: body.deployment,
       [body.deployment.deploymentId]: body.deployment,
     }));
+    setDeploymentErrors((current) => ({ ...current, [analysisDeploymentId]: "" }));
     setMessage(redeploySuccessMessage(body.deployment));
     startTransition(() => router.refresh());
   }
@@ -267,6 +272,7 @@ export function GitHubPanel({ workspaceId, github }) {
                     saveSecret={saveSecret}
                     deployment={deploymentState[analysis.deploymentId]}
                     deploymentPending={Boolean(deploymentPending[analysis.deploymentId])}
+                    deploymentError={deploymentErrors[analysis.deploymentId]}
                     startDeployment={startDeployment}
                     retryDeployment={retryDeployment}
                     redeployApp={redeployApp}
@@ -331,6 +337,7 @@ function AnalysisResult({
   saveSecret,
   deployment,
   deploymentPending,
+  deploymentError,
   startDeployment,
   retryDeployment,
   redeployApp,
@@ -473,6 +480,7 @@ function AnalysisResult({
             {deploymentPending ? "Starting..." : "Redeploy"}
           </button>
         ) : null}
+        {live && deploymentError ? <small role="status">{deploymentError}</small> : null}
         {ready && !active && !live && !failed ? (
           <button
             type="button"
