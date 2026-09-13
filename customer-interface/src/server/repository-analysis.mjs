@@ -18,6 +18,7 @@ import {
 import {
   enforceActiveAppLimit,
 } from "../shared/control-plane/workspace-resource-policy.mjs";
+import { safeCustomerDeployment } from "./customer-deployments.mjs";
 import { getAuthorizedWorkspace } from "./customer-workspaces.mjs";
 import { createInstallationOctokit } from "./github-app.mjs";
 
@@ -97,6 +98,19 @@ function safeAnalysis(row) {
   const supported = row.error_code
     ? false
     : Boolean(row.framework && row.runtime && row.build_command);
+  const currentDeployment = row.deployment_id
+    ? safeCustomerDeployment({
+      id: row.deployment_id,
+      parent_deployment_id: row.parent_deployment_id ?? null,
+      app_id: row.app_id,
+      status: row.status,
+      error_code: row.error_code ?? null,
+      source_commit_sha: row.source_commit_sha ?? null,
+      source_branch: row.source_branch ?? null,
+      orchestrator_run_id: row.orchestrator_run_id ?? null,
+      live_url: row.live_url ?? null,
+    })
+    : null;
   return {
     repositoryId: row.repository_id,
     repositoryFullName: row.repository_full_name,
@@ -117,6 +131,7 @@ function safeAnalysis(row) {
     databaseRequired: Boolean(row.database_required),
     databaseMode: row.database_mode ?? null,
     envRequirementNames: envKeys,
+    currentDeployment,
     valuesPrinted: false,
   };
 }
@@ -133,10 +148,13 @@ export async function listWorkspaceRepositoryAnalyses(db, { customerId, workspac
         a.database_required,
         a.database_mode,
         d.id AS deployment_id,
+        d.parent_deployment_id,
         d.source_commit_sha,
         d.source_branch,
         d.status,
         d.error_code,
+        d.orchestrator_run_id,
+        d.live_url,
         bi.package_manager,
         bi.install_command,
         bi.build_command,
@@ -159,7 +177,15 @@ export async function listWorkspaceRepositoryAnalyses(db, { customerId, workspac
         LIMIT 1
       ) a ON true
       LEFT JOIN LATERAL (
-        SELECT id, source_commit_sha, source_branch, status, error_code, created_at
+        SELECT id,
+               parent_deployment_id,
+               source_commit_sha,
+               source_branch,
+               status,
+               error_code,
+               orchestrator_run_id,
+               live_url,
+               created_at
         FROM deployments
         WHERE app_id = a.id
         ORDER BY created_at DESC
@@ -176,10 +202,13 @@ export async function listWorkspaceRepositoryAnalyses(db, { customerId, workspac
         a.database_required,
         a.database_mode,
         d.id,
+        d.parent_deployment_id,
         d.source_commit_sha,
         d.source_branch,
         d.status,
         d.error_code,
+        d.orchestrator_run_id,
+        d.live_url,
         bi.package_manager,
         bi.install_command,
         bi.build_command,

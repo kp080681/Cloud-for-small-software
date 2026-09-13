@@ -301,10 +301,13 @@ class FakeDb {
             database_required: app?.database_required ?? false,
             database_mode: app?.database_mode ?? null,
             deployment_id: deployment?.id ?? null,
+            parent_deployment_id: deployment?.parent_deployment_id ?? null,
             source_commit_sha: deployment?.source_commit_sha ?? null,
             source_branch: deployment?.source_branch ?? null,
             status: deployment?.status ?? null,
             error_code: deployment?.error_code ?? null,
+            orchestrator_run_id: deployment?.orchestrator_run_id ?? null,
+            live_url: deployment?.live_url ?? null,
             package_manager: buildInput?.package_manager ?? null,
             install_command: buildInput?.install_command ?? null,
             build_command: buildInput?.build_command ?? null,
@@ -431,7 +434,128 @@ test("same commit analysis is idempotent and refresh read returns persisted anal
   assert.equal(db.buildInputs.length, 1);
   assert.equal(persisted[0].supported, true);
   assert.deepEqual(persisted[0].envRequirementNames, ["NEXT_PUBLIC_SITE_URL"]);
+  assert.equal(persisted[0].currentDeployment.deploymentId, first.deploymentId);
+  assert.equal(persisted[0].currentDeployment.status, "ANALYZING");
+  assert.equal(persisted[0].currentDeployment.active, false);
 });
+
+test("refresh analysis returns latest active redeployment instead of older live deployment", async () => {
+  const db = new FakeDb();
+  db.apps.push({
+    id: "app-existing",
+    workspace_id: "workspace-a",
+    repository_id: "repo-a",
+    name: "dealupwebsite",
+    slug: "dealupwebsite",
+    framework: "nextjs",
+    runtime: "nodejs",
+    database_required: false,
+    database_mode: "NONE",
+  });
+  db.deployments.push({
+    id: "deployment-live",
+    workspace_id: "workspace-a",
+    app_id: "app-existing",
+    source_commit_sha: "a".repeat(40),
+    source_branch: "main",
+    status: "LIVE",
+    error_code: null,
+    parent_deployment_id: null,
+    orchestrator_run_id: "run-live",
+    live_url: "https://old-live.example",
+    created_at: 1,
+  });
+  db.deployments.push({
+    id: "deployment-active",
+    workspace_id: "workspace-a",
+    app_id: "app-existing",
+    source_commit_sha: "b".repeat(40),
+    source_branch: "main",
+    status: "BUILDING",
+    error_code: null,
+    parent_deployment_id: "deployment-live",
+    orchestrator_run_id: "run-active",
+    live_url: null,
+    created_at: 2,
+  });
+  db.buildInputs.push({
+    deployment_id: "deployment-active",
+    package_manager: "npm",
+    install_command: "npm ci",
+    build_command: "npm run build",
+    start_command: "npm run start",
+    manifest: { framework: "nextjs", runtime: "nodejs" },
+  });
+
+  const [analysis] = await listWorkspaceRepositoryAnalyses(db, {
+    customerId: "identity-a",
+    workspaceId: "workspace-a",
+  });
+
+  assert.equal(analysis.deploymentId, "deployment-active");
+  assert.equal(analysis.currentDeployment.deploymentId, "deployment-active");
+  assert.equal(analysis.currentDeployment.parentDeploymentId, "deployment-live");
+  assert.equal(analysis.currentDeployment.status, "BUILDING");
+  assert.equal(analysis.currentDeployment.stage, "Building application");
+  assert.equal(analysis.currentDeployment.active, true);
+  assert.equal(analysis.currentDeployment.terminal, false);
+  assert.equal(analysis.currentDeployment.liveUrl, null);
+});
+
+for (const status of ["ANALYZING", "PROVISIONING", "BUILDING", "DEPLOYING", "HEALTH_CHECKING"]) {
+  test(`refresh analysis marks ${status} deployment active when orchestration has started`, async () => {
+    const db = new FakeDb();
+    const analysis = await analyzeSelectedRepository(db, {
+      customerId: "identity-a",
+      workspaceId: "workspace-a",
+      repositoryId: "repo-a",
+      deploymentKeyFactory: () => `dep_${status.toLowerCase()}`,
+      createInstallationClient: async () =>
+        fakeGitHubClient({ packageJson: nextPackage, sourceFiles: { "app/page.js": "" } }),
+    });
+    const deployment = db.deployments.find((row) => row.id === analysis.deploymentId);
+    deployment.status = status;
+    deployment.orchestrator_run_id = `run-${status}`;
+
+    const [persisted] = await listWorkspaceRepositoryAnalyses(db, {
+      customerId: "identity-a",
+      workspaceId: "workspace-a",
+    });
+
+    assert.equal(persisted.currentDeployment.status, status);
+    assert.equal(persisted.currentDeployment.active, true);
+    assert.equal(persisted.currentDeployment.terminal, false);
+  });
+}
+
+for (const status of ["LIVE", "FAILED"]) {
+  test(`refresh analysis marks ${status} deployment terminal and inactive`, async () => {
+    const db = new FakeDb();
+    const analysis = await analyzeSelectedRepository(db, {
+      customerId: "identity-a",
+      workspaceId: "workspace-a",
+      repositoryId: "repo-a",
+      deploymentKeyFactory: () => `dep_${status.toLowerCase()}`,
+      createInstallationClient: async () =>
+        fakeGitHubClient({ packageJson: nextPackage, sourceFiles: { "app/page.js": "" } }),
+    });
+    const deployment = db.deployments.find((row) => row.id === analysis.deploymentId);
+    deployment.status = status;
+    deployment.orchestrator_run_id = `run-${status}`;
+    deployment.live_url = status === "LIVE" ? "https://app.example" : null;
+    deployment.error_code = status === "FAILED" ? "HEALTH_CHECK_FAILED" : null;
+
+    const [persisted] = await listWorkspaceRepositoryAnalyses(db, {
+      customerId: "identity-a",
+      workspaceId: "workspace-a",
+    });
+
+    assert.equal(persisted.currentDeployment.status, status);
+    assert.equal(persisted.currentDeployment.active, false);
+    assert.equal(persisted.currentDeployment.terminal, true);
+    assert.equal(persisted.currentDeployment.liveUrl, status === "LIVE" ? "https://app.example" : null);
+  });
+}
 
 test("changed branch head creates a distinct immutable analysis deployment without duplicating app", async () => {
   const db = new FakeDb();

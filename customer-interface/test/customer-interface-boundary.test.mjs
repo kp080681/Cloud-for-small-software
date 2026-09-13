@@ -140,6 +140,21 @@ test("failed deployment UI exposes retry and follows the returned child deployme
   assert.equal(panel.includes("loadDeploymentProgress(currentDeployment.appId, currentDeployment.deploymentId"), true);
 });
 
+test("deployment polling survives refresh using server-authoritative current deployment", async () => {
+  const panel = await readFile(path.join(root, "app", "github-panel.js"), "utf8");
+  const analysis = await readFile(path.join(root, "src", "server", "repository-analysis.mjs"), "utf8");
+
+  assert.equal(panel.includes("deploymentState[analysis.currentDeployment?.deploymentId]"), true);
+  assert.equal(panel.includes("deployment ?? analysis.currentDeployment ??"), true);
+  assert.equal(panel.includes("autoResume: true"), true);
+  assert.equal(panel.includes('const query = autoResume ? "?resume=auto" : ""'), true);
+  assert.equal(panel.includes("if (progress?.active)"), true);
+  assert.equal(analysis.includes("currentDeployment"), true);
+  assert.equal(analysis.includes("safeCustomerDeployment"), true);
+  assert.equal(analysis.includes("d.orchestrator_run_id"), true);
+  assert.equal(analysis.includes("d.live_url"), true);
+});
+
 test("live redeploy UI exposes inline failure and server route logs only safe fields", async () => {
   const panel = await readFile(path.join(root, "app", "github-panel.js"), "utf8");
   const route = await readFile(

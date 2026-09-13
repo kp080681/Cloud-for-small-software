@@ -209,7 +209,7 @@ function failureDiagnostic(deployment) {
   return { code, title, action };
 }
 
-function safeDeployment(row, events = []) {
+export function safeCustomerDeployment(row, events = []) {
   const started = Boolean(row.orchestrator_run_id);
   const active = ACTIVE_STATUSES.has(row.status) && (row.status !== "ANALYZING" || started);
   const terminal = TERMINAL_STATUSES.has(row.status);
@@ -227,6 +227,10 @@ function safeDeployment(row, events = []) {
     diagnostic: failureDiagnostic(row),
     events,
   };
+}
+
+function safeDeployment(row, events = []) {
+  return safeCustomerDeployment(row, events);
 }
 
 async function loadAuthorizedDeployment(db, { customerId, workspaceId, appId, deploymentId, forUpdate = false }) {

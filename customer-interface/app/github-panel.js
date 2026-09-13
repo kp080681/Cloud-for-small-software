@@ -270,7 +270,10 @@ export function GitHubPanel({ workspaceId, github }) {
                     secretInputs={secretInputs}
                     setSecretInputs={setSecretInputs}
                     saveSecret={saveSecret}
-                    deployment={deploymentState[analysis.deploymentId]}
+                    deployment={
+                      deploymentState[analysis.deploymentId]
+                      ?? deploymentState[analysis.currentDeployment?.deploymentId]
+                    }
                     deploymentPending={Boolean(deploymentPending[analysis.deploymentId])}
                     deploymentError={deploymentErrors[analysis.deploymentId]}
                     startDeployment={startDeployment}
@@ -357,7 +360,7 @@ function AnalysisResult({
   const managed = requirements.filter((item) => item.managed);
   const optional = requirements.filter((item) => !item.required && !item.managed);
   const ready = configuration?.readiness === "READY_TO_DEPLOY";
-  const currentDeployment = deployment ?? {
+  const currentDeployment = deployment ?? analysis.currentDeployment ?? {
     deploymentId: analysis.deploymentId,
     appId: analysis.appId,
     status: analysis.status,
