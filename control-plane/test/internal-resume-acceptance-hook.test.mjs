@@ -37,12 +37,13 @@ class FakeDb {
     }
 
     if (text.startsWith("SELECT e.id FROM deployment_events e JOIN deployments d")) {
-      const [workspaceId, appId, eventType] = params;
+      const [workspaceId, appId, eventType, generation] = params;
       const event = this.events.find((row) => {
         const deployment = this.deployments.find((item) => item.id === row.deployment_id);
         return row.event_type === eventType
           && deployment?.workspace_id === workspaceId
-          && deployment?.app_id === appId;
+          && deployment?.app_id === appId
+          && (params.length < 4 || row.metadata?.generation === generation);
       });
       return { rowCount: event ? 1 : 0, rows: event ? [event] : [] };
     }
@@ -97,13 +98,14 @@ test("app scoped selector matches only the configured workspace and app", () => 
     deploymentId: "deployment-a",
     workspaceId: "workspace-a",
     appId: "app-a",
-    env,
+    env: { ...env, UTPLAVA_INTERNAL_RESUME_TEST_GENERATION: "generation-a" },
   }), {
     enabled: true,
     selectorType: "app-once",
     workspaceId: "workspace-a",
     appId: "app-a",
     point: INTERNAL_RESUME_ACCEPTANCE_POINT_AFTER_ENV,
+    generation: "generation-a",
   });
   assert.equal(internalResumeAcceptanceHookEnabled({
     deploymentId: "deployment-a",
@@ -132,6 +134,7 @@ test("deployment id selector remains more specific than app scoped selector", ()
     UTPLAVA_INTERNAL_RESUME_TEST_WORKSPACE_ID: "workspace-a",
     UTPLAVA_INTERNAL_RESUME_TEST_APP_ID: "app-a",
     UTPLAVA_INTERNAL_RESUME_TEST_ONCE: "true",
+    UTPLAVA_INTERNAL_RESUME_TEST_GENERATION: "ignored-by-deployment-selector",
   };
 
   assert.equal(internalResumeAcceptanceSelector({
@@ -180,6 +183,7 @@ test("wrong app scoped deployment does not connect to the database or interrupt"
       UTPLAVA_INTERNAL_RESUME_TEST_WORKSPACE_ID: "workspace-a",
       UTPLAVA_INTERNAL_RESUME_TEST_APP_ID: "app-a",
       UTPLAVA_INTERNAL_RESUME_TEST_ONCE: "true",
+      UTPLAVA_INTERNAL_RESUME_TEST_GENERATION: "generation-a",
     },
     connectDatabase: async () => {
       connected = true;
@@ -249,6 +253,83 @@ test("app scoped one-time selector is consumed by exactly one matching deploymen
   assert.equal(db.events[0].metadata.selectorType, "app-once");
   assert.equal(db.events[0].metadata.workspaceId, "workspace-a");
   assert.equal(db.events[0].metadata.appId, "app-a");
+});
+
+test("generation re-arms app scoped selector without consuming historical no-generation events", async () => {
+  const db = new FakeDb();
+  const legacySelector = {
+    selectorType: "app-once",
+    workspaceId: "workspace-a",
+    appId: "app-a",
+    point: INTERNAL_RESUME_ACCEPTANCE_POINT_AFTER_ENV,
+  };
+  const generationSelector = {
+    ...legacySelector,
+    generation: "ui06b02-final",
+  };
+
+  const legacy = await recordInternalResumeAcceptanceInterruption(db, {
+    deploymentId: "deployment-a",
+    workspaceId: "workspace-a",
+    appId: "app-a",
+    status: "ANALYZING",
+    point: INTERNAL_RESUME_ACCEPTANCE_POINT_AFTER_ENV,
+    selector: legacySelector,
+  });
+  const rearmed = await recordInternalResumeAcceptanceInterruption(db, {
+    deploymentId: "deployment-b",
+    workspaceId: "workspace-a",
+    appId: "app-a",
+    status: "ANALYZING",
+    point: INTERNAL_RESUME_ACCEPTANCE_POINT_AFTER_ENV,
+    selector: generationSelector,
+  });
+
+  assert.equal(legacy.interrupted, true);
+  assert.equal(rearmed.interrupted, true);
+  assert.equal(db.events.length, 2);
+  assert.equal(db.events[0].metadata.generation, undefined);
+  assert.equal(db.events[1].metadata.generation, "ui06b02-final");
+});
+
+test("same generation consumes once while different generation can interrupt once", async () => {
+  const db = new FakeDb();
+  const baseSelector = {
+    selectorType: "app-once",
+    workspaceId: "workspace-a",
+    appId: "app-a",
+    point: INTERNAL_RESUME_ACCEPTANCE_POINT_AFTER_ENV,
+  };
+  const first = await recordInternalResumeAcceptanceInterruption(db, {
+    deploymentId: "deployment-a",
+    workspaceId: "workspace-a",
+    appId: "app-a",
+    status: "ANALYZING",
+    point: INTERNAL_RESUME_ACCEPTANCE_POINT_AFTER_ENV,
+    selector: { ...baseSelector, generation: "generation-1" },
+  });
+  const same = await recordInternalResumeAcceptanceInterruption(db, {
+    deploymentId: "deployment-b",
+    workspaceId: "workspace-a",
+    appId: "app-a",
+    status: "ANALYZING",
+    point: INTERNAL_RESUME_ACCEPTANCE_POINT_AFTER_ENV,
+    selector: { ...baseSelector, generation: "generation-1" },
+  });
+  const different = await recordInternalResumeAcceptanceInterruption(db, {
+    deploymentId: "deployment-b",
+    workspaceId: "workspace-a",
+    appId: "app-a",
+    status: "ANALYZING",
+    point: INTERNAL_RESUME_ACCEPTANCE_POINT_AFTER_ENV,
+    selector: { ...baseSelector, generation: "generation-2" },
+  });
+
+  assert.equal(first.interrupted, true);
+  assert.equal(same.interrupted, false);
+  assert.equal(same.reason, "selector-already-consumed");
+  assert.equal(different.interrupted, true);
+  assert.deepEqual(db.events.map((event) => event.metadata.generation), ["generation-1", "generation-2"]);
 });
 
 test("internal hook refuses non-analysis states instead of interrupting provider work", async () => {

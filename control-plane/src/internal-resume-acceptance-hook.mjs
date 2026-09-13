@@ -9,6 +9,11 @@ function enabled(value) {
   return String(value || "").toLowerCase() === "true";
 }
 
+function generationValue(env) {
+  const value = String(env.UTPLAVA_INTERNAL_RESUME_TEST_GENERATION || "").trim();
+  return value || null;
+}
+
 export function internalResumeAcceptanceHookEnabled({
   env = process.env,
   deploymentId,
@@ -49,7 +54,15 @@ export function internalResumeAcceptanceSelector({
   ) {
     return { enabled: false, reason: "app-selector-mismatch" };
   }
-  return { enabled: true, selectorType: "app-once", workspaceId, appId, point };
+  const generation = generationValue(env);
+  return {
+    enabled: true,
+    selectorType: "app-once",
+    workspaceId,
+    appId,
+    point,
+    ...(generation ? { generation } : {}),
+  };
 }
 
 async function defaultConnectDatabase(env) {
@@ -75,6 +88,7 @@ export async function recordInternalResumeAcceptanceInterruption(
   }
 
   if (selector.selectorType === "app-once") {
+    const generation = selector.generation ?? null;
     const consumed = await db.query(
       `SELECT e.id
          FROM deployment_events e
@@ -83,8 +97,11 @@ export async function recordInternalResumeAcceptanceInterruption(
         WHERE d.workspace_id = $1
           AND d.app_id = $2
           AND e.event_type = $3
+          ${generation ? "AND e.metadata->>'generation' = $4" : ""}
         LIMIT 1`,
-      [workspaceId, appId, INTERNAL_RESUME_ACCEPTANCE_EVENT],
+      generation
+        ? [workspaceId, appId, INTERNAL_RESUME_ACCEPTANCE_EVENT, generation]
+        : [workspaceId, appId, INTERNAL_RESUME_ACCEPTANCE_EVENT],
     );
     if (consumed.rowCount > 0) {
       return { interrupted: false, reason: "selector-already-consumed", status, point };
@@ -117,6 +134,7 @@ export async function recordInternalResumeAcceptanceInterruption(
         selectorType: selector.selectorType ?? "deployment",
         workspaceId: selector.selectorType === "app-once" ? workspaceId : undefined,
         appId: selector.selectorType === "app-once" ? appId : undefined,
+        generation: selector.selectorType === "app-once" ? selector.generation : undefined,
         responseBodyStored: false,
       }),
     ],
