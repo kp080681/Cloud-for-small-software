@@ -6,6 +6,17 @@ const ORCHESTRATOR_TASK_ID = "ssc-control-plane-orchestrate-deployment";
 const START_MARKER_PREFIX = "UI06_START_REQUESTED";
 const RESUME_MARKER_PREFIX = "UI06_RESUME_REQUESTED";
 const ACTIVE_STATUSES = new Set(["ANALYZING", "PROVISIONING", "BUILDING", "DEPLOYING", "HEALTH_CHECKING"]);
+const REDEPLOY_IN_PROGRESS_STATUSES = [
+  "DRAFT",
+  "READY",
+  "QUEUED",
+  "ANALYZING",
+  "PROVISIONING",
+  "BUILDING",
+  "DEPLOYING",
+  "HEALTH_CHECKING",
+  "DELETING",
+];
 const TERMINAL_STATUSES = new Set(["LIVE", "FAILED", "DELETED"]);
 const RESUMABLE_STATUSES = new Set(["ANALYZING", "PROVISIONING", "BUILDING", "DEPLOYING", "HEALTH_CHECKING"]);
 const DEFAULT_RESUME_STALE_AFTER_MS = 5 * 60 * 1000;
@@ -263,6 +274,76 @@ async function loadRetryChildDeployment(db, { appId, parentDeploymentId }) {
        FOR UPDATE OF d
     `,
     [appId, parentDeploymentId],
+  );
+  return result.rows[0] ?? null;
+}
+
+async function loadAuthorizedAppForRedeploy(db, { customerId, workspaceId, appId }) {
+  await getAuthorizedWorkspace(db, { customerId, workspaceId });
+  const result = await db.query(
+    `
+      SELECT a.id,
+             a.workspace_id,
+             a.deleted_at,
+             live.id AS live_deployment_id,
+             live.source_commit_sha AS live_source_commit_sha,
+             live.source_branch AS live_source_branch
+        FROM apps a
+        LEFT JOIN LATERAL (
+          SELECT id, source_commit_sha, source_branch
+            FROM deployments
+           WHERE app_id = a.id
+             AND status = 'LIVE'
+           ORDER BY created_at DESC
+           LIMIT 1
+        ) live ON true
+       WHERE a.workspace_id = $1
+         AND a.id = $2
+         AND a.deleted_at IS NULL
+       LIMIT 1
+       FOR UPDATE OF a
+    `,
+    [workspaceId, appId],
+  );
+  const app = result.rows[0];
+  if (!app) {
+    throw Object.assign(new Error("Application not found."), {
+      status: 404,
+      code: "APP_NOT_FOUND",
+    });
+  }
+  return app;
+}
+
+async function loadRedeploymentInProgress(db, { appId }) {
+  const result = await db.query(
+    `
+      SELECT d.id,
+             d.workspace_id,
+             d.app_id,
+             d.status,
+             d.error_code,
+             d.source_commit_sha,
+             d.source_branch,
+             d.parent_deployment_id,
+             d.orchestrator_run_id,
+             d.live_url,
+             d.created_at,
+             d.updated_at,
+             (SELECT max(e.created_at) FROM deployment_events e WHERE e.deployment_id = d.id) AS latest_event_at,
+             NULL AS app_deleted_at,
+             bi.id AS build_input_id,
+             bi.build_command
+        FROM deployments d
+        LEFT JOIN deployment_build_inputs bi
+          ON bi.deployment_id = d.id
+       WHERE d.app_id = $1
+         AND d.status = ANY($2::text[])
+       ORDER BY d.created_at DESC
+       LIMIT 1
+       FOR UPDATE OF d
+    `,
+    [appId, REDEPLOY_IN_PROGRESS_STATUSES],
   );
   return result.rows[0] ?? null;
 }
@@ -843,6 +924,171 @@ export async function retryFailedCustomerDeployment(
       created,
       started: shouldTrigger,
       alreadyStarted,
+    },
+  };
+}
+
+export async function redeployLiveCustomerApp(
+  db,
+  {
+    customerId,
+    workspaceId,
+    appId,
+    triggerOrchestrator = triggerDeploymentOrchestrator,
+    deploymentKeyFactory = () => `dep_${crypto.randomUUID().replaceAll("-", "")}`,
+  },
+) {
+  let deploymentId = null;
+  let parentDeploymentId = null;
+  let shouldTrigger = false;
+  let alreadyStarted = false;
+  let created = false;
+  let reusedActive = false;
+
+  await db.query("BEGIN");
+  try {
+    const app = await loadAuthorizedAppForRedeploy(db, { customerId, workspaceId, appId });
+    if (!app.live_deployment_id || !app.live_source_commit_sha) {
+      throw Object.assign(new Error("Redeploy requires an existing live deployment."), {
+        status: 409,
+        code: "LIVE_DEPLOYMENT_REQUIRED",
+      });
+    }
+    parentDeploymentId = app.live_deployment_id;
+
+    let deployment = await loadRedeploymentInProgress(db, { appId });
+    if (deployment) {
+      reusedActive = true;
+    } else {
+      const createdDeployment = await db.query(
+        `INSERT INTO deployments
+           (deployment_key, workspace_id, app_id, source_commit_sha, source_branch,
+            status, parent_deployment_id, deployment_reason)
+         VALUES ($1,$2,$3,$4,$5,'ANALYZING',$6,'redeploy')
+         RETURNING id,
+                   workspace_id,
+                   app_id,
+                   status,
+                   error_code,
+                   source_commit_sha,
+                   source_branch,
+                   parent_deployment_id,
+                   orchestrator_run_id,
+                   live_url,
+                   created_at`,
+        [
+          deploymentKeyFactory(),
+          app.workspace_id,
+          app.id,
+          app.live_source_commit_sha,
+          app.live_source_branch,
+          app.live_deployment_id,
+        ],
+      );
+      deployment = {
+        ...createdDeployment.rows[0],
+        app_deleted_at: null,
+        build_input_id: null,
+        build_command: null,
+      };
+      await db.query(
+        `INSERT INTO deployment_events
+           (deployment_id, from_status, to_status, event_type, message, metadata)
+         VALUES ($1,'READY','ANALYZING','REDEPLOY_CREATED',$2,$3::jsonb)`,
+        [
+          deployment.id,
+          "Redeployment created from current immutable source",
+          JSON.stringify({
+            parentDeploymentId: app.live_deployment_id,
+            sourceCommitSha: app.live_source_commit_sha,
+            sourceBranch: app.live_source_branch,
+          }),
+        ],
+      );
+      created = true;
+    }
+
+    deploymentId = deployment.id;
+    if (deployment.status === "FAILED") {
+      throw Object.assign(new Error("The existing redeployment has already failed."), {
+        status: 409,
+        code: "REDEPLOYMENT_ALREADY_FAILED",
+      });
+    }
+    if (deployment.status === "LIVE") {
+      alreadyStarted = true;
+    } else if (ACTIVE_STATUSES.has(deployment.status) && deployment.status !== "ANALYZING") {
+      alreadyStarted = true;
+    } else if (deployment.status !== "ANALYZING") {
+      throw Object.assign(new Error("Redeployment is not eligible to start."), {
+        status: 409,
+        code: "REDEPLOYMENT_NOT_ELIGIBLE",
+      });
+    } else if (deployment.orchestrator_run_id && !isStartMarker(deployment.orchestrator_run_id, deployment.id)) {
+      alreadyStarted = true;
+    } else {
+      const marker = startMarker(deployment.id);
+      await db.query(
+        `UPDATE deployments
+            SET orchestrator_run_id = $1,
+                updated_at = now()
+          WHERE id = $2
+            AND (orchestrator_run_id IS NULL OR orchestrator_run_id = $1)`,
+        [marker, deployment.id],
+      );
+      shouldTrigger = true;
+    }
+
+    await db.query("COMMIT");
+  } catch (error) {
+    await db.query("ROLLBACK").catch(() => {});
+    throw error;
+  }
+
+  let triggerRunId = null;
+  if (shouldTrigger) {
+    const marker = startMarker(deploymentId);
+    try {
+      const handle = await triggerOrchestrator({
+        deploymentId,
+        idempotencyKey: deploymentStartIdempotencyKey(deploymentId),
+      });
+      triggerRunId = handle.id;
+      await db.query(
+        `UPDATE deployments
+            SET orchestrator_run_id = $1,
+                updated_at = now()
+          WHERE id = $2
+            AND (orchestrator_run_id IS NULL OR orchestrator_run_id = $3 OR orchestrator_run_id = $1)`,
+        [triggerRunId, deploymentId, marker],
+      );
+    } catch (error) {
+      await db.query(
+        `UPDATE deployments
+            SET orchestrator_run_id = NULL,
+                updated_at = now()
+          WHERE id = $1
+            AND orchestrator_run_id = $2`,
+        [deploymentId, marker],
+      ).catch(() => {});
+      throw error;
+    }
+  }
+
+  const deployment = await getCustomerDeploymentProgress(db, {
+    customerId,
+    workspaceId,
+    appId,
+    deploymentId,
+  });
+  return {
+    ...deployment,
+    redeploy: {
+      parentDeploymentId,
+      created,
+      started: shouldTrigger,
+      alreadyStarted,
+      reusedActive,
     },
   };
 }

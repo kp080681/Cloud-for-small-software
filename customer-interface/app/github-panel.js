@@ -2,6 +2,7 @@
 
 import { useEffect, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
+import { redeploySuccessMessage, retrySuccessMessage } from "@/src/shared/deployment-ui-state.mjs";
 
 export function GitHubPanel({ workspaceId, github }) {
   const router = useRouter();
@@ -171,7 +172,29 @@ export function GitHubPanel({ workspaceId, github }) {
       [analysisDeploymentId]: body.deployment,
       [body.deployment.deploymentId]: body.deployment,
     }));
-    setMessage("Deployment retry started.");
+    setMessage(retrySuccessMessage(body.deployment));
+    startTransition(() => router.refresh());
+  }
+
+  async function redeployApp(appId, analysisDeploymentId) {
+    setMessage("");
+    setDeploymentPending((current) => ({ ...current, [analysisDeploymentId]: true }));
+    const response = await fetch(
+      `/api/workspaces/${encodeURIComponent(workspaceId)}/applications/${encodeURIComponent(appId)}/redeploy`,
+      { method: "POST" },
+    );
+    const body = await response.json().catch(() => ({}));
+    setDeploymentPending((current) => ({ ...current, [analysisDeploymentId]: false }));
+    if (!response.ok) {
+      setMessage(body.error || "REDEPLOYMENT_START_FAILED");
+      return;
+    }
+    setDeploymentState((current) => ({
+      ...current,
+      [analysisDeploymentId]: body.deployment,
+      [body.deployment.deploymentId]: body.deployment,
+    }));
+    setMessage(redeploySuccessMessage(body.deployment));
     startTransition(() => router.refresh());
   }
 
@@ -246,6 +269,7 @@ export function GitHubPanel({ workspaceId, github }) {
                     deploymentPending={Boolean(deploymentPending[analysis.deploymentId])}
                     startDeployment={startDeployment}
                     retryDeployment={retryDeployment}
+                    redeployApp={redeployApp}
                     loadDeploymentProgress={loadDeploymentProgress}
                     isPending={isPending}
                   />
@@ -309,6 +333,7 @@ function AnalysisResult({
   deploymentPending,
   startDeployment,
   retryDeployment,
+  redeployApp,
   loadDeploymentProgress,
   isPending,
 }) {
@@ -437,6 +462,15 @@ function AnalysisResult({
             disabled={isPending || deploymentPending}
           >
             {deploymentPending ? "Starting..." : "Deploy again"}
+          </button>
+        ) : null}
+        {live ? (
+          <button
+            type="button"
+            onClick={() => redeployApp(currentDeployment.appId, analysis.deploymentId)}
+            disabled={isPending || deploymentPending}
+          >
+            {deploymentPending ? "Starting..." : "Redeploy"}
           </button>
         ) : null}
         {ready && !active && !live && !failed ? (

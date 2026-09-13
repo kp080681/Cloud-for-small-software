@@ -6,11 +6,13 @@ import {
   deploymentStartIdempotencyKey,
   getCustomerDeploymentProgress,
   getCustomerDeploymentProgressWithResume,
+  redeployLiveCustomerApp,
   retryFailedCustomerDeployment,
   resumeCustomerDeployment,
   startCustomerDeployment,
   triggerDeploymentOrchestrator,
 } from "../src/server/customer-deployments.mjs";
+import { retrySuccessMessage } from "../src/shared/deployment-ui-state.mjs";
 
 class FakeDb {
   constructor() {
@@ -76,6 +78,50 @@ class FakeDb {
       );
       const workspace = authorized ? this.workspaces.find((row) => row.id === workspaceId) : null;
       return { rowCount: workspace ? 1 : 0, rows: workspace ? [workspace] : [] };
+    }
+
+    if (text.includes("FROM apps a") && text.includes("live_deployment_id")) {
+      const [workspaceId, appId] = params;
+      const app = this.apps.find((row) => row.workspace_id === workspaceId && row.id === appId && !row.deleted_at);
+      if (!app) return { rowCount: 0, rows: [] };
+      const live = this.deployments
+        .filter((row) => row.app_id === appId && row.status === "LIVE")
+        .sort((a, b) => b.created_at - a.created_at)[0];
+      return {
+        rowCount: 1,
+        rows: [{
+          id: app.id,
+          workspace_id: app.workspace_id,
+          deleted_at: app.deleted_at,
+          live_deployment_id: live?.id ?? null,
+          live_source_commit_sha: live?.source_commit_sha ?? null,
+          live_source_branch: live?.source_branch ?? null,
+        }],
+      };
+    }
+
+    if (
+      text.includes("FROM deployments d") &&
+      text.includes("LEFT JOIN deployment_build_inputs") &&
+      text.includes("WHERE d.app_id = $1") &&
+      text.includes("d.status = ANY")
+    ) {
+      const [appId, statuses] = params;
+      const deployment = this.deployments
+        .filter((row) => row.app_id === appId && statuses.includes(row.status))
+        .sort((a, b) => b.created_at - a.created_at)[0];
+      if (!deployment) return { rowCount: 0, rows: [] };
+      const input = this.buildInputs.find((row) => row.deployment_id === deployment.id);
+      return {
+        rowCount: 1,
+        rows: [{
+          ...deployment,
+          latest_event_at: this.latestEventAt(deployment.id),
+          app_deleted_at: null,
+          build_input_id: input?.id ?? null,
+          build_command: input?.build_command ?? null,
+        }],
+      };
     }
 
     if (
@@ -797,6 +843,30 @@ test("failed deployment retry returns a live child and refuses failed retry chai
   );
 });
 
+test("retry success copy reflects existing live child instead of claiming a new retry", () => {
+  assert.equal(
+    retrySuccessMessage({
+      status: "LIVE",
+      retry: { created: false, started: false, alreadyStarted: true },
+    }),
+    "Existing deployment is live.",
+  );
+  assert.equal(
+    retrySuccessMessage({
+      status: "BUILDING",
+      retry: { created: false, started: false, alreadyStarted: true },
+    }),
+    "Existing deployment resumed.",
+  );
+  assert.equal(
+    retrySuccessMessage({
+      status: "ANALYZING",
+      retry: { created: true, started: true, alreadyStarted: false },
+    }),
+    "Deployment retry started.",
+  );
+});
+
 test("failed deployment retry denies cross-workspace, non-failed, and stale parent attempts", async () => {
   const db = new FakeDb();
   await assert.rejects(
@@ -848,4 +918,105 @@ test("retry trigger failure clears only the child start marker", async () => {
   const child = db.deployments.find((row) => row.parent_deployment_id === "deployment-a");
   assert.equal(db.deployments[0].status, "FAILED");
   assert.equal(child.orchestrator_run_id, null);
+});
+
+test("live app redeploy creates a fresh same-source deployment and leaves live parent unchanged", async () => {
+  const db = new FakeDb();
+  db.deployments[0].status = "LIVE";
+  db.deployments[0].live_url = "https://app.example";
+  db.deployments[0].orchestrator_run_id = "run-live";
+  const calls = [];
+
+  const deployment = await redeployLiveCustomerApp(db, {
+    ...startArgs({ deploymentId: undefined }),
+    deploymentKeyFactory: () => "dep_redeploy",
+    triggerOrchestrator: async (input) => {
+      calls.push(input);
+      return { id: "run-redeploy" };
+    },
+  });
+  const parent = db.deployments.find((row) => row.id === "deployment-a");
+  const child = db.deployments.find((row) => row.id === deployment.deploymentId);
+
+  assert.equal(db.deployments.length, 2);
+  assert.equal(parent.status, "LIVE");
+  assert.equal(parent.live_url, "https://app.example");
+  assert.notEqual(child.id, parent.id);
+  assert.equal(child.deployment_key, "dep_redeploy");
+  assert.equal(child.workspace_id, parent.workspace_id);
+  assert.equal(child.app_id, parent.app_id);
+  assert.equal(child.source_commit_sha, parent.source_commit_sha);
+  assert.equal(child.source_branch, parent.source_branch);
+  assert.equal(child.parent_deployment_id, parent.id);
+  assert.equal(child.status, "ANALYZING");
+  assert.equal(child.error_code, null);
+  assert.equal(child.live_url, null);
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].deploymentId, child.id);
+  assert.equal(calls[0].idempotencyKey, deploymentStartIdempotencyKey(child.id));
+  assert.equal(deployment.redeploy.created, true);
+  assert.equal(deployment.redeploy.started, true);
+  assert.equal(deployment.redeploy.parentDeploymentId, parent.id);
+  assert.equal(db.events.some((event) => event.deployment_id === child.id && event.event_type === "REDEPLOY_CREATED"), true);
+  assert.equal(JSON.stringify(calls).includes("TRIGGER_SECRET_KEY"), false);
+});
+
+test("live app redeploy reuses active redeployment so duplicate clicks do not fan out", async () => {
+  const db = new FakeDb();
+  db.deployments[0].status = "LIVE";
+  db.deployments[0].live_url = "https://app.example";
+  db.deployments[0].orchestrator_run_id = "run-live";
+  db.deployments.push({
+    id: "deployment-active",
+    deployment_key: "dep_active",
+    workspace_id: "workspace-a",
+    app_id: "app-a",
+    status: "BUILDING",
+    error_code: null,
+    source_commit_sha: "a".repeat(40),
+    source_branch: "main",
+    parent_deployment_id: "deployment-a",
+    orchestrator_run_id: "run-active",
+    live_url: null,
+    provider_deployment_id: null,
+    created_at: 2,
+    updated_at: new Date("2026-09-10T00:00:00.000Z"),
+  });
+  let triggerCount = 0;
+
+  const deployment = await redeployLiveCustomerApp(db, {
+    ...startArgs({ deploymentId: undefined }),
+    deploymentKeyFactory: () => "dep_should_not_create",
+    triggerOrchestrator: async () => {
+      triggerCount += 1;
+      return { id: "run-new" };
+    },
+  });
+
+  assert.equal(db.deployments.length, 2);
+  assert.equal(deployment.deploymentId, "deployment-active");
+  assert.equal(deployment.status, "BUILDING");
+  assert.equal(deployment.redeploy.created, false);
+  assert.equal(deployment.redeploy.reusedActive, true);
+  assert.equal(deployment.redeploy.alreadyStarted, true);
+  assert.equal(triggerCount, 0);
+});
+
+test("live app redeploy enforces authorization and requires an existing live deployment", async () => {
+  const db = new FakeDb();
+  await assert.rejects(
+    () => redeployLiveCustomerApp(db, {
+      ...startArgs({ workspaceId: "workspace-b", deploymentId: undefined }),
+      triggerOrchestrator: async () => ({ id: "run" }),
+    }),
+    /Workspace not found/,
+  );
+
+  await assert.rejects(
+    () => redeployLiveCustomerApp(db, {
+      ...startArgs({ deploymentId: undefined }),
+      triggerOrchestrator: async () => ({ id: "run" }),
+    }),
+    /Redeploy requires an existing live deployment/,
+  );
 });
