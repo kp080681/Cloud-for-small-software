@@ -129,6 +129,22 @@ class FakeDb {
       text.includes("FROM deployments d") &&
       text.includes("LEFT JOIN deployment_build_inputs") &&
       text.includes("WHERE d.app_id = $1") &&
+      text.includes("AND d.id = $2")
+    ) {
+      const [appId, deploymentId] = params;
+      const deployment = this.deployments.find((row) => row.app_id === appId && row.id === deploymentId);
+      if (!deployment) return { rowCount: 0, rows: [] };
+      const input = this.buildInputs.find((row) => row.deployment_id === deployment.id);
+      return {
+        rowCount: 1,
+        rows: [{ ...deployment, latest_event_at: this.latestEventAt(deployment.id), build_input_id: input?.id ?? null }],
+      };
+    }
+
+    if (
+      text.includes("FROM deployments d") &&
+      text.includes("LEFT JOIN deployment_build_inputs") &&
+      text.includes("WHERE d.app_id = $1") &&
       !text.includes("d.parent_deployment_id = $2")
     ) {
       const [appId] = params;
@@ -195,20 +211,23 @@ class FakeDb {
 
     if (text.includes("FROM deployments d") && text.includes("d.parent_deployment_id = $2")) {
       const [appId, parentDeploymentId] = params;
-      const deployment = this.deployments
+      const deployments = this.deployments
         .filter((row) => row.app_id === appId && row.parent_deployment_id === parentDeploymentId)
-        .sort((a, b) => b.created_at - a.created_at)[0];
-      if (!deployment) return { rowCount: 0, rows: [] };
-      const input = this.buildInputs.find((row) => row.deployment_id === deployment.id);
+        .sort((a, b) => b.created_at - a.created_at)
+        .slice(0, text.includes("LIMIT 2") ? 2 : 1);
+      if (deployments.length === 0) return { rowCount: 0, rows: [] };
       return {
-        rowCount: 1,
-        rows: [{
-          ...deployment,
-          latest_event_at: this.latestEventAt(deployment.id),
-          app_deleted_at: null,
-          build_input_id: input?.id ?? null,
-          build_command: input?.build_command ?? null,
-        }],
+        rowCount: deployments.length,
+        rows: deployments.map((deployment) => {
+          const input = this.buildInputs.find((row) => row.deployment_id === deployment.id);
+          return {
+            ...deployment,
+            latest_event_at: this.latestEventAt(deployment.id),
+            app_deleted_at: null,
+            build_input_id: input?.id ?? null,
+            build_command: input?.build_command ?? null,
+          };
+        }),
       };
     }
 
@@ -324,6 +343,27 @@ function makeDeploymentStale(db, status) {
     ...event,
     created_at: new Date("2026-09-10T00:00:00.000Z"),
   }));
+}
+
+function addRetryDeployment(db, overrides = {}) {
+  const deployment = {
+    id: overrides.id ?? `deployment-${db.deployments.length}`,
+    deployment_key: overrides.deployment_key ?? `dep_${db.deployments.length}`,
+    workspace_id: overrides.workspace_id ?? "workspace-a",
+    app_id: overrides.app_id ?? "app-a",
+    status: overrides.status ?? "FAILED",
+    error_code: overrides.error_code ?? (overrides.status === "FAILED" || !overrides.status ? "HEALTH_CHECK_FAILED" : null),
+    source_commit_sha: overrides.source_commit_sha ?? "a".repeat(40),
+    source_branch: overrides.source_branch ?? "main",
+    parent_deployment_id: overrides.parent_deployment_id ?? "deployment-a",
+    orchestrator_run_id: overrides.orchestrator_run_id ?? null,
+    live_url: overrides.live_url ?? null,
+    provider_deployment_id: overrides.provider_deployment_id ?? null,
+    created_at: overrides.created_at ?? db.deployments.length + 1,
+    updated_at: overrides.updated_at ?? new Date("2026-09-10T00:00:00.000Z"),
+  };
+  db.deployments.push(deployment);
+  return deployment;
 }
 
 test("ready deployment invokes the approved orchestrator with deterministic idempotency", async () => {
@@ -762,23 +802,18 @@ test("failed deployment retry returns an existing active child without creating 
   assert.equal(triggerCount, 0);
 });
 
-test("failed deployment retry returns a live child and refuses failed retry chains", async () => {
+test("failed deployment retry returns a live child", async () => {
   const db = new FakeDb();
   db.deployments[0].status = "FAILED";
   db.deployments[0].error_code = "HEALTH_CHECK_FAILED";
-  db.deployments.push({
+  addRetryDeployment(db, {
     id: "deployment-child",
     deployment_key: "dep_child",
-    workspace_id: "workspace-a",
-    app_id: "app-a",
     status: "LIVE",
     error_code: null,
-    source_commit_sha: "a".repeat(40),
-    source_branch: "main",
     parent_deployment_id: "deployment-a",
     orchestrator_run_id: "run-child",
     live_url: "https://child.example",
-    provider_deployment_id: null,
     created_at: 2,
   });
 
@@ -791,11 +826,234 @@ test("failed deployment retry returns a live child and refuses failed retry chai
   assert.equal(live.deploymentId, "deployment-child");
   assert.equal(live.status, "LIVE");
   assert.equal(live.liveUrl, "https://child.example");
+});
 
-  db.deployments[1].status = "FAILED";
+test("stale ancestor retry resolves failed child and creates the next bounded attempt", async () => {
+  const db = new FakeDb();
+  db.deployments[0].status = "FAILED";
+  db.deployments[0].error_code = "HEALTH_CHECK_FAILED";
+  addRetryDeployment(db, {
+    id: "deployment-b",
+    deployment_key: "dep_b",
+    status: "FAILED",
+    parent_deployment_id: "deployment-a",
+    created_at: 2,
+  });
+  const calls = [];
+
+  const deployment = await retryFailedCustomerDeployment(db, {
+    ...startArgs({ deploymentId: "deployment-a" }),
+    deploymentKeyFactory: () => "dep_c",
+    triggerOrchestrator: async (input) => {
+      calls.push(input);
+      return { id: "run-c" };
+    },
+  });
+  const child = db.deployments.find((row) => row.id === deployment.deploymentId);
+
+  assert.equal(db.deployments.length, 3);
+  assert.equal(child.deployment_key, "dep_c");
+  assert.equal(child.parent_deployment_id, "deployment-b");
+  assert.equal(child.source_commit_sha, "a".repeat(40));
+  assert.equal(child.source_branch, "main");
+  assert.equal(deployment.retry.requestedDeploymentId, "deployment-a");
+  assert.equal(deployment.retry.parentDeploymentId, "deployment-b");
+  assert.equal(deployment.retry.retryDepth, 2);
+  assert.equal(deployment.retry.created, true);
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].deploymentId, child.id);
+});
+
+test("retrying the failed child converges on the same next-attempt behavior", async () => {
+  const db = new FakeDb();
+  db.deployments[0].status = "FAILED";
+  db.deployments[0].error_code = "HEALTH_CHECK_FAILED";
+  addRetryDeployment(db, {
+    id: "deployment-b",
+    deployment_key: "dep_b",
+    status: "FAILED",
+    parent_deployment_id: "deployment-a",
+    created_at: 2,
+  });
+
+  const deployment = await retryFailedCustomerDeployment(db, {
+    ...startArgs({ deploymentId: "deployment-b" }),
+    deploymentKeyFactory: () => "dep_c",
+    triggerOrchestrator: async () => ({ id: "run-c" }),
+  });
+  const child = db.deployments.find((row) => row.id === deployment.deploymentId);
+
+  assert.equal(db.deployments.length, 3);
+  assert.equal(child.parent_deployment_id, "deployment-b");
+  assert.equal(deployment.retry.retryDepth, 2);
+  assert.equal(deployment.retry.created, true);
+});
+
+test("stale ancestor retry can create the third and final retry attempt", async () => {
+  const db = new FakeDb();
+  db.deployments[0].status = "FAILED";
+  db.deployments[0].error_code = "HEALTH_CHECK_FAILED";
+  addRetryDeployment(db, { id: "deployment-b", deployment_key: "dep_b", status: "FAILED", parent_deployment_id: "deployment-a", created_at: 2 });
+  addRetryDeployment(db, { id: "deployment-c", deployment_key: "dep_c", status: "FAILED", parent_deployment_id: "deployment-b", created_at: 3 });
+
+  const deployment = await retryFailedCustomerDeployment(db, {
+    ...startArgs({ deploymentId: "deployment-a" }),
+    deploymentKeyFactory: () => "dep_d",
+    triggerOrchestrator: async () => ({ id: "run-d" }),
+  });
+  const child = db.deployments.find((row) => row.id === deployment.deploymentId);
+
+  assert.equal(db.deployments.length, 4);
+  assert.equal(child.deployment_key, "dep_d");
+  assert.equal(child.parent_deployment_id, "deployment-c");
+  assert.equal(deployment.retry.retryDepth, 3);
+});
+
+test("retry limit returns stable response without mutating history or triggering", async () => {
+  const db = new FakeDb();
+  db.deployments[0].status = "FAILED";
+  db.deployments[0].error_code = "HEALTH_CHECK_FAILED";
+  addRetryDeployment(db, { id: "deployment-b", deployment_key: "dep_b", status: "FAILED", parent_deployment_id: "deployment-a", created_at: 2 });
+  addRetryDeployment(db, { id: "deployment-c", deployment_key: "dep_c", status: "FAILED", parent_deployment_id: "deployment-b", created_at: 3 });
+  addRetryDeployment(db, { id: "deployment-d", deployment_key: "dep_d", status: "FAILED", parent_deployment_id: "deployment-c", created_at: 4 });
+  let triggerCount = 0;
+
+  const fromRoot = await retryFailedCustomerDeployment(db, {
+    ...startArgs({ deploymentId: "deployment-a" }),
+    deploymentKeyFactory: () => "dep_should_not_create",
+    triggerOrchestrator: async () => {
+      triggerCount += 1;
+      return { id: "run-should-not-start" };
+    },
+  });
+  const fromLatest = await retryFailedCustomerDeployment(db, {
+    ...startArgs({ deploymentId: "deployment-d" }),
+    deploymentKeyFactory: () => "dep_should_not_create_latest",
+    triggerOrchestrator: async () => {
+      triggerCount += 1;
+      return { id: "run-should-not-start" };
+    },
+  });
+
+  assert.equal(db.deployments.length, 4);
+  assert.equal(triggerCount, 0);
+  assert.equal(fromRoot.deploymentId, "deployment-d");
+  assert.equal(fromLatest.deploymentId, "deployment-d");
+  assert.equal(fromRoot.retry.limitReached, true);
+  assert.equal(fromRoot.retry.code, "DEPLOYMENT_RETRY_LIMIT_REACHED");
+  assert.equal(fromRoot.retry.retryDepth, 3);
+  assert.equal(JSON.stringify(fromRoot).includes("provider_deployment_id"), false);
+});
+
+test("active and live descendants are returned from stale ancestor retry", async () => {
+  for (const [status, expected] of [["BUILDING", { active: true, liveUrl: null }], ["LIVE", { active: false, liveUrl: "https://child.example" }]]) {
+    const db = new FakeDb();
+    db.deployments[0].status = "FAILED";
+    db.deployments[0].error_code = "HEALTH_CHECK_FAILED";
+    addRetryDeployment(db, {
+      id: "deployment-b",
+      deployment_key: "dep_b",
+      status,
+      error_code: null,
+      parent_deployment_id: "deployment-a",
+      orchestrator_run_id: "run-b",
+      live_url: expected.liveUrl,
+      created_at: 2,
+    });
+    let triggerCount = 0;
+
+    const deployment = await retryFailedCustomerDeployment(db, {
+      ...startArgs({ deploymentId: "deployment-a" }),
+      triggerOrchestrator: async () => {
+        triggerCount += 1;
+        return { id: "run-should-not-start" };
+      },
+    });
+
+    assert.equal(db.deployments.length, 2);
+    assert.equal(triggerCount, 0);
+    assert.equal(deployment.deploymentId, "deployment-b");
+    assert.equal(deployment.status, status);
+    assert.equal(deployment.active, expected.active);
+    assert.equal(deployment.liveUrl, expected.liveUrl);
+    assert.equal(deployment.retry.alreadyStarted, true);
+  }
+});
+
+test("retry lineage stays linear and preserves source identity across attempts", async () => {
+  const db = new FakeDb();
+  db.deployments[0].status = "FAILED";
+  db.deployments[0].error_code = "HEALTH_CHECK_FAILED";
+  db.deployments[0].source_commit_sha = "f".repeat(40);
+  db.deployments[0].source_branch = "release";
+  const keys = ["dep_b", "dep_c", "dep_d"];
+  const first = await retryFailedCustomerDeployment(db, {
+    ...startArgs({ deploymentId: "deployment-a" }),
+    deploymentKeyFactory: () => keys.shift(),
+    triggerOrchestrator: async () => ({ id: "run-b" }),
+  });
+  db.deployments.find((row) => row.id === first.deploymentId).status = "FAILED";
+  const second = await retryFailedCustomerDeployment(db, {
+    ...startArgs({ deploymentId: "deployment-a" }),
+    deploymentKeyFactory: () => keys.shift(),
+    triggerOrchestrator: async () => ({ id: "run-c" }),
+  });
+  db.deployments.find((row) => row.id === second.deploymentId).status = "FAILED";
+  const third = await retryFailedCustomerDeployment(db, {
+    ...startArgs({ deploymentId: first.deploymentId }),
+    deploymentKeyFactory: () => keys.shift(),
+    triggerOrchestrator: async () => ({ id: "run-d" }),
+  });
+
+  assert.deepEqual(db.deployments.map((row) => row.parent_deployment_id), [null, "deployment-a", first.deploymentId, second.deploymentId]);
+  assert.equal(third.retry.retryDepth, 3);
+  for (const deployment of db.deployments) {
+    assert.equal(deployment.source_commit_sha, "f".repeat(40));
+    assert.equal(deployment.source_branch, "release");
+  }
+});
+
+test("retry lineage corruption fails closed", async () => {
+  const db = new FakeDb();
+  db.deployments[0].status = "FAILED";
+  db.deployments[0].error_code = "HEALTH_CHECK_FAILED";
+  db.deployments[0].parent_deployment_id = "deployment-b";
+  addRetryDeployment(db, {
+    id: "deployment-b",
+    deployment_key: "dep_b",
+    status: "FAILED",
+    parent_deployment_id: "deployment-a",
+    created_at: 2,
+  });
+
   await assert.rejects(
     () => retryFailedCustomerDeployment(db, { ...startArgs(), triggerOrchestrator: async () => ({ id: "run" }) }),
-    /retry deployment has already failed/i,
+    /cyclic|corrupted/i,
+  );
+});
+
+test("ambiguous retry lineage fails closed", async () => {
+  const db = new FakeDb();
+  db.deployments[0].status = "FAILED";
+  db.deployments[0].error_code = "HEALTH_CHECK_FAILED";
+  addRetryDeployment(db, {
+    id: "deployment-b",
+    deployment_key: "dep_b",
+    status: "FAILED",
+    parent_deployment_id: "deployment-a",
+    created_at: 2,
+  });
+  addRetryDeployment(db, {
+    id: "deployment-c",
+    deployment_key: "dep_c",
+    status: "FAILED",
+    parent_deployment_id: "deployment-a",
+    created_at: 3,
+  });
+
+  await assert.rejects(
+    () => retryFailedCustomerDeployment(db, { ...startArgs(), triggerOrchestrator: async () => ({ id: "run" }) }),
+    /multiple direct children/i,
   );
 });
 
@@ -820,6 +1078,13 @@ test("retry success copy reflects existing live child instead of claiming a new 
       retry: { created: true, started: true, alreadyStarted: false },
     }),
     "Deployment retry started.",
+  );
+  assert.equal(
+    retrySuccessMessage({
+      status: "FAILED",
+      retry: { limitReached: true },
+    }),
+    "Retry limit reached. Review the deployment details before trying a new deployment.",
   );
 });
 

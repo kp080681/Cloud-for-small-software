@@ -1,4 +1,7 @@
 export function retrySuccessMessage(deployment) {
+  if (deployment?.retry?.limitReached) {
+    return "Retry limit reached. Review the deployment details before trying a new deployment.";
+  }
   if (deployment?.status === "LIVE") return "Existing deployment is live.";
   if (deployment?.retry?.created) return "Deployment retry started.";
   if (deployment?.retry?.alreadyStarted || deployment?.retry?.started === false) {

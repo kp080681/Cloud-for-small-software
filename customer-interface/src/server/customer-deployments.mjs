@@ -20,6 +20,8 @@ const REDEPLOY_IN_PROGRESS_STATUSES = [
 const TERMINAL_STATUSES = new Set(["LIVE", "FAILED", "DELETED"]);
 const RESUMABLE_STATUSES = new Set(["ANALYZING", "PROVISIONING", "BUILDING", "DEPLOYING", "HEALTH_CHECKING"]);
 const DEFAULT_RESUME_STALE_AFTER_MS = 5 * 60 * 1000;
+const MAX_CUSTOMER_RETRY_DEPTH = 3;
+const MAX_RETRY_LINEAGE_TRAVERSAL = 16;
 
 const stageByStatus = Object.freeze({
   ANALYZING: "Preparing deployment",
@@ -277,12 +279,107 @@ async function loadRetryChildDeployment(db, { appId, parentDeploymentId }) {
        WHERE d.app_id = $1
          AND d.parent_deployment_id = $2
        ORDER BY d.created_at DESC
-       LIMIT 1
+       LIMIT 2
        FOR UPDATE OF d
     `,
     [appId, parentDeploymentId],
   );
+  if (result.rows.length > 1) {
+    throw Object.assign(new Error("Retry lineage has multiple direct children."), {
+      status: 409,
+      code: "DEPLOYMENT_RETRY_LINEAGE_AMBIGUOUS",
+    });
+  }
   return result.rows[0] ?? null;
+}
+
+async function loadRetryLineageDeployment(db, { appId, deploymentId }) {
+  const result = await db.query(
+    `
+      SELECT d.id,
+             d.workspace_id,
+             d.app_id,
+             d.status,
+             d.error_code,
+             d.source_commit_sha,
+             d.source_branch,
+             d.parent_deployment_id,
+             d.orchestrator_run_id,
+             d.live_url,
+             d.created_at,
+             d.updated_at,
+             (SELECT max(e.created_at) FROM deployment_events e WHERE e.deployment_id = d.id) AS latest_event_at,
+             NULL AS app_deleted_at,
+             bi.id AS build_input_id,
+             bi.build_command
+        FROM deployments d
+        LEFT JOIN deployment_build_inputs bi
+          ON bi.deployment_id = d.id
+       WHERE d.app_id = $1
+         AND d.id = $2
+       LIMIT 1
+       FOR UPDATE OF d
+    `,
+    [appId, deploymentId],
+  );
+  return result.rows[0] ?? null;
+}
+
+async function retryLineageRoot(db, { appId, deployment }) {
+  const seen = new Set([deployment.id]);
+  let current = deployment;
+
+  for (let depth = 0; depth < MAX_RETRY_LINEAGE_TRAVERSAL; depth += 1) {
+    if (!current.parent_deployment_id) return current;
+    const parent = await loadRetryLineageDeployment(db, { appId, deploymentId: current.parent_deployment_id });
+    if (!parent) {
+      throw Object.assign(new Error("Retry lineage parent is missing."), {
+        status: 409,
+        code: "DEPLOYMENT_RETRY_LINEAGE_CORRUPT",
+      });
+    }
+    if (seen.has(parent.id)) {
+      throw Object.assign(new Error("Retry lineage is cyclic or corrupted."), {
+        status: 409,
+        code: "DEPLOYMENT_RETRY_LINEAGE_CORRUPT",
+      });
+    }
+    seen.add(parent.id);
+    current = parent;
+  }
+
+  throw Object.assign(new Error("Retry lineage exceeds supported traversal depth."), {
+    status: 409,
+    code: "DEPLOYMENT_RETRY_LINEAGE_TOO_DEEP",
+  });
+}
+
+async function resolveRetryLineage(db, { appId, deployment }) {
+  const root = await retryLineageRoot(db, { appId, deployment });
+  const lineage = [root];
+  const seen = new Set([root.id]);
+  let current = root;
+
+  for (let depth = 0; depth < MAX_RETRY_LINEAGE_TRAVERSAL; depth += 1) {
+    const child = await loadRetryChildDeployment(db, { appId, parentDeploymentId: current.id });
+    if (!child) {
+      return { root, latest: current, lineage, depth: lineage.length - 1 };
+    }
+    if (seen.has(child.id)) {
+      throw Object.assign(new Error("Retry lineage is cyclic or corrupted."), {
+        status: 409,
+        code: "DEPLOYMENT_RETRY_LINEAGE_CORRUPT",
+      });
+    }
+    seen.add(child.id);
+    lineage.push(child);
+    current = child;
+  }
+
+  throw Object.assign(new Error("Retry lineage exceeds supported traversal depth."), {
+    status: 409,
+    code: "DEPLOYMENT_RETRY_LINEAGE_TOO_DEEP",
+  });
 }
 
 async function loadAuthorizedAppForRedeploy(db, { customerId, workspaceId, appId }) {
@@ -777,32 +874,50 @@ export async function retryFailedCustomerDeployment(
   let shouldTrigger = false;
   let alreadyStarted = false;
   let created = false;
+  let parentForResponse = deploymentId;
+  let retryDepth = 0;
+  let retryLimitReached = false;
 
   await db.query("BEGIN");
   try {
-    const parent = await loadAuthorizedDeployment(db, {
+    const requested = await loadAuthorizedDeployment(db, {
       customerId,
       workspaceId,
       appId,
       deploymentId,
       forUpdate: true,
     });
-    if (parent.status !== "FAILED") {
+    if (requested.status !== "FAILED") {
       throw Object.assign(new Error("Only failed deployments can be retried."), {
         status: 409,
         code: "DEPLOYMENT_RETRY_NOT_ELIGIBLE",
       });
     }
-    if (!parent.source_commit_sha) {
+    if (!requested.source_commit_sha) {
       throw Object.assign(new Error("Failed deployment has no immutable source commit."), {
         status: 409,
         code: "DEPLOYMENT_SOURCE_MISSING",
       });
     }
 
-    let child = await loadRetryChildDeployment(db, { appId, parentDeploymentId: deploymentId });
-    if (!child) {
-      await assertLatestDeployment(db, { appId, deploymentId });
+    const lineage = await resolveRetryLineage(db, { appId, deployment: requested });
+    let child = lineage.latest;
+    retryDepth = lineage.depth;
+    parentForResponse = child.parent_deployment_id ?? requested.id;
+
+    if (child.status === "FAILED" && retryDepth >= MAX_CUSTOMER_RETRY_DEPTH) {
+      await assertLatestDeployment(db, { appId, deploymentId: child.id });
+      childDeploymentId = child.id;
+      retryLimitReached = true;
+    } else if (child.status === "FAILED") {
+      if (!child.source_commit_sha) {
+        throw Object.assign(new Error("Failed deployment has no immutable source commit."), {
+          status: 409,
+          code: "DEPLOYMENT_SOURCE_MISSING",
+        });
+      }
+      await assertLatestDeployment(db, { appId, deploymentId: child.id });
+      const retryParent = child;
       const createdChild = await db.query(
         `INSERT INTO deployments
            (deployment_key, workspace_id, app_id, source_commit_sha, source_branch,
@@ -821,11 +936,11 @@ export async function retryFailedCustomerDeployment(
                    created_at`,
         [
           deploymentKeyFactory(),
-          parent.workspace_id,
-          parent.app_id,
-          parent.source_commit_sha,
-          parent.source_branch,
-          parent.id,
+          child.workspace_id,
+          child.app_id,
+          child.source_commit_sha,
+          child.source_branch,
+          child.id,
         ],
       );
       child = {
@@ -842,23 +957,23 @@ export async function retryFailedCustomerDeployment(
           child.id,
           "Retry deployment created from failed immutable source",
           JSON.stringify({
-            parentDeploymentId: parent.id,
-            sourceCommitSha: parent.source_commit_sha,
-            sourceBranch: parent.source_branch,
+            retryDepth: retryDepth + 1,
+            retryRootDeploymentId: lineage.root.id,
+            parentDeploymentId: retryParent.id,
+            sourceCommitSha: retryParent.source_commit_sha,
+            sourceBranch: retryParent.source_branch,
           }),
         ],
       );
       created = true;
+      retryDepth += 1;
+      parentForResponse = child.parent_deployment_id;
     }
 
     childDeploymentId = child.id;
-    if (child.status === "FAILED") {
-      throw Object.assign(new Error("The retry deployment has already failed."), {
-        status: 409,
-        code: "DEPLOYMENT_RETRY_ALREADY_FAILED",
-      });
-    }
-    if (child.status === "LIVE") {
+    if (retryLimitReached) {
+      alreadyStarted = false;
+    } else if (child.status === "LIVE") {
       alreadyStarted = true;
     } else if (ACTIVE_STATUSES.has(child.status) && child.status !== "ANALYZING") {
       alreadyStarted = true;
@@ -927,7 +1042,12 @@ export async function retryFailedCustomerDeployment(
   return {
     ...deployment,
     retry: {
-      parentDeploymentId: deploymentId,
+      parentDeploymentId: parentForResponse,
+      requestedDeploymentId: deploymentId,
+      retryDepth,
+      maxRetryDepth: MAX_CUSTOMER_RETRY_DEPTH,
+      limitReached: retryLimitReached,
+      code: retryLimitReached ? "DEPLOYMENT_RETRY_LIMIT_REACHED" : null,
       created,
       started: shouldTrigger,
       alreadyStarted,

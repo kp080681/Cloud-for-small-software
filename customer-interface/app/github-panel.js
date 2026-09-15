@@ -374,6 +374,7 @@ function AnalysisResult({
   const active = Boolean(currentDeployment.active);
   const live = currentDeployment.status === "LIVE";
   const failed = currentDeployment.status === "FAILED";
+  const retryLimitReached = Boolean(currentDeployment.retry?.limitReached);
 
   useEffect(() => {
     if (!active || !currentDeployment.appId || !currentDeployment.deploymentId) return undefined;
@@ -465,7 +466,10 @@ function AnalysisResult({
         {failed && currentDeployment.diagnostic ? (
           <small>{currentDeployment.diagnostic.title}: {currentDeployment.diagnostic.action}</small>
         ) : null}
-        {failed ? (
+        {failed && retryLimitReached ? (
+          <small role="status">Retry limit reached. Review the deployment details before starting a new deployment.</small>
+        ) : null}
+        {failed && !retryLimitReached ? (
           <button
             type="button"
             onClick={() => retryDeployment(currentDeployment.appId, currentDeployment.deploymentId, analysis.deploymentId)}
