@@ -20,8 +20,6 @@ const REDEPLOY_IN_PROGRESS_STATUSES = [
 const TERMINAL_STATUSES = new Set(["LIVE", "FAILED", "DELETED"]);
 const RESUMABLE_STATUSES = new Set(["ANALYZING", "PROVISIONING", "BUILDING", "DEPLOYING", "HEALTH_CHECKING"]);
 const DEFAULT_RESUME_STALE_AFTER_MS = 5 * 60 * 1000;
-const MIN_INTERNAL_RESUME_TEST_STALE_AFTER_MS = 30 * 1000;
-const MAX_INTERNAL_RESUME_TEST_STALE_AFTER_MS = 60 * 1000;
 
 const stageByStatus = Object.freeze({
   ANALYZING: "Preparing deployment",
@@ -96,29 +94,10 @@ export function deploymentResumeIdempotencyKey(deploymentId, marker) {
 }
 
 export function customerResumeStaleThresholdMs({
-  env = process.env,
-  deploymentId,
-  workspaceId,
-  appId,
   staleAfterMs,
 } = {}) {
   if (Number.isFinite(staleAfterMs)) return staleAfterMs;
-  const internalMode = String(env.UTPLAVA_INTERNAL_RESUME_TEST_MODE || "").toLowerCase() === "true";
-  const deploymentSelected = env.UTPLAVA_INTERNAL_RESUME_TEST_DEPLOYMENT_ID === deploymentId;
-  if (internalMode && env.UTPLAVA_INTERNAL_RESUME_TEST_DEPLOYMENT_ID) {
-    if (!deploymentSelected) return DEFAULT_RESUME_STALE_AFTER_MS;
-  }
-  const appSelected = String(env.UTPLAVA_INTERNAL_RESUME_TEST_ONCE || "").toLowerCase() === "true"
-    && env.UTPLAVA_INTERNAL_RESUME_TEST_WORKSPACE_ID === workspaceId
-    && env.UTPLAVA_INTERNAL_RESUME_TEST_APP_ID === appId;
-  if (!internalMode || (!deploymentSelected && !appSelected)) {
-    return DEFAULT_RESUME_STALE_AFTER_MS;
-  }
-  const configured = Number(env.UTPLAVA_INTERNAL_RESUME_TEST_STALE_AFTER_MS);
-  if (!Number.isFinite(configured)) return DEFAULT_RESUME_STALE_AFTER_MS;
-  if (configured < MIN_INTERNAL_RESUME_TEST_STALE_AFTER_MS) return MIN_INTERNAL_RESUME_TEST_STALE_AFTER_MS;
-  if (configured > MAX_INTERNAL_RESUME_TEST_STALE_AFTER_MS) return MAX_INTERNAL_RESUME_TEST_STALE_AFTER_MS;
-  return configured;
+  return DEFAULT_RESUME_STALE_AFTER_MS;
 }
 
 function startMarker(deploymentId) {
@@ -179,10 +158,7 @@ function redeployDatabaseError(error, stage) {
 }
 
 function safeEvent(row) {
-  const type = row.event_type;
-  const customerType = type === "INTERNAL_RESUME_ACCEPTANCE_INTERRUPTED"
-    ? "DEPLOYMENT_RESUME_REQUESTED"
-    : type;
+  const customerType = row.event_type;
   return {
     id: Number(row.id),
     at: safeTimestamp(row.created_at),

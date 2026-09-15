@@ -424,10 +424,10 @@ test("progress read enforces tenancy and redacts unsafe event metadata", async (
   db.events.push({
     id: 2,
     deployment_id: "deployment-a",
-    event_type: "INTERNAL_RESUME_ACCEPTANCE_INTERRUPTED",
+    event_type: "DEPLOYMENT_RESUME_REQUESTED",
     from_status: "ANALYZING",
     to_status: "ANALYZING",
-    metadata: { point: "AFTER_ENV_VERIFIED", responseBodyStored: false },
+    metadata: { responseBodyStored: false },
     created_at: new Date("2026-09-10T00:00:01.000Z"),
   });
   const progress = await getCustomerDeploymentProgress(db, startArgs());
@@ -437,7 +437,6 @@ test("progress read enforces tenancy and redacts unsafe event metadata", async (
   assert.equal(progress.active, false);
   assert.equal(progress.stage, "Preparing deployment");
   assert.equal(JSON.stringify(progress).includes("must-not-leak"), false);
-  assert.equal(JSON.stringify(progress).includes("INTERNAL_RESUME_ACCEPTANCE"), false);
   assert.equal(progress.events.some((event) => event.type === "DEPLOYMENT_RESUME_REQUESTED"), true);
   await assert.rejects(
     () => getCustomerDeploymentProgress(db, startArgs({ workspaceId: "workspace-b" })),
@@ -557,71 +556,14 @@ test("recent active deployment does not unnecessarily resume", async () => {
 });
 
 test("normal resume stale threshold remains five minutes by default", () => {
-  assert.equal(customerResumeStaleThresholdMs({
-    deploymentId: "deployment-a",
-    env: {},
-  }), 5 * 60 * 1000);
+  assert.equal(customerResumeStaleThresholdMs(), 5 * 60 * 1000);
 });
 
-test("internal resume acceptance stale override applies only to the selected server-configured deployment", () => {
-  const env = {
-    UTPLAVA_INTERNAL_RESUME_TEST_MODE: "true",
-    UTPLAVA_INTERNAL_RESUME_TEST_DEPLOYMENT_ID: "deployment-a",
-    UTPLAVA_INTERNAL_RESUME_TEST_STALE_AFTER_MS: "45000",
-  };
-
-  assert.equal(customerResumeStaleThresholdMs({ deploymentId: "deployment-a", env }), 45000);
-  assert.equal(customerResumeStaleThresholdMs({ deploymentId: "deployment-b", env }), 5 * 60 * 1000);
-  assert.equal(customerResumeStaleThresholdMs({
-    deploymentId: "deployment-a",
-    env: { ...env, UTPLAVA_INTERNAL_RESUME_TEST_MODE: "false" },
-  }), 5 * 60 * 1000);
-  assert.equal(customerResumeStaleThresholdMs({
-    deploymentId: "deployment-a",
-    env: { ...env, UTPLAVA_INTERNAL_RESUME_TEST_STALE_AFTER_MS: "1000" },
-  }), 30 * 1000);
-  assert.equal(customerResumeStaleThresholdMs({
-    deploymentId: "deployment-a",
-    env: { ...env, UTPLAVA_INTERNAL_RESUME_TEST_STALE_AFTER_MS: "90000" },
-  }), 60 * 1000);
-
-  const appEnv = {
-    UTPLAVA_INTERNAL_RESUME_TEST_MODE: "true",
-    UTPLAVA_INTERNAL_RESUME_TEST_WORKSPACE_ID: "workspace-a",
-    UTPLAVA_INTERNAL_RESUME_TEST_APP_ID: "app-a",
-    UTPLAVA_INTERNAL_RESUME_TEST_ONCE: "true",
-    UTPLAVA_INTERNAL_RESUME_TEST_STALE_AFTER_MS: "45000",
-  };
-  assert.equal(customerResumeStaleThresholdMs({
-    deploymentId: "deployment-new",
-    workspaceId: "workspace-a",
-    appId: "app-a",
-    env: appEnv,
-  }), 45000);
-  assert.equal(customerResumeStaleThresholdMs({
-    deploymentId: "deployment-new",
-    workspaceId: "workspace-b",
-    appId: "app-a",
-    env: appEnv,
-  }), 5 * 60 * 1000);
-  assert.equal(customerResumeStaleThresholdMs({
-    deploymentId: "deployment-new",
-    workspaceId: "workspace-a",
-    appId: "app-b",
-    env: appEnv,
-  }), 5 * 60 * 1000);
-  assert.equal(customerResumeStaleThresholdMs({
-    deploymentId: "deployment-new",
-    workspaceId: "workspace-a",
-    appId: "app-a",
-    env: {
-      ...appEnv,
-      UTPLAVA_INTERNAL_RESUME_TEST_DEPLOYMENT_ID: "deployment-other",
-    },
-  }), 5 * 60 * 1000);
+test("explicit stale threshold override remains a direct server parameter only", () => {
+  assert.equal(customerResumeStaleThresholdMs({ staleAfterMs: 1000 }), 1000);
 });
 
-test("internal resume acceptance stale override can drive auto-resume without customer input", async () => {
+test("default production threshold does not resume a recently stale-looking deployment", async () => {
   const db = new FakeDb();
   makeDeploymentStale(db, "ANALYZING");
   db.deployments[0].updated_at = new Date("2026-09-10T00:09:20.000Z");
@@ -634,23 +576,16 @@ test("internal resume acceptance stale override can drive auto-resume without cu
   const deployment = await getCustomerDeploymentProgressWithResume(db, {
     ...startArgs(),
     now: new Date("2026-09-10T00:10:00.000Z").getTime(),
-    env: {
-      UTPLAVA_INTERNAL_RESUME_TEST_MODE: "true",
-      UTPLAVA_INTERNAL_RESUME_TEST_WORKSPACE_ID: "workspace-a",
-      UTPLAVA_INTERNAL_RESUME_TEST_APP_ID: "app-a",
-      UTPLAVA_INTERNAL_RESUME_TEST_ONCE: "true",
-      UTPLAVA_INTERNAL_RESUME_TEST_STALE_AFTER_MS: "30000",
-    },
     triggerOrchestrator: async () => {
       triggerCount += 1;
       return { id: "run-resume" };
     },
   });
 
-  assert.equal(triggerCount, 1);
+  assert.equal(triggerCount, 0);
   assert.equal(deployment.deploymentId, "deployment-a");
-  assert.equal(deployment.resume.started, true);
-  assert.equal(JSON.stringify(deployment).includes("UTPLAVA_INTERNAL_RESUME_TEST"), false);
+  assert.equal(deployment.resume.started, false);
+  assert.equal(deployment.resume.reason, "recent-progress");
 });
 
 test("live failed and configuration-blocked deployments cannot resume", async () => {
@@ -683,6 +618,26 @@ test("live failed and configuration-blocked deployments cannot resume", async ()
     },
   });
   assert.equal(deployment.resume.reason, "deployment-has-error");
+});
+
+test("deployment without immutable source identity cannot resume", async () => {
+  const db = new FakeDb();
+  makeDeploymentStale(db, "ANALYZING");
+  db.deployments[0].source_commit_sha = null;
+  let triggerCount = 0;
+
+  const deployment = await getCustomerDeploymentProgressWithResume(db, {
+    ...startArgs(),
+    staleAfterMs: 1000,
+    now: new Date("2026-09-10T00:10:00.000Z").getTime(),
+    triggerOrchestrator: async () => {
+      triggerCount += 1;
+      return { id: "run-should-not-start" };
+    },
+  });
+
+  assert.equal(triggerCount, 0);
+  assert.equal(deployment.resume.reason, "source-identity-missing");
 });
 
 test("resume enforces workspace and deployment ownership", async () => {
