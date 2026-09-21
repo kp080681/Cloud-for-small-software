@@ -1,0 +1,33 @@
+{
+  "name": "list_apps",
+  "description": "Lists apps in the authenticated workspace. Scope comes entirely from the caller's auth token — there is no workspace or customer parameter, by design, closing off the classic pass-someone-else's-id mistake.",
+  "backedBy": {
+    "existingFunctions": ["customer-workspaces.mjs#listWorkspaceApplications"]
+  },
+  "input": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  },
+  "output": {
+    "type": "object",
+    "required": ["apps"],
+    "properties": {
+      "apps": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "required": ["appId", "name", "slug", "status", "url"],
+          "properties": {
+            "appId": { "type": "string" },
+            "name": { "type": "string" },
+            "slug": { "type": "string" },
+            "status": { "type": ["string", "null"], "description": "Latest deployment's status, or null if this app has never deployed." },
+            "url": { "type": ["string", "null"], "description": "Live URL, or null if not currently live." }
+          }
+        }
+      }
+    }
+  },
+  "errors": []
+}

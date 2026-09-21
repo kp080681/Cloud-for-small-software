@@ -1,0 +1,61 @@
+{
+  "name": "deploy",
+  "description": "Deploys a GitHub repository. If the repository has never been deployed in this workspace, this creates a new app and analyzes it; if it already maps to an existing app, this redeploys it. The caller does not need to know or specify which case applies.",
+  "backedBy": {
+    "note": "No single existing function does this today. Implementation composes analyzeSelectedRepository (customer-interface/src/server/repository-analysis.mjs) or redeployLiveCustomerApp (customer-deployments.mjs) for the create-vs-redeploy branch, then startCustomerDeployment once configuration is ready. Building that composition is item 9 (implementation), not this schema-definition item.",
+    "existingFunctions": [
+      "repository-analysis.mjs#analyzeSelectedRepository",
+      "customer-deployments.mjs#redeployLiveCustomerApp",
+      "customer-deployments.mjs#startCustomerDeployment"
+    ]
+  },
+  "input": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": ["repo"],
+    "properties": {
+      "repo": {
+        "type": "string",
+        "description": "GitHub repository, as owner/name (e.g. \"kp080681/my-app\"). Must already be selectable in this workspace's connected GitHub installation.",
+        "pattern": "^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$"
+      },
+      "branch": {
+        "type": "string",
+        "description": "Branch to deploy. Omit to use the repository's default branch."
+      }
+    }
+  },
+  "output": {
+    "type": "object",
+    "required": ["appId", "deploymentId", "status", "message"],
+    "properties": {
+      "appId": { "type": "string" },
+      "deploymentId": { "type": "string" },
+      "status": {
+        "type": "string",
+        "enum": ["queued", "needs_configuration", "blocked"],
+        "description": "queued: deployment has started and the agent should poll get_status. needs_configuration: analysis succeeded but required secrets are missing — see missingConfig. blocked: this app is currently paused or rate-limited; see message."
+      },
+      "missingConfig": {
+        "type": "array",
+        "description": "Present only when status is needs_configuration.",
+        "items": {
+          "type": "object",
+          "required": ["key", "public"],
+          "properties": {
+            "key": { "type": "string", "description": "The exact environment variable name detected in source, e.g. OPENAI_API_KEY. Not translatable to plain language — pass it to set_env verbatim." },
+            "public": { "type": "boolean", "description": "True for NEXT_PUBLIC_-style values exposed to the browser, not secret." }
+          }
+        }
+      },
+      "message": { "type": "string", "description": "One plain-language sentence describing what just happened or what to do next." },
+      "url": { "type": ["string", "null"], "description": "Live URL, present only once status becomes live via get_status — always null immediately after deploy." }
+    }
+  },
+  "errors": [
+    { "code": "WORKSPACE_RATE_LIMIT_REACHED", "retryable": true, "note": "Wait and retry; see rate-limit.mjs, 30/hour for repository analysis, 20/hour for redeploy." },
+    { "code": "APP_PAUSED", "retryable": false, "note": "See deployment-failure-cooldown.mjs — this app failed repeatedly and needs manual resume by the workspace owner, not the agent." },
+    { "code": "UNSUPPORTED_PROJECT", "retryable": false, "note": "Repository is not a supported V1 Next.js or Node.js project." },
+    { "code": "REPOSITORY_NOT_AVAILABLE", "retryable": false, "note": "Repo isn't selected/available in this workspace's GitHub connection." }
+  ]
+}

@@ -1,0 +1,46 @@
+{
+  "name": "get_status",
+  "description": "Reports the current state of an app's most recent deployment, in plain language — never raw internal status words.",
+  "backedBy": {
+    "existingFunctions": ["customer-deployments.mjs#getCustomerDeploymentProgress", "customer-deployments.mjs#safeCustomerDeployment"]
+  },
+  "input": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": ["appId"],
+    "properties": {
+      "appId": { "type": "string" }
+    }
+  },
+  "output": {
+    "type": "object",
+    "required": ["status", "stage", "active", "terminal", "url", "message"],
+    "properties": {
+      "status": {
+        "type": "string",
+        "enum": ["ANALYZING", "PROVISIONING", "BUILDING", "DEPLOYING", "HEALTH_CHECKING", "LIVE", "FAILED", "DELETING", "DELETED"],
+        "description": "Raw internal status, included for programmatic branching by the calling agent. Do not display this to a human — use `stage` instead."
+      },
+      "stage": {
+        "type": "string",
+        "description": "Plain-language label for `status`, from deployment-ui-state.mjs's stageLabelForStatus — e.g. \"Building your app\". This, not `status`, is what should be shown to a person."
+      },
+      "active": { "type": "boolean", "description": "True while the deployment is still in progress; the agent should keep polling." },
+      "terminal": { "type": "boolean", "description": "True once the deployment has reached a final state (LIVE, FAILED, or DELETED) and will not change further." },
+      "url": { "type": ["string", "null"], "description": "Live URL, present only when status is LIVE." },
+      "message": { "type": "string", "description": "One plain-language sentence summarizing the current state." },
+      "diagnostic": {
+        "type": ["object", "null"],
+        "description": "Present only when something needs attention (status FAILED, or a blocking error). The single-action-prompt pattern: one plain-language title and one action, never a stack trace.",
+        "properties": {
+          "code": { "type": "string" },
+          "title": { "type": "string" },
+          "action": { "type": "string" }
+        }
+      }
+    }
+  },
+  "errors": [
+    { "code": "APPLICATION_NOT_FOUND", "retryable": false }
+  ]
+}

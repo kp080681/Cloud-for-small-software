@@ -1,0 +1,42 @@
+{
+  "name": "get_logs",
+  "description": "Returns a plain-language timeline of what has happened during an app's most recent deployment. Entries are already translated from internal event types — never raw provider log lines or stack traces.",
+  "backedBy": {
+    "existingFunctions": ["customer-deployments.mjs#getCustomerDeploymentProgress", "customer-deployments.mjs#safeEvent", "customer-deployments.mjs#eventTitles"],
+    "note": "getCustomerDeploymentProgress already returns an `events` array shaped exactly like the entries below (id, at, title, evidence) — get_logs is a thin wrapper trimming and limiting that array, not a new data source."
+  },
+  "input": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": ["appId"],
+    "properties": {
+      "appId": { "type": "string" },
+      "limit": { "type": "integer", "minimum": 1, "maximum": 50, "default": 10, "description": "Most recent entries to return." }
+    }
+  },
+  "output": {
+    "type": "object",
+    "required": ["summary", "entries"],
+    "properties": {
+      "summary": { "type": "string", "description": "One or two plain-language sentences on what's happening overall." },
+      "entries": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "required": ["at", "title"],
+          "properties": {
+            "at": { "type": "string", "format": "date-time" },
+            "title": { "type": "string", "description": "Already plain language, e.g. \"Build complete\" — from the existing eventTitles mapping, never a raw event_type constant." },
+            "evidence": {
+              "type": "object",
+              "description": "Structured, allowlisted detail only (see safeEvidence's blocklist for secrets/tokens/credentials) — never raw provider response bodies."
+            }
+          }
+        }
+      }
+    }
+  },
+  "errors": [
+    { "code": "APPLICATION_NOT_FOUND", "retryable": false }
+  ]
+}

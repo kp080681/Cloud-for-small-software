@@ -1,0 +1,36 @@
+{
+  "name": "set_env",
+  "description": "Sets a configuration value (secret or public env var) for an app. The key must already be one Utplava detected as needed from the app's own source code — this tool cannot be used to invent arbitrary new configuration keys, which is a deliberate security boundary, not a current limitation to be lifted later.",
+  "backedBy": {
+    "existingFunctions": ["customer-configuration.mjs#saveCustomerAppSecret"]
+  },
+  "input": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": ["appId", "key", "value"],
+    "properties": {
+      "appId": { "type": "string" },
+      "key": {
+        "type": "string",
+        "pattern": "^[A-Za-z_][A-Za-z0-9_]*$",
+        "description": "Must exactly match a key already listed in app_env_requirements for this app (surfaced via deploy's missingConfig or get_status). Keys not already detected are rejected with ENV_KEY_NOT_APPROVED — set_env cannot be used to configure something the platform never asked for."
+      },
+      "value": { "type": "string", "minLength": 1 }
+    }
+  },
+  "output": {
+    "type": "object",
+    "required": ["configured", "message"],
+    "properties": {
+      "configured": { "type": "boolean" },
+      "message": { "type": "string" }
+    }
+  },
+  "errors": [
+    { "code": "INVALID_ENV_KEY", "retryable": false, "note": "Key isn't a valid environment variable name shape." },
+    { "code": "SECRET_VALUE_REQUIRED", "retryable": false, "note": "Value was empty." },
+    { "code": "ENV_KEY_NOT_APPROVED", "retryable": false, "note": "Key isn't in this app's detected requirements — the core security boundary this tool enforces. Not retryable; the agent should not attempt a different key name to work around it." },
+    { "code": "ENV_KEY_PLATFORM_MANAGED", "retryable": false, "note": "e.g. DATABASE_URL when Utplava manages the database — nothing for the agent or customer to set." },
+    { "code": "WORKSPACE_RATE_LIMIT_REACHED", "retryable": true, "note": "60/hour, see rate-limit.mjs." }
+  ]
+}
