@@ -1,6 +1,7 @@
 import { getDeploymentReadiness } from "./customer-configuration.mjs";
 import { getAuthorizedWorkspace } from "./customer-workspaces.mjs";
 import { enforceRateLimit } from "../shared/control-plane/rate-limit.mjs";
+import { enforceFailureCooldown } from "../shared/control-plane/deployment-failure-cooldown.mjs";
 import crypto from "node:crypto";
 
 const ORCHESTRATOR_TASK_ID = "ssc-control-plane-orchestrate-deployment";
@@ -881,6 +882,12 @@ export async function retryFailedCustomerDeployment(
 
   await db.query("BEGIN");
   try {
+    // Same automatic containment as redeployLiveCustomerApp: a repeatedly
+    // failing app gets paused rather than letting retries continue
+    // unbounded. Checked first, inside the transaction, so a pause decided
+    // by this exact call is committed atomically with everything else.
+    await enforceFailureCooldown(db, { appId });
+
     const requested = await loadAuthorizedDeployment(db, {
       customerId,
       workspaceId,
@@ -1089,6 +1096,15 @@ export async function redeployLiveCustomerApp(
 
   await db.query("BEGIN");
   try {
+    // Automatic, no-founder-in-the-loop containment: if this app has already
+    // failed repeatedly in a short window, stop here with a clear reason
+    // instead of letting another attempt burn more build minutes on what is
+    // very likely the same underlying problem. Sticky — stays paused until a
+    // separate, explicit resume action, unlike the rate limit above which
+    // just resets on the next window. Inside the transaction so a pause
+    // decided by this call commits atomically with everything else.
+    await enforceFailureCooldown(db, { appId });
+
     const app = await loadAuthorizedAppForRedeploy(db, { customerId, workspaceId, appId });
     if (!app.live_deployment_id || !app.live_source_commit_sha) {
       throw Object.assign(new Error("Redeploy requires an existing live deployment."), {

@@ -313,6 +313,32 @@ class FakeDb {
       return { rowCount: rows.length, rows };
     }
 
+    if (text.startsWith("SELECT id, paused_at, paused_reason FROM apps")) {
+      const [appId] = params;
+      const app = this.apps.find((row) => row.id === appId);
+      if (!app) return { rowCount: 0, rows: [] };
+      return { rowCount: 1, rows: [{ id: app.id, paused_at: app.paused_at ?? null, paused_reason: app.paused_reason ?? null }] };
+    }
+
+    if (text.startsWith("SELECT count(*)::int AS count") && text.includes("FROM deployments") && text.includes("status='FAILED'")) {
+      const [appId, windowMinutes] = params;
+      const windowStart = Date.now() - Number(windowMinutes) * 60 * 1000;
+      const count = this.deployments.filter(
+        (row) => row.app_id === appId && row.status === "FAILED" && new Date(row.updated_at).getTime() > windowStart,
+      ).length;
+      return { rowCount: 1, rows: [{ count }] };
+    }
+
+    if (text.startsWith("UPDATE apps SET paused_at=now()")) {
+      const [appId, reason] = params;
+      const app = this.apps.find((row) => row.id === appId);
+      if (app) {
+        app.paused_at = new Date().toISOString();
+        app.paused_reason = reason;
+      }
+      return { rowCount: app ? 1 : 0, rows: [] };
+    }
+
     if (text.startsWith("INSERT INTO workspace_rate_limit_counters")) {
       const [workspaceId, action, windowStart] = params;
       this.rateLimitCounters ??= new Map();
