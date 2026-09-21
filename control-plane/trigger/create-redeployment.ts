@@ -10,13 +10,13 @@ const { Client } = pg;
 export const createRedeployment = task({
   id: "ssc-control-plane-create-redeployment",
   retry: { maxAttempts: 2, minTimeoutInMs: 2000, maxTimeoutInMs: 8000, factor: 2, randomize: false },
-  run: async (payload: { appId: string }) => {
+  run: async (payload: { appId: string; workspaceId: string }) => {
     for (const name of ["DATABASE_URL", "GITHUB_APP_ID", "GITHUB_APP_PRIVATE_KEY"]) if (!process.env[name]) throw new Error(`Missing ${name}`);
     const db = new Client({ connectionString: process.env.DATABASE_URL });
     await db.connect();
     try {
-      const appResult = await db.query(`SELECT a.id,a.workspace_id,a.slug,r.full_name AS repository_full_name,r.default_branch,i.github_installation_id,d.id AS previous_deployment_id,d.source_commit_sha AS previous_commit_sha FROM apps a JOIN github_repositories r ON r.id=a.repository_id JOIN github_installations i ON i.id=r.github_installation_id LEFT JOIN LATERAL (SELECT id,source_commit_sha FROM deployments WHERE app_id=a.id AND status='LIVE' ORDER BY created_at DESC LIMIT 1) d ON true WHERE a.id=$1 AND a.deleted_at IS NULL`,[payload.appId]);
-      if(appResult.rowCount===0)throw new Error(`Active app not found: ${payload.appId}`);const app=appResult.rows[0];if(!app.previous_deployment_id)throw new Error("Redeploy requires an existing LIVE deployment");
+      const appResult = await db.query(`SELECT a.id,a.workspace_id,a.slug,r.full_name AS repository_full_name,r.default_branch,i.github_installation_id,d.id AS previous_deployment_id,d.source_commit_sha AS previous_commit_sha FROM apps a JOIN github_repositories r ON r.id=a.repository_id JOIN github_installations i ON i.id=r.github_installation_id LEFT JOIN LATERAL (SELECT id,source_commit_sha FROM deployments WHERE app_id=a.id AND status='LIVE' ORDER BY created_at DESC LIMIT 1) d ON true WHERE a.id=$1 AND a.workspace_id=$2 AND a.deleted_at IS NULL`,[payload.appId,payload.workspaceId]);
+      if(appResult.rowCount===0)throw new Error(`Active app not found in the requested workspace: ${payload.appId}`);const app=appResult.rows[0];if(!app.previous_deployment_id)throw new Error("Redeploy requires an existing LIVE deployment");
       const [owner,repo]=app.repository_full_name.split("/");const auth=createAppAuth({appId:process.env.GITHUB_APP_ID!,privateKey:process.env.GITHUB_APP_PRIVATE_KEY!.replace(/\\n/g,"\n")});const installationAuth=await auth({type:"installation",installationId:Number(app.github_installation_id)});const octokit=new Octokit({auth:installationAuth.token});const branch=app.default_branch||"main";const ref=await octokit.git.getRef({owner,repo,ref:`heads/${branch}`});const commitSha=ref.data.object.sha;if(!/^[0-9a-f]{40}$/i.test(commitSha))throw new Error("GitHub returned an invalid commit SHA");
       await db.query("BEGIN");try{
         await db.query(`SELECT id FROM apps WHERE id=$1 FOR UPDATE`,[app.id]);

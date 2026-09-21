@@ -20,7 +20,7 @@ try {
   await db.end();
 }
 
-const createHandle = await tasks.trigger("ssc-control-plane-create-redeployment", { appId: app.id });
+const createHandle = await tasks.trigger("ssc-control-plane-create-redeployment", { appId: app.id, workspaceId });
 console.log(JSON.stringify({
   result: "NODE_04_16_REDEPLOY_REQUESTED",
   appId: app.id,
