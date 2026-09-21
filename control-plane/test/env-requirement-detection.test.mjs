@@ -52,6 +52,75 @@ test("limits detection to source files outside generated and dependency director
   assert.equal(isDetectableSourcePath("README.md"), false);
 });
 
+test("detects destructured process.env references, the dominant AI-generated pattern", () => {
+  const result = detectEnvReferencesInSource({
+    path: "app/api/route.ts",
+    content: `
+      const { OPENAI_API_KEY, DATABASE_URL } = process.env;
+    `,
+  });
+
+  assert.equal(result.skipped, false);
+  assert.deepEqual(result.detections.map((item) => item.envKey), [
+    "DATABASE_URL",
+    "OPENAI_API_KEY",
+  ]);
+});
+
+test("destructured aliasing reads the source property, not the local alias", () => {
+  const result = detectEnvReferencesInSource({
+    path: "app/lib/config.ts",
+    content: `const { STRIPE_SECRET_KEY: stripeKey } = process.env;`,
+  });
+
+  assert.deepEqual(result.detections.map((item) => item.envKey), ["STRIPE_SECRET_KEY"]);
+});
+
+test("destructured default values do not corrupt sibling key detection", () => {
+  const result = detectEnvReferencesInSource({
+    path: "app/lib/config.ts",
+    content: `const { PORT = computeDefault(1, 2), API_KEY } = process.env;`,
+  });
+
+  assert.deepEqual(result.detections.map((item) => item.envKey), ["API_KEY", "PORT"]);
+});
+
+test("rest element in destructuring is not treated as a specific env key", () => {
+  const result = detectEnvReferencesInSource({
+    path: "app/lib/config.ts",
+    content: `const { API_KEY, ...rest } = process.env;`,
+  });
+
+  assert.deepEqual(result.detections.map((item) => item.envKey), ["API_KEY"]);
+});
+
+test("NEXT_PUBLIC_ keys read via destructuring are still classified public", () => {
+  const result = detectEnvReferencesInSource({
+    path: "app/page.tsx",
+    content: `const { NEXT_PUBLIC_SITE_URL } = process.env;`,
+  });
+
+  assert.equal(result.detections[0].public, true);
+});
+
+test("detects bracket access with a static template-literal key", () => {
+  const result = detectEnvReferencesInSource({
+    path: "app/lib/config.ts",
+    content: "const key = process.env[`RESEND_API_KEY`];",
+  });
+
+  assert.deepEqual(result.detections.map((item) => item.envKey), ["RESEND_API_KEY"]);
+});
+
+test("interpolated template-literal bracket access is not falsely detected", () => {
+  const result = detectEnvReferencesInSource({
+    path: "app/lib/config.ts",
+    content: "const key = process.env[`PREFIX_${suffix}`];",
+  });
+
+  assert.deepEqual(result.detections, []);
+});
+
 test("rejects oversized source files deterministically", () => {
   assert.throws(
     () => detectEnvReferencesInSource({
