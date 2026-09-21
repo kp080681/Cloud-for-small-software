@@ -18,6 +18,7 @@ import {
 import {
   enforceActiveAppLimit,
 } from "../shared/control-plane/workspace-resource-policy.mjs";
+import { enforceRateLimit } from "../shared/control-plane/rate-limit.mjs";
 import { safeCustomerDeployment } from "./customer-deployments.mjs";
 import { getAuthorizedWorkspace } from "./customer-workspaces.mjs";
 import { createInstallationOctokit } from "./github-app.mjs";
@@ -232,6 +233,20 @@ export async function analyzeSelectedRepository(
   },
 ) {
   await getAuthorizedWorkspace(db, { customerId, workspaceId });
+  // Repository analysis makes real GitHub API calls (getTree + one getBlob
+  // per detectable file) against the platform's own shared GitHub App
+  // credentials, not a per-customer token. Unthrottled, one workspace
+  // repeatedly re-analyzing a large repo can exhaust that shared rate
+  // budget and degrade analysis for every other tenant — a cross-tenant
+  // consequence, not just a per-workspace nuisance. 30/hour is deliberately
+  // generous for normal onboarding retries while still bounding abuse; tune
+  // once real usage data exists.
+  await enforceRateLimit(db, {
+    workspaceId,
+    action: "repository_analysis",
+    limit: 30,
+    windowSeconds: 3600,
+  });
   const repository = await loadSelectedRepository(db, { workspaceId, repositoryId });
   const source = await inspectRepositorySource({
     repository,
@@ -783,6 +798,7 @@ function customerMessageForCode(code) {
     PACKAGE_JSON_NOT_FOUND: "The repository does not contain a package.json at the root.",
     UNSUPPORTED_PROJECT: "This repository is not a supported V1 Next.js or Node.js project.",
     APP_SLUG_CONFLICT: "This application name is already used by another repository in the workspace.",
+    WORKSPACE_RATE_LIMIT_REACHED: "You've hit the limit for this action right now — please wait a bit and try again.",
   };
   return messages[code] || "Repository analysis could not be completed safely.";
 }

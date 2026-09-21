@@ -313,6 +313,15 @@ class FakeDb {
       return { rowCount: rows.length, rows };
     }
 
+    if (text.startsWith("INSERT INTO workspace_rate_limit_counters")) {
+      const [workspaceId, action, windowStart] = params;
+      this.rateLimitCounters ??= new Map();
+      const key = `${workspaceId}:${action}:${windowStart}`;
+      const next = (this.rateLimitCounters.get(key) ?? 0) + 1;
+      this.rateLimitCounters.set(key, next);
+      return { rowCount: 1, rows: [{ count: next }] };
+    }
+
     throw new Error(`Unhandled fake query: ${text}`);
   }
 

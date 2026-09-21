@@ -1,6 +1,7 @@
 import { encryptAppSecret } from "../shared/control-plane/secret-store.mjs";
 import { missingRequiredEnvKeys } from "../shared/control-plane/env-requirement-reconciliation.mjs";
 import { getAuthorizedWorkspace } from "./customer-workspaces.mjs";
+import { enforceRateLimit } from "../shared/control-plane/rate-limit.mjs";
 
 const TARGET_ENVIRONMENT = "production";
 const ENV_KEY_PATTERN = /^[A-Za-z_][A-Za-z0-9_]*$/;
@@ -209,6 +210,18 @@ export async function saveCustomerAppSecret(
       code: "SECRET_VALUE_REQUIRED",
     });
   }
+
+  // AWS KMS charges per Encrypt call regardless of whether any workspace
+  // resource-count ceiling is hit, so this is bounded independently of
+  // active-app/active-deployment limits. 60/hour is generous for legitimate
+  // configuration work (an app rarely has more than a handful of secrets)
+  // while bounding a scripted or looping caller from generating real cost.
+  await enforceRateLimit(db, {
+    workspaceId,
+    action: "secret_write",
+    limit: 60,
+    windowSeconds: 3600,
+  });
 
   await db.query("BEGIN");
   try {

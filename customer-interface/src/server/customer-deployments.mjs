@@ -1,5 +1,6 @@
 import { getDeploymentReadiness } from "./customer-configuration.mjs";
 import { getAuthorizedWorkspace } from "./customer-workspaces.mjs";
+import { enforceRateLimit } from "../shared/control-plane/rate-limit.mjs";
 import crypto from "node:crypto";
 
 const ORCHESTRATOR_TASK_ID = "ssc-control-plane-orchestrate-deployment";
@@ -1072,6 +1073,19 @@ export async function redeployLiveCustomerApp(
   let created = false;
   let reusedActive = false;
   let operationStage = "before_insert";
+
+  // Bounds how fast redeploys can be requested — the concrete risk this
+  // protects against is a stuck or fast-looping caller (today a human
+  // double-clicking, tomorrow the intended MCP `deploy`/`redeploy` tool)
+  // generating far more build/provider load than a person realistically
+  // would. This does not replace the per-app "already in progress" guard
+  // below; it bounds the *rate of requests*, not just concurrent state.
+  await enforceRateLimit(db, {
+    workspaceId,
+    action: "redeploy",
+    limit: 20,
+    windowSeconds: 3600,
+  });
 
   await db.query("BEGIN");
   try {
