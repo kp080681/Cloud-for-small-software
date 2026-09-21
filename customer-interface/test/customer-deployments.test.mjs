@@ -510,7 +510,7 @@ test("progress read enforces tenancy and redacts unsafe event metadata", async (
   assert.equal(progress.deploymentId, "deployment-a");
   assert.equal(progress.status, "ANALYZING");
   assert.equal(progress.active, false);
-  assert.equal(progress.stage, "Preparing deployment");
+  assert.equal(progress.stage, "Looking at your code");
   assert.equal(JSON.stringify(progress).includes("must-not-leak"), false);
   assert.equal(progress.events.some((event) => event.type === "DEPLOYMENT_RESUME_REQUESTED"), true);
   await assert.rejects(
@@ -1098,28 +1098,28 @@ test("retry success copy reflects existing live child instead of claiming a new 
       status: "LIVE",
       retry: { created: false, started: false, alreadyStarted: true },
     }),
-    "Existing deployment is live.",
+    "This deployment is already live.",
   );
   assert.equal(
     retrySuccessMessage({
       status: "BUILDING",
       retry: { created: false, started: false, alreadyStarted: true },
     }),
-    "Existing deployment resumed.",
+    "Already working on it — picking up where it left off.",
   );
   assert.equal(
     retrySuccessMessage({
       status: "ANALYZING",
       retry: { created: true, started: true, alreadyStarted: false },
     }),
-    "Deployment retry started.",
+    "Trying again — this'll take a moment.",
   );
   assert.equal(
     retrySuccessMessage({
       status: "FAILED",
       retry: { limitReached: true },
     }),
-    "Retry limit reached. Review the deployment details before trying a new deployment.",
+    "This deployment has been retried enough times without success. Review what went wrong before trying again.",
   );
 });
 

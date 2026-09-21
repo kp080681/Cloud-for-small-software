@@ -2,7 +2,7 @@
 
 import { useEffect, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
-import { redeployFailureMessage, redeploySuccessMessage, retrySuccessMessage } from "@/src/shared/deployment-ui-state.mjs";
+import { friendlyErrorMessage, redeployFailureMessage, redeploySuccessMessage, retrySuccessMessage, stageLabelForStatus } from "@/src/shared/deployment-ui-state.mjs";
 
 export function GitHubPanel({ workspaceId, github }) {
   const router = useRouter();
@@ -21,7 +21,7 @@ export function GitHubPanel({ workspaceId, github }) {
     const response = await fetch(`/api/workspaces/${encodeURIComponent(workspaceId)}/github/repositories`);
     const body = await response.json().catch(() => ({}));
     if (!response.ok) {
-      setMessage(body.error || "GITHUB_REPOSITORIES_UNAVAILABLE");
+      setMessage(friendlyErrorMessage(body.error, "Utplava couldn't load your GitHub repositories. Try refreshing the page."));
       return;
     }
     setRepositoryState(body);
@@ -39,7 +39,7 @@ export function GitHubPanel({ workspaceId, github }) {
     );
     const body = await response.json().catch(() => ({}));
     if (!response.ok) {
-      setMessage(body.error || "REPOSITORY_NOT_AVAILABLE");
+      setMessage(friendlyErrorMessage(body.error, "That repository isn't available to select right now."));
       return;
     }
     setMessage(`${body.repository.fullName} selected.`);
@@ -59,7 +59,7 @@ export function GitHubPanel({ workspaceId, github }) {
     );
     const body = await response.json().catch(() => ({}));
     if (!response.ok) {
-      const error = body.message || body.error || "Repository analysis could not be completed.";
+      const error = body.message || friendlyErrorMessage(body.error, "Repository analysis could not be completed.");
       setAnalysisState((current) => ({
         ...current,
         [repositoryId]: { pending: false, error },
@@ -83,7 +83,7 @@ export function GitHubPanel({ workspaceId, github }) {
     );
     const body = await response.json().catch(() => ({}));
     if (!response.ok) {
-      setMessage(body.error || "CONFIGURATION_STATUS_UNAVAILABLE");
+      setMessage(friendlyErrorMessage(body.error, "Utplava couldn't check this app's configuration. Try refreshing the page."));
       return;
     }
     setConfigurationState((current) => ({
@@ -105,7 +105,7 @@ export function GitHubPanel({ workspaceId, github }) {
     );
     const body = await response.json().catch(() => ({}));
     if (!response.ok) {
-      setMessage(body.error || "SECRET_CONFIGURATION_FAILED");
+      setMessage(friendlyErrorMessage(body.error, "That value couldn't be saved. Please try again."));
       return;
     }
     setConfigurationState((current) => ({
@@ -124,7 +124,7 @@ export function GitHubPanel({ workspaceId, github }) {
     );
     const body = await response.json().catch(() => ({}));
     if (!response.ok) {
-      if (!silent) setMessage(body.error || "DEPLOYMENT_STATUS_UNAVAILABLE");
+      if (!silent) setMessage(friendlyErrorMessage(body.error, "Utplava couldn't check on this deployment. Try refreshing the page."));
       return null;
     }
     setDeploymentState((current) => ({
@@ -144,7 +144,7 @@ export function GitHubPanel({ workspaceId, github }) {
     const body = await response.json().catch(() => ({}));
     setDeploymentPending((current) => ({ ...current, [deploymentId]: false }));
     if (!response.ok) {
-      setMessage(body.error || "DEPLOYMENT_START_FAILED");
+      setMessage(friendlyErrorMessage(body.error, "The deployment couldn't be started. Please try again."));
       return;
     }
     setDeploymentState((current) => ({
@@ -165,7 +165,7 @@ export function GitHubPanel({ workspaceId, github }) {
     const body = await response.json().catch(() => ({}));
     setDeploymentPending((current) => ({ ...current, [deploymentId]: false }));
     if (!response.ok) {
-      setMessage(body.error || "DEPLOYMENT_RETRY_FAILED");
+      setMessage(friendlyErrorMessage(body.error, "The retry couldn't be started. Please try again."));
       return;
     }
     setDeploymentState((current) => ({
@@ -347,12 +347,18 @@ function AnalysisResult({
   loadDeploymentProgress,
   isPending,
 }) {
+  const displayName = {
+    nextjs: "Next.js",
+    nodejs: "Node.js",
+    npm: "npm",
+    yarn: "Yarn",
+    pnpm: "pnpm",
+  };
   const handled = [
-    analysis.framework ? `Framework ${analysis.framework}` : null,
-    analysis.runtime ? `Runtime ${analysis.runtime}` : null,
-    analysis.packageManager ? `Package manager ${analysis.packageManager}` : null,
-    analysis.buildCommand ? `Build ${analysis.buildCommand}` : null,
-    analysis.databaseRequired ? `PostgreSQL ${analysis.databaseMode || "required"}` : "No database required",
+    analysis.framework ? `${displayName[analysis.framework] || analysis.framework} app detected` : null,
+    analysis.packageManager ? `Using ${displayName[analysis.packageManager] || analysis.packageManager}` : null,
+    analysis.buildCommand ? `Build command: ${analysis.buildCommand}` : null,
+    analysis.databaseRequired ? "Needs a database" : "No database needed",
   ].filter(Boolean);
   const requirements = configuration?.requirements ?? [];
   const requiredMissing = requirements.filter((item) => item.required && !item.managed && !item.configured);
@@ -364,7 +370,7 @@ function AnalysisResult({
     deploymentId: analysis.deploymentId,
     appId: analysis.appId,
     status: analysis.status,
-    stage: stageForStatus(analysis.status),
+    stage: stageLabelForStatus(analysis.status),
     active: false,
     terminal: terminalDeploymentStatus(analysis.status),
     liveUrl: null,
@@ -467,7 +473,7 @@ function AnalysisResult({
           <small>{currentDeployment.diagnostic.title}: {currentDeployment.diagnostic.action}</small>
         ) : null}
         {failed && retryLimitReached ? (
-          <small role="status">Retry limit reached. Review the deployment details before starting a new deployment.</small>
+          <small role="status">This deployment has been retried enough times without success. Review what went wrong before trying again.</small>
         ) : null}
         {failed && !retryLimitReached ? (
           <button
@@ -505,18 +511,4 @@ function AnalysisResult({
 
 function terminalDeploymentStatus(status) {
   return ["LIVE", "FAILED", "DELETED"].includes(status);
-}
-
-function stageForStatus(status) {
-  const labels = {
-    ANALYZING: "Preparing deployment",
-    PROVISIONING: "Provisioning runtime",
-    BUILDING: "Building application",
-    DEPLOYING: "Preparing application",
-    HEALTH_CHECKING: "Checking application",
-    LIVE: "Live",
-    FAILED: "Deployment failed",
-    DELETED: "Deleted",
-  };
-  return labels[status] || "Not started";
 }

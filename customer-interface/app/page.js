@@ -59,12 +59,12 @@ function Applications({ apps }) {
             <h1>Applications</h1>
             <p className="muted">Everything you build starts somewhere.</p>
           </div>
-          <button disabled>Deploy an application</button>
+          <a className="button" href="#github-connection">Deploy an application</a>
         </div>
         <section className="panel empty">
           <div className="symbol" aria-hidden="true">+</div>
           <h2>Your workspace is ready.</h2>
-          <p className="muted">GitHub repository connection arrives in the next integration node. No infrastructure operation is available from this shell yet.</p>
+          <p className="muted">Connect a GitHub repository below to deploy your first app.</p>
           <div className="empty-footer">
             <span>GitHub source</span>
             <span>Next.js + Node.js</span>
@@ -82,7 +82,7 @@ function Applications({ apps }) {
           <h1>Applications</h1>
           <p className="muted">Your software, all in one place.</p>
         </div>
-        <button disabled>Deploy an application</button>
+        <a className="button" href="#github-connection">Deploy an application</a>
       </div>
       <section className="panel application-list">
         {apps.map((app) => (

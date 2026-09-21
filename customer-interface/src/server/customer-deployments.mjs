@@ -26,14 +26,14 @@ const MAX_CUSTOMER_RETRY_DEPTH = 3;
 const MAX_RETRY_LINEAGE_TRAVERSAL = 16;
 
 const stageByStatus = Object.freeze({
-  ANALYZING: "Preparing deployment",
-  PROVISIONING: "Provisioning runtime",
-  BUILDING: "Building application",
-  DEPLOYING: "Preparing application",
-  HEALTH_CHECKING: "Checking application",
+  ANALYZING: "Looking at your code",
+  PROVISIONING: "Setting things up",
+  BUILDING: "Building your app",
+  DEPLOYING: "Getting your app ready",
+  HEALTH_CHECKING: "Making sure it works",
   LIVE: "Live",
-  FAILED: "Deployment failed",
-  DELETING: "Deleting application",
+  FAILED: "Something went wrong",
+  DELETING: "Deleting",
   DELETED: "Deleted",
 });
 

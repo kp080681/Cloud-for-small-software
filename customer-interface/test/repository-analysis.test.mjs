@@ -505,7 +505,7 @@ test("refresh analysis returns latest active redeployment instead of older live 
   assert.equal(analysis.currentDeployment.deploymentId, "deployment-active");
   assert.equal(analysis.currentDeployment.parentDeploymentId, "deployment-live");
   assert.equal(analysis.currentDeployment.status, "BUILDING");
-  assert.equal(analysis.currentDeployment.stage, "Building application");
+  assert.equal(analysis.currentDeployment.stage, "Building your app");
   assert.equal(analysis.currentDeployment.active, true);
   assert.equal(analysis.currentDeployment.terminal, false);
   assert.equal(analysis.currentDeployment.liveUrl, null);
