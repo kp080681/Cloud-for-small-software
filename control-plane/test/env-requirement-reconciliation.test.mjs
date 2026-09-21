@@ -6,7 +6,7 @@ import {
   sourceDetectedRequirement,
 } from "../src/env-requirement-reconciliation.mjs";
 
-test("observed-only new source references are recorded without becoming blocking requirements", () => {
+test("source-detected references default to required, since nothing else in the pipeline ever blocks a deployment for missing config", () => {
   const requirement = sourceDetectedRequirement({
     envKey: "TIMEOUT",
     public: false,
@@ -16,10 +16,10 @@ test("observed-only new source references are recorded without becoming blocking
   assert.deepEqual(requirement, {
     envKey: "TIMEOUT",
     source: "source-detection",
-    required: false,
+    required: true,
     public: false,
   });
-  assert.deepEqual(missing, []);
+  assert.deepEqual(missing, ["TIMEOUT"]);
 });
 
 test("existing required env requirements still block when no binding is configured", () => {
@@ -52,4 +52,21 @@ test("source reconciliation never downgrades existing required requirements", ()
 
   assert.equal(reconciled.required, true);
   assert.equal(reconciled.public, true);
+});
+
+test("source reconciliation also never upgrades an existing row a human deliberately marked optional", () => {
+  const reconciled = reconcileExistingRequirement(
+    {
+      envKey: "OPTIONAL_FEATURE_FLAG",
+      source: "user-confirmed",
+      required: false,
+      public: false,
+    },
+    {
+      envKey: "OPTIONAL_FEATURE_FLAG",
+      public: false,
+    },
+  );
+
+  assert.equal(reconciled.required, false);
 });

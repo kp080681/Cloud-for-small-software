@@ -399,7 +399,7 @@ test("repository analysis resolves commit server-side and persists safe deployme
   assert.equal(db.deployments.length, 1);
   assert.equal(db.buildInputs.length, 1);
   assert.equal(db.envSnapshots.length, 1);
-  assert.equal(db.envRequirements.some((row) => row.required), false);
+  assert.equal(db.envRequirements.some((row) => row.required), true);
   assert.equal(JSON.stringify(analysis).includes("secret-value"), false);
 });
 

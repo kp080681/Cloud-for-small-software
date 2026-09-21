@@ -79,10 +79,10 @@ test("destructured aliasing reads the source property, not the local alias", () 
 test("destructured default values do not corrupt sibling key detection", () => {
   const result = detectEnvReferencesInSource({
     path: "app/lib/config.ts",
-    content: `const { PORT = computeDefault(1, 2), API_KEY } = process.env;`,
+    content: `const { MAX_RETRIES = computeDefault(1, 2), API_KEY } = process.env;`,
   });
 
-  assert.deepEqual(result.detections.map((item) => item.envKey), ["API_KEY", "PORT"]);
+  assert.deepEqual(result.detections.map((item) => item.envKey), ["API_KEY", "MAX_RETRIES"]);
 });
 
 test("rest element in destructuring is not treated as a specific env key", () => {
@@ -119,6 +119,48 @@ test("interpolated template-literal bracket access is not falsely detected", () 
   });
 
   assert.deepEqual(result.detections, []);
+});
+
+test("platform-injected variables are excluded from detection entirely, even when referenced", () => {
+  const result = detectEnvReferencesInSource({
+    path: "app/lib/config.ts",
+    content: `
+      if (process.env.NODE_ENV === "production") { /* ... */ }
+      const port = process.env.PORT || 3000;
+      const region = process.env.VERCEL_REGION;
+    `,
+  });
+
+  assert.deepEqual(result.detections, []);
+});
+
+test("a real customer secret alongside excluded platform variables is still detected", () => {
+  const result = detectEnvReferencesInSource({
+    path: "app/lib/config.ts",
+    content: `
+      const isProd = process.env.NODE_ENV === "production";
+      const key = process.env.OPENAI_API_KEY;
+    `,
+  });
+
+  assert.deepEqual(result.detections.map((item) => item.envKey), ["OPENAI_API_KEY"]);
+});
+
+test("detects optional-chaining process.env access, a common defensive-coding style", () => {
+  const result = detectEnvReferencesInSource({
+    path: "app/lib/config.ts",
+    content: `
+      const a = process?.env?.RESEND_API_KEY;
+      const b = process?.env.STRIPE_SECRET_KEY;
+      const { SUPABASE_URL } = process?.env;
+    `,
+  });
+
+  assert.deepEqual(result.detections.map((item) => item.envKey), [
+    "RESEND_API_KEY",
+    "STRIPE_SECRET_KEY",
+    "SUPABASE_URL",
+  ]);
 });
 
 test("rejects oversized source files deterministically", () => {

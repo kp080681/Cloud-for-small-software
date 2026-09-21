@@ -4,7 +4,58 @@ import {
   normalizeRepositoryRelativePath,
 } from "./source-boundary.mjs";
 
-export const ENV_DETECTOR_VERSION = "node-04-17-static-process-env-v2";
+export const ENV_DETECTOR_VERSION = "node-04-17-static-process-env-v3";
+
+// Well-known variables injected by the platform/runtime itself, never
+// something a customer configures through Utplava's secret UI. These are
+// excluded from detection entirely so they never appear as a "requirement"
+// needing attention. Kept deliberately conservative (only variables with a
+// documented, stable meaning) — it is far safer to occasionally show one
+// extra harmless detected key than to wrongly exclude something a customer
+// genuinely needs to set.
+export const PLATFORM_PROVIDED_ENV_KEYS = new Set([
+  // Standard OS/Node process environment — never an application secret.
+  "NODE_ENV",
+  "PATH",
+  "HOME",
+  "PWD",
+  "SHELL",
+  "TERM",
+  "LANG",
+  "LC_ALL",
+  "TZ",
+  "HOSTNAME",
+  "USER",
+  "LOGNAME",
+  "PORT",
+  // Vercel system environment variables — always injected by the provider.
+  // https://vercel.com/docs/projects/environment-variables/system-environment-variables
+  "VERCEL",
+  "VERCEL_ENV",
+  "VERCEL_URL",
+  "VERCEL_BRANCH_URL",
+  "VERCEL_REGION",
+  "VERCEL_DEPLOYMENT_ID",
+  "VERCEL_TARGET_ENV",
+  "VERCEL_GIT_PROVIDER",
+  "VERCEL_GIT_REPO_SLUG",
+  "VERCEL_GIT_REPO_OWNER",
+  "VERCEL_GIT_REPO_ID",
+  "VERCEL_GIT_COMMIT_REF",
+  "VERCEL_GIT_COMMIT_SHA",
+  "VERCEL_GIT_COMMIT_MESSAGE",
+  "VERCEL_GIT_COMMIT_AUTHOR_LOGIN",
+  "VERCEL_GIT_COMMIT_AUTHOR_NAME",
+  "VERCEL_GIT_PULL_REQUEST_ID",
+  "NEXT_PUBLIC_VERCEL_ENV",
+  "NEXT_PUBLIC_VERCEL_URL",
+  "NEXT_PUBLIC_VERCEL_BRANCH_URL",
+  "NEXT_PUBLIC_VERCEL_REGION",
+  // Next.js runtime marker, not customer-configured.
+  "NEXT_RUNTIME",
+  // CI/build tooling.
+  "CI",
+]);
 
 const ENV_KEY_PATTERN = /^[A-Za-z_][A-Za-z0-9_]*$/;
 const SOURCE_EXTENSIONS = new Set([
@@ -63,6 +114,7 @@ function lineNumberAt(text, index) {
 
 function addReference(found, envKey, source) {
   if (!ENV_KEY_PATTERN.test(envKey)) return;
+  if (PLATFORM_PROVIDED_ENV_KEYS.has(envKey)) return;
   if (!found.has(envKey)) {
     found.set(envKey, {
       envKey,
@@ -116,7 +168,7 @@ function destructuredEnvKey(part) {
 // (`{ PORT = { fallback: true }.value }`) don't truncate the match early.
 function findDestructuredEnvBlocks(content) {
   const blocks = [];
-  const assignPattern = /=\s*process\s*\.\s*env\b(?!\s*[.[(\w])/g;
+  const assignPattern = /=\s*process\s*\??\s*\.\s*env\b(?!\s*[.[(\w])/g;
   for (const match of content.matchAll(assignPattern)) {
     let i = match.index - 1;
     while (i >= 0 && /\s/.test(content[i])) i -= 1;
@@ -140,12 +192,14 @@ export function detectEnvReferencesInSource({ path, content }) {
   assertTextSource(content);
 
   const found = new Map();
-  const dotPattern = /\bprocess\s*\.\s*env\s*\.\s*([A-Za-z_][A-Za-z0-9_]*)\b/g;
+  // `?.` is allowed after `process` and after `env` to catch the common
+  // defensive-coding style `process?.env?.KEY` / `process?.env.KEY`.
+  const dotPattern = /\bprocess\s*\??\s*\.\s*env\s*\??\s*\.\s*([A-Za-z_][A-Za-z0-9_]*)\b/g;
   // Bracket access with a static string key. Backtick literals are included
   // only when they contain no `${...}` interpolation, since an interpolated
   // template key is not statically known (same principle as the existing
   // computed-variable skip below).
-  const bracketPattern = /\bprocess\s*\.\s*env\s*\[\s*(?:["']([A-Za-z_][A-Za-z0-9_]*)["']|`([A-Za-z_][A-Za-z0-9_]*)`)\s*\]/g;
+  const bracketPattern = /\bprocess\s*\??\s*\.\s*env\s*\??\s*\[\s*(?:["']([A-Za-z_][A-Za-z0-9_]*)["']|`([A-Za-z_][A-Za-z0-9_]*)`)\s*\]/g;
 
   for (const match of content.matchAll(dotPattern)) {
     addReference(found, match[1], {
