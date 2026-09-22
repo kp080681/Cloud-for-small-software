@@ -157,6 +157,15 @@ class FakeDb {
       return { rowCount: count, rows: [] };
     }
 
+    if (text.startsWith("INSERT INTO workspace_rate_limit_counters")) {
+      const [workspaceId, action, windowStart] = params;
+      this.rateLimitCounters ??= new Map();
+      const key = `${workspaceId}:${action}:${windowStart}`;
+      const next = (this.rateLimitCounters.get(key) ?? 0) + 1;
+      this.rateLimitCounters.set(key, next);
+      return { rowCount: 1, rows: [{ count: next }] };
+    }
+
     throw new Error(`Unhandled fake query: ${text}`);
   }
 }
@@ -382,6 +391,57 @@ test("reusing an already-rotated refresh token revokes the ENTIRE token family, 
   // original access token, issued in the same family, must also now be
   // dead — otherwise reuse detection is security theater.
   await assert.rejects(verifyAccessToken(db, { accessToken: original.accessToken }), (e) => e.code === "INVALID_TOKEN");
+});
+
+test("verifyAccessToken enforces an aggregate 60/hour MCP call budget per workspace, across every tool call sharing one token", async () => {
+  const db = new FakeDb();
+  const { verifier, challenge } = realPkcePair();
+  const { code } = await createAuthorizationCode(db, {
+    customerId: "identity-a",
+    workspaceId: "workspace-a",
+    clientId: "claude-code",
+    redirectUri: REDIRECT_URI,
+    codeChallenge: challenge,
+  });
+  const tokens = await exchangeAuthorizationCode(db, { code, clientId: "claude-code", redirectUri: REDIRECT_URI, codeVerifier: verifier });
+
+  for (let i = 0; i < 60; i += 1) {
+    await verifyAccessToken(db, { accessToken: tokens.accessToken });
+  }
+  await assert.rejects(
+    verifyAccessToken(db, { accessToken: tokens.accessToken }),
+    (error) => error.code === "WORKSPACE_RATE_LIMIT_REACHED",
+  );
+});
+
+test("the MCP call budget is per workspace, not global — a second workspace's calls are unaffected", async () => {
+  const db = new FakeDb();
+  db.memberships.push({ customerId: "identity-a", workspaceId: "workspace-b" });
+  db.workspaces.push({ id: "workspace-b", name: "B" });
+
+  const { verifier: verifierA, challenge: challengeA } = realPkcePair();
+  const { code: codeA } = await createAuthorizationCode(db, {
+    customerId: "identity-a",
+    workspaceId: "workspace-a",
+    clientId: "claude-code",
+    redirectUri: REDIRECT_URI,
+    codeChallenge: challengeA,
+  });
+  const tokensA = await exchangeAuthorizationCode(db, { code: codeA, clientId: "claude-code", redirectUri: REDIRECT_URI, codeVerifier: verifierA });
+  for (let i = 0; i < 60; i += 1) await verifyAccessToken(db, { accessToken: tokensA.accessToken });
+  await assert.rejects(verifyAccessToken(db, { accessToken: tokensA.accessToken }), (e) => e.code === "WORKSPACE_RATE_LIMIT_REACHED");
+
+  const { verifier: verifierB, challenge: challengeB } = realPkcePair();
+  const { code: codeB } = await createAuthorizationCode(db, {
+    customerId: "identity-a",
+    workspaceId: "workspace-b",
+    clientId: "claude-code",
+    redirectUri: REDIRECT_URI,
+    codeChallenge: challengeB,
+  });
+  const tokensB = await exchangeAuthorizationCode(db, { code: codeB, clientId: "claude-code", redirectUri: REDIRECT_URI, codeVerifier: verifierB });
+  const resolved = await verifyAccessToken(db, { accessToken: tokensB.accessToken });
+  assert.equal(resolved.workspaceId, "workspace-b");
 });
 
 test("revokeTokenFamily is tenant-scoped — cannot revoke a family belonging to a different customer or workspace", async () => {

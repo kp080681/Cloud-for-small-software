@@ -45,14 +45,34 @@ test in `schemas.test.mjs` exists specifically so a future edit can't
 casually add one of these without the test failing and forcing a deliberate
 decision to remove that guard.
 
-## What's still open (items 8–10, not this one)
+## Security review
+
+`PROMPT-INJECTION-REVIEW.md` — item 10's adversarial audit of what the
+current backend would and wouldn't expose to a calling agent. Confirms
+status/diagnostic text is always from fixed lookup tables, README content
+is never read anywhere, and the one genuinely unconstrained free-text field
+in the system (`buildCommand`) was never in any tool's output — while
+documenting one real, narrow residual channel (three `get_logs` evidence
+keys that can carry attacker-chosen but structurally-bounded identifiers).
+Enforced by `test/prompt-injection.test.mjs`, not just described in prose.
+
+## What's still open (item 11, and a live implementation, not this one)
+
+Items 8, 9, and 10 are now complete (OAuth auth, MCP rate limiting plus
+destructive-operation unreachability, and this prompt-injection review).
+What remains:
 
 - The `deploy` tool's actual backing function doesn't exist yet — today,
   analyze/create and redeploy are two different functions with no single
-  entry point that picks between them.
-- OAuth-scoped auth wiring (item 8).
-- Per-tool rate limiting reusing `rate-limit.mjs` from item 3, and
-  confirming destructive operations stay unreachable (item 9).
-- Adversarial prompt-injection testing against a real implementation
-  (item 10) — this contract's shapes make that testing possible, but
-  don't substitute for actually doing it.
+  entry point that picks between them. Building that composition, wiring
+  a real MCP protocol server around all five tool handlers, and having
+  each handler call `verifyAccessToken` before doing anything, is the
+  remaining implementation work this whole `mcp/` directory has been
+  preparing for.
+- A live adversarial test against that real implementation once it
+  exists — this review's tests prove what the current backend *would*
+  expose by source tracing; the genuine next step is deploying a real
+  repo with a deliberately suggestive env var name and confirming a real
+  calling agent doesn't act on it.
+- Item 11: re-running Gate 12 criteria against the full merged scope
+  before any self-serve or MCP-driven signup opens.

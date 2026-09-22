@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
 import { getAuthorizedWorkspace } from "./customer-workspaces.mjs";
+import { enforceRateLimit } from "../shared/control-plane/rate-limit.mjs";
 import {
   ACCESS_TOKEN_TTL_SECONDS,
   AUTHORIZATION_CODE_TTL_SECONDS,
@@ -147,6 +148,17 @@ export async function exchangeAuthorizationCode(db, { code, clientId, redirectUr
 // The actual per-tool-call authentication entrypoint a future MCP server
 // (item 9) calls before running deploy/get_status/etc — the MCP-transport
 // analogue of requireCustomerSession for the cookie-based web session.
+//
+// Bounds aggregate MCP call volume per workspace (60/hour, reusing the
+// exact rate-limit.mjs infrastructure item 3 built — no new mechanism, one
+// more bucket). Applied only once the token itself is already confirmed
+// valid: this limit is about bounding a legitimate, authenticated caller's
+// volume, the same concern as item 3's other buckets, not about
+// rate-limiting invalid-token guessing attempts, which is a different
+// problem this function doesn't try to solve. Checked here rather than
+// once per individual tool (deploy/get_status/etc) so every MCP call, of
+// any kind, counts against one shared budget — an agent can't dodge the
+// limit by spreading calls across different tools.
 export async function verifyAccessToken(db, { accessToken }) {
   if (typeof accessToken !== "string" || !accessToken) {
     throw new McpAuthError("INVALID_TOKEN", "Access token is required.", 401);
@@ -160,6 +172,14 @@ export async function verifyAccessToken(db, { accessToken }) {
   if (!row || row.revoked_at || isExpired(row.access_token_expires_at)) {
     throw new McpAuthError("INVALID_TOKEN", "Access token is invalid, revoked, or expired.", 401);
   }
+
+  await enforceRateLimit(db, {
+    workspaceId: row.workspace_id,
+    action: "mcp_tool_call",
+    limit: 60,
+    windowSeconds: 3600,
+  });
+
   return { customerId: row.customer_identity_id, workspaceId: row.workspace_id, mcpClientId: row.mcp_client_id };
 }
 
