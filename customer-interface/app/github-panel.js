@@ -2,7 +2,7 @@
 
 import { useEffect, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
-import { friendlyErrorMessage, redeployFailureMessage, redeploySuccessMessage, retrySuccessMessage, stageLabelForStatus } from "@/src/shared/deployment-ui-state.mjs";
+import { friendlyErrorMessage, readinessLabel, redeployFailureMessage, redeploySuccessMessage, retrySuccessMessage, stageLabelForStatus } from "@/src/shared/deployment-ui-state.mjs";
 
 export function GitHubPanel({ workspaceId, github }) {
   const router = useRouter();
@@ -419,7 +419,7 @@ function AnalysisResult({
         </div>
         <div>
           <strong>Your attention</strong>
-          {analysis.errorCode ? <small>Unsupported: {analysis.errorCode}</small> : null}
+          {analysis.errorCode ? <small>{friendlyErrorMessage(analysis.errorCode, "This repository isn't supported yet.")}</small> : null}
           {requiredMissing.map((item) => {
             const inputKey = `${analysis.appId}:${item.envKey}`;
             return (
@@ -449,7 +449,7 @@ function AnalysisResult({
         <strong>Configuration</strong>
         {requirements.length ? null : <small>No configuration required.</small>}
         {optional.map((item) => <small key={item.envKey}>{item.envKey} detected, optional / not blocking</small>)}
-        <small>{ready ? "Ready to deploy" : configuration?.readiness || "Configuration status pending"}</small>
+        <small>{ready ? "Ready to deploy" : readinessLabel(configuration?.readiness)}</small>
       </div>
       <div className="deployment-state">
         <div>

@@ -15,6 +15,18 @@ const FRIENDLY_ERROR_MESSAGES = {
   DEPLOYMENT_START_FAILED: "The deployment couldn't be started. Please try again.",
   DEPLOYMENT_RETRY_FAILED: "The retry couldn't be started. Please try again.",
   LIVE_DEPLOYMENT_REQUIRED: "This app needs to be live at least once before it can be redeployed.",
+  // Same text as customerMessageForCode in repository-analysis.mjs, kept in
+  // sync deliberately — that function maps these for thrown API errors;
+  // this map is for the same codes when they show up as a persisted,
+  // successfully-returned analysis.errorCode instead. One wording, two
+  // call sites, found and fixed together during live testing after the
+  // second site was shipping the raw code straight to the customer.
+  REPOSITORY_NOT_SELECTED: "Select a repository before analysing it.",
+  GITHUB_BRANCH_HEAD_INVALID: "Utplava could not resolve the repository branch to a commit.",
+  SOURCE_TREE_TRUNCATED: "The repository is too large for V1 source analysis.",
+  PACKAGE_JSON_NOT_FOUND: "The repository does not contain a package.json at the root.",
+  UNSUPPORTED_PROJECT: "This repository is not a supported V1 Next.js or Node.js project.",
+  APP_SLUG_CONFLICT: "This application name is already used by another repository in the workspace.",
 };
 
 // Maps a backend error code to a plain-language sentence. Falls back to a
@@ -44,6 +56,15 @@ export function stageLabelForStatus(status) {
     DELETED: "Deleted",
   };
   return labels[status] || "Not started yet";
+}
+
+export function readinessLabel(readiness) {
+  const labels = {
+    READY_TO_DEPLOY: "Ready to deploy",
+    CONFIGURATION_REQUIRED: "Waiting on configuration",
+    BLOCKED: "Blocked — see below",
+  };
+  return labels[readiness] || "Configuration status pending";
 }
 
 export function retrySuccessMessage(deployment) {

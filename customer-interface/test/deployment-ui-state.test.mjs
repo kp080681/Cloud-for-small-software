@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   friendlyErrorMessage,
+  readinessLabel,
   redeployFailureMessage,
   redeploySuccessMessage,
   retrySuccessMessage,
@@ -38,6 +39,26 @@ test("redeployFailureMessage now actually uses the code it's passed, not a gener
   assert.match(redeployFailureMessage("WORKSPACE_RATE_LIMIT_REACHED"), /too fast/);
   assert.match(redeployFailureMessage("APP_PAUSED"), /paused/);
   assert.match(redeployFailureMessage("SOMETHING_UNMAPPED"), /Redeployment could not be started/);
+});
+
+test("readinessLabel never returns a raw backend readiness word, discovered live in production when it was", () => {
+  assert.equal(readinessLabel("READY_TO_DEPLOY"), "Ready to deploy");
+  assert.equal(readinessLabel("CONFIGURATION_REQUIRED"), "Waiting on configuration");
+  assert.equal(readinessLabel("BLOCKED"), "Blocked — see below");
+  for (const value of ["READY_TO_DEPLOY", "CONFIGURATION_REQUIRED", "BLOCKED"]) {
+    assert.notEqual(readinessLabel(value), value);
+  }
+});
+
+test("readinessLabel falls back cleanly for an unknown or missing value", () => {
+  assert.equal(readinessLabel("SOMETHING_NEW"), "Configuration status pending");
+  assert.equal(readinessLabel(undefined), "Configuration status pending");
+});
+
+test("friendlyErrorMessage covers the analysis errorCode set too, not just deployment/config codes — found live showing the raw code as \"Unsupported: PACKAGE_JSON_NOT_FOUND\"", () => {
+  assert.match(friendlyErrorMessage("PACKAGE_JSON_NOT_FOUND"), /package\.json/);
+  assert.match(friendlyErrorMessage("UNSUPPORTED_PROJECT"), /not a supported/);
+  assert.match(friendlyErrorMessage("APP_SLUG_CONFLICT"), /already used/);
 });
 
 test("retrySuccessMessage and redeploySuccessMessage stay plain language across every branch", () => {
