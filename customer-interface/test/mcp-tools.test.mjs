@@ -22,7 +22,7 @@ class FakeDb {
     if (text.startsWith("SELECT id FROM github_repositories")) {
       return { rowCount: this.selectedRepositoryId ? 1 : 0, rows: this.selectedRepositoryId ? [{ id: this.selectedRepositoryId }] : [] };
     }
-    if (text.startsWith("SELECT id FROM deployments WHERE app_id")) {
+    if (text.startsWith("SELECT d.id FROM deployments d JOIN apps a")) {
       return { rowCount: this.latestDeploymentId ? 1 : 0, rows: this.latestDeploymentId ? [{ id: this.latestDeploymentId }] : [] };
     }
     throw new Error(`Unhandled fake query: ${text}`);

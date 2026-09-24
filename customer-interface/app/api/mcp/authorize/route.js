@@ -32,21 +32,23 @@ export async function GET(request) {
   }
 
   let db;
+  // Set only once client_id + redirect_uri have been validated against the
+  // registered allowlist. Until then, errors must never redirect anywhere:
+  // redirecting to an unvalidated redirect_uri is an open redirect
+  // (RFC 6749 §4.1.2.1).
   let redirectUriTrusted = false;
   try {
-    const session = await requireCustomerSession(await cookies());
     db = await connectDatabase();
 
-    // Validate client_id + redirect_uri FIRST, on their own, before
-    // anything else that could throw. Only once this succeeds is
-    // redirectUri confirmed to belong to a registered client — RFC 6749
-    // §4.1.2.1 requires never redirecting the user-agent before that's
-    // established, since doing so turns this endpoint into an open
-    // redirect off a trusted domain. An independent review (Opus 5.5)
-    // found the previous version redirected on every error, including
-    // this exact case.
+    // Validate client_id + redirect_uri FIRST, before requiring a session
+    // at all — an independent review (Opus 5.5) suggested this ordering:
+    // a malformed or unregistered request should get a clean 4xx
+    // immediately, rather than first forcing a logged-out visitor through
+    // a 401 for a request that was never going to succeed anyway.
     await resolveMcpClient(db, { clientId, redirectUri });
     redirectUriTrusted = true;
+
+    const session = await requireCustomerSession(await cookies());
 
     const initialWorkspace = await ensureInitialWorkspace(db, {
       customerId: session.customerId,
@@ -95,9 +97,13 @@ export async function GET(request) {
     }
     // redirectUri is confirmed safe at this point — any error from here
     // (workspace not found, invalid PKCE parameters) is safe to report by
-    // redirecting back to the client's own registered callback.
-    const target = new URL(redirectUri, request.url);
-    target.searchParams.set("error", "server_error");
+    // redirecting back to the client's own registered callback, using the
+    // actual OAuth error vocabulary (RFC 6749 §4.1.2.1) rather than a
+    // blanket server_error for everything — a refinement suggested by an
+    // independent review (Opus 5.5).
+    const target = new URL(redirectUri);
+    const oauthError = typeof error?.code === "string" && error.code.startsWith("INVALID_CODE_CHALLENGE") ? "invalid_request" : "server_error";
+    target.searchParams.set("error", oauthError);
     if (state) target.searchParams.set("state", state);
     return Response.redirect(target);
   } finally {

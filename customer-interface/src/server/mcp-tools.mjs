@@ -61,6 +61,12 @@ async function resolveAndSelectRepository(db, { customerId, workspaceId, repo, l
 function missingConfigFrom(requirements = []) {
   return requirements
     .filter((item) => item.required && !item.managed && !item.configured)
+    // Capped at 50 alongside the 64-char key-length cap in
+    // env-requirement-detection.mjs — one further bound on the same
+    // attacker-influenced text channel (a repo with many suggestively-
+    // named short variables could otherwise still assemble a large
+    // combined payload even with each individual name kept short).
+    .slice(0, 50)
     .map((item) => ({ key: item.envKey, public: Boolean(item.public) }));
 }
 
@@ -171,8 +177,20 @@ export async function deploy(
   };
 }
 
-async function loadLatestDeploymentId(db, { appId }) {
-  const result = await db.query(`SELECT id FROM deployments WHERE app_id = $1 ORDER BY created_at DESC LIMIT 1`, [appId]);
+// Scoped to the caller's workspace, not just appId — closes an existence
+// oracle an independent review (Opus 5.5) flagged: without the workspace
+// filter, a nonexistent app id and another tenant's real app id could
+// return distinguishably different results (the get_status/get_logs
+// authorization check still holds independently, but this makes the data
+// lookup itself refuse to answer for an app outside the caller's
+// workspace too, rather than relying on that one earlier check alone).
+async function loadLatestDeploymentId(db, { workspaceId, appId }) {
+  const result = await db.query(
+    `SELECT d.id FROM deployments d JOIN apps a ON a.id = d.app_id
+      WHERE d.app_id = $1 AND a.workspace_id = $2 AND a.deleted_at IS NULL
+      ORDER BY d.created_at DESC LIMIT 1`,
+    [appId, workspaceId],
+  );
   return result.rows[0]?.id ?? null;
 }
 
@@ -187,7 +205,7 @@ export async function getStatus(
   { customerId, workspaceId, appId, authorizeWorkspace = getAuthorizedWorkspace, loadProgress = getCustomerDeploymentProgressWithResume },
 ) {
   await authorizeWorkspace(db, { customerId, workspaceId });
-  const deploymentId = await loadLatestDeploymentId(db, { appId });
+  const deploymentId = await loadLatestDeploymentId(db, { workspaceId, appId });
   if (!deploymentId) throw new McpToolError("APPLICATION_NOT_FOUND", "This app has no deployments yet.", 404);
 
   const progress = await loadProgress(db, { customerId, workspaceId, appId, deploymentId });
@@ -207,7 +225,7 @@ export async function getLogs(
   { customerId, workspaceId, appId, limit = 10, authorizeWorkspace = getAuthorizedWorkspace, loadProgress = getCustomerDeploymentProgressWithResume },
 ) {
   await authorizeWorkspace(db, { customerId, workspaceId });
-  const deploymentId = await loadLatestDeploymentId(db, { appId });
+  const deploymentId = await loadLatestDeploymentId(db, { workspaceId, appId });
   if (!deploymentId) throw new McpToolError("APPLICATION_NOT_FOUND", "This app has no deployments yet.", 404);
 
   const progress = await loadProgress(db, { customerId, workspaceId, appId, deploymentId });

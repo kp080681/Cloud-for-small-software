@@ -60,6 +60,12 @@ export function isExpired(expiresAt, now = new Date()) {
 export const AUTHORIZATION_CODE_TTL_SECONDS = 5 * 60;
 export const ACCESS_TOKEN_TTL_SECONDS = 60 * 60;
 export const REFRESH_TOKEN_TTL_SECONDS = 60 * 60 * 24 * 30;
+// Absolute ceiling on one authorization grant, however often it refreshes —
+// without this, each rotation issues a fresh 30-day refresh token, so an
+// actively-used grant never actually expired. An independent review
+// (Opus 5.5) added this after noting REFRESH_TOKEN_TTL_SECONDS alone only
+// bounds a single token, not the grant's total lifetime.
+export const TOKEN_FAMILY_MAX_AGE_SECONDS = 60 * 60 * 24 * 90;
 
 export function expiresAtFromNow(ttlSeconds, now = new Date()) {
   return new Date(new Date(now).getTime() + ttlSeconds * 1000).toISOString();

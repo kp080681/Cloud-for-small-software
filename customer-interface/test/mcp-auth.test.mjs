@@ -4,7 +4,9 @@ import test from "node:test";
 import {
   McpAuthError,
   createAuthorizationCode,
+  enforceMcpToolCallLimit,
   exchangeAuthorizationCode,
+  listTokenFamilies,
   revokeTokenFamily,
   rotateRefreshToken,
   verifyAccessToken,
@@ -120,46 +122,28 @@ class FakeDb {
       return { rowCount: client ? 1 : 0, rows: client ? [{ id: client.id }] : [] };
     }
 
+    if (text === "BEGIN" || text === "COMMIT" || text === "ROLLBACK" || text.startsWith("SELECT pg_advisory_xact_lock")) {
+      return { rowCount: 0, rows: [] };
+    }
+
+    if (text === "SELECT token_family_id FROM mcp_tokens WHERE refresh_token_hash=$1") {
+      const [refreshTokenHash] = params;
+      const row = this.tokens.find((t) => t.refresh_token_hash === refreshTokenHash);
+      return { rowCount: row ? 1 : 0, rows: row ? [{ token_family_id: row.token_family_id }] : [] };
+    }
+
     if (text.startsWith("SELECT id, token_family_id, customer_identity_id, workspace_id, mcp_client_id, refresh_token_expires_at, rotated_at, revoked_at")) {
       const [refreshTokenHash] = params;
       const row = this.tokens.find((t) => t.refresh_token_hash === refreshTokenHash);
-      return { rowCount: row ? 1 : 0, rows: row ? [row] : [] };
+      const familyCreatedAt = row ? (this.familyCreatedAt?.get(row.token_family_id) ?? new Date().toISOString()) : null;
+      return { rowCount: row ? 1 : 0, rows: row ? [{ ...row, family_created_at: familyCreatedAt }] : [] };
     }
 
-    if (text.startsWith("UPDATE mcp_tokens SET rotated_at = now() WHERE refresh_token_hash")) {
-      const [refreshTokenHash, clientRowId] = params;
-      const now = Date.now();
-      const row = this.tokens.find(
-        (t) =>
-          t.refresh_token_hash === refreshTokenHash &&
-          t.mcp_client_id === clientRowId &&
-          !t.rotated_at &&
-          !t.revoked_at &&
-          new Date(t.refresh_token_expires_at).getTime() > now,
-      );
-      if (!row) return { rowCount: 0, rows: [] };
-      row.rotated_at = new Date().toISOString();
-      return {
-        rowCount: 1,
-        rows: [
-          {
-            id: row.id,
-            token_family_id: row.token_family_id,
-            customer_identity_id: row.customer_identity_id,
-            workspace_id: row.workspace_id,
-            mcp_client_id: row.mcp_client_id,
-          },
-        ],
-      };
-    }
-
-    if (text === "SELECT token_family_id, mcp_client_id, rotated_at, revoked_at FROM mcp_tokens WHERE refresh_token_hash = $1") {
-      const [refreshTokenHash] = params;
-      const row = this.tokens.find((t) => t.refresh_token_hash === refreshTokenHash);
-      return {
-        rowCount: row ? 1 : 0,
-        rows: row ? [{ token_family_id: row.token_family_id, mcp_client_id: row.mcp_client_id, rotated_at: row.rotated_at, revoked_at: row.revoked_at }] : [],
-      };
+    if (text === "UPDATE mcp_tokens SET rotated_at = now() WHERE id = $1") {
+      const [id] = params;
+      const row = this.tokens.find((t) => t.id === id);
+      if (row) row.rotated_at = new Date().toISOString();
+      return { rowCount: row ? 1 : 0, rows: [] };
     }
 
     if (text === "UPDATE mcp_tokens SET revoked_at = now() WHERE token_family_id = $1 AND revoked_at IS NULL") {
@@ -193,6 +177,28 @@ class FakeDb {
       const next = (this.rateLimitCounters.get(key) ?? 0) + 1;
       this.rateLimitCounters.set(key, next);
       return { rowCount: 1, rows: [{ count: next }] };
+    }
+
+    if (text.startsWith("SELECT t.token_family_id, c.name AS client_name")) {
+      const [workspaceId, customerId] = params;
+      const families = new Map();
+      for (const t of this.tokens) {
+        if (t.workspace_id !== workspaceId || t.customer_identity_id !== customerId) continue;
+        const client = this.clients.find((c) => c.id === t.mcp_client_id);
+        const existing = families.get(t.token_family_id) ?? {
+          token_family_id: t.token_family_id,
+          client_name: client?.name ?? null,
+          authorized_at: t.created_at,
+          last_refreshed_at: t.created_at,
+          revoked: true,
+        };
+        existing.authorized_at = new Date(t.created_at) < new Date(existing.authorized_at) ? t.created_at : existing.authorized_at;
+        existing.last_refreshed_at = new Date(t.created_at) > new Date(existing.last_refreshed_at) ? t.created_at : existing.last_refreshed_at;
+        existing.revoked = existing.revoked && Boolean(t.revoked_at);
+        families.set(t.token_family_id, existing);
+      }
+      const rows = [...families.values()].sort((a, b) => new Date(b.last_refreshed_at) - new Date(a.last_refreshed_at));
+      return { rowCount: rows.length, rows };
     }
 
     throw new Error(`Unhandled fake query: ${text}`);
@@ -434,6 +440,84 @@ test("reusing an already-rotated refresh token revokes the ENTIRE token family, 
 // `next build`, the established verification method for route wiring
 // throughout this project. The underlying rate-limit mechanics themselves
 // are already thoroughly tested in rate-limit.test.mjs.
+
+test("enforceMcpToolCallLimit enforces an aggregate 60/hour MCP tool-call budget per workspace — extracted into mcp-auth.mjs specifically so this logic keeps real node:test coverage, since route.js (where it's actually called from) can't be imported by node:test at all due to its @/ path alias", async () => {
+  const db = new FakeDb();
+  for (let i = 0; i < 60; i += 1) await enforceMcpToolCallLimit(db, { workspaceId: "workspace-a" });
+  await assert.rejects(
+    enforceMcpToolCallLimit(db, { workspaceId: "workspace-a" }),
+    (error) => error.code === "WORKSPACE_RATE_LIMIT_REACHED",
+  );
+});
+
+test("enforceMcpToolCallLimit's budget is per workspace, not global", async () => {
+  const db = new FakeDb();
+  for (let i = 0; i < 60; i += 1) await enforceMcpToolCallLimit(db, { workspaceId: "workspace-a" });
+  await assert.rejects(enforceMcpToolCallLimit(db, { workspaceId: "workspace-a" }), (e) => e.code === "WORKSPACE_RATE_LIMIT_REACHED");
+  const decision = await enforceMcpToolCallLimit(db, { workspaceId: "workspace-b" });
+  assert.equal(decision.allowed, true);
+});
+
+test("a token family past its 90-day absolute maximum age cannot be refreshed, and the whole family is revoked — regression test for a gap a second independent-review pass (Opus 5.5) found: REFRESH_TOKEN_TTL_SECONDS only bounds a single token, so a grant that keeps refreshing itself never actually expires without a separate cap on the family's total age", async () => {
+  const db = new FakeDb();
+  const { verifier, challenge } = realPkcePair();
+  const { code } = await createAuthorizationCode(db, {
+    customerId: "identity-a",
+    workspaceId: "workspace-a",
+    clientId: "claude-code",
+    redirectUri: REDIRECT_URI,
+    codeChallenge: challenge,
+  });
+  const tokens = await exchangeAuthorizationCode(db, { code, clientId: "claude-code", redirectUri: REDIRECT_URI, codeVerifier: verifier });
+  db.familyCreatedAt = new Map([[db.tokens[0].token_family_id, new Date(Date.now() - 91 * 24 * 3600 * 1000).toISOString()]]);
+
+  await assert.rejects(
+    rotateRefreshToken(db, { refreshToken: tokens.refreshToken, clientId: "claude-code" }),
+    (error) => error instanceof McpAuthError && error.code === "INVALID_GRANT",
+  );
+  assert.ok(db.tokens.every((t) => t.revoked_at), "the whole family must be revoked, not just this one rotation rejected");
+});
+
+test("a token family well within its 90-day lifetime can still be refreshed normally — regression guard so the max-age check above doesn't accidentally reject fresh grants", async () => {
+  const db = new FakeDb();
+  const { verifier, challenge } = realPkcePair();
+  const { code } = await createAuthorizationCode(db, {
+    customerId: "identity-a",
+    workspaceId: "workspace-a",
+    clientId: "claude-code",
+    redirectUri: REDIRECT_URI,
+    codeChallenge: challenge,
+  });
+  const tokens = await exchangeAuthorizationCode(db, { code, clientId: "claude-code", redirectUri: REDIRECT_URI, codeVerifier: verifier });
+  db.familyCreatedAt = new Map([[db.tokens[0].token_family_id, new Date(Date.now() - 1 * 24 * 3600 * 1000).toISOString()]]);
+
+  const rotated = await rotateRefreshToken(db, { refreshToken: tokens.refreshToken, clientId: "claude-code" });
+  assert.ok(rotated.accessToken);
+});
+
+test("listTokenFamilies lists a workspace's grants with the tokenFamilyId revokeTokenFamily needs, tenant-scoped the same way every other lookup here is", async () => {
+  const db = new FakeDb();
+  const { verifier, challenge } = realPkcePair();
+  const { code } = await createAuthorizationCode(db, {
+    customerId: "identity-a",
+    workspaceId: "workspace-a",
+    clientId: "claude-code",
+    redirectUri: REDIRECT_URI,
+    codeChallenge: challenge,
+  });
+  await exchangeAuthorizationCode(db, { code, clientId: "claude-code", redirectUri: REDIRECT_URI, codeVerifier: verifier });
+
+  const grants = await listTokenFamilies(db, { customerId: "identity-a", workspaceId: "workspace-a" });
+  assert.equal(grants.length, 1);
+  assert.equal(grants[0].tokenFamilyId, db.tokens[0].token_family_id);
+  assert.equal(grants[0].clientName, "Claude Code");
+  assert.equal(grants[0].revoked, false);
+
+  await assert.rejects(
+    listTokenFamilies(db, { customerId: "identity-b", workspaceId: "workspace-a" }),
+    (error) => error.code === "WORKSPACE_NOT_FOUND",
+  );
+});
 
 test("revokeTokenFamily is tenant-scoped — cannot revoke a family belonging to a different customer or workspace", async () => {
   const db = new FakeDb();

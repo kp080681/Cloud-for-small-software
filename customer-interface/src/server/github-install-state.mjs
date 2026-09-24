@@ -4,6 +4,12 @@ import { requireSessionSecret } from "./session.mjs";
 
 export const githubInstallStateCookieName = "utplava_github_install_state";
 
+// Matches the cookie's own maxAge below (10 minutes) — same bug class as
+// session.mjs's original TTL issue, found in a second, separate cookie
+// neither review pass had checked until Opus 5.5's second pass looked
+// specifically for every place Iron.defaults (no expiry) was used.
+const INSTALL_STATE_TTL_MS = 10 * 60 * 1000;
+
 export function createGitHubInstallNonce() {
   return randomBytes(24).toString("base64url");
 }
@@ -17,14 +23,14 @@ export async function sealGitHubInstallState(payload, secret = requireSessionSec
       issuedAt: Date.now(),
     },
     secret,
-    Iron.defaults,
+    { ...Iron.defaults, ttl: INSTALL_STATE_TTL_MS },
   );
 }
 
 export async function unsealGitHubInstallState(value, secret = requireSessionSecret()) {
   if (!value) return null;
   try {
-    const state = await Iron.unseal(value, secret, Iron.defaults);
+    const state = await Iron.unseal(value, secret, { ...Iron.defaults, ttl: INSTALL_STATE_TTL_MS });
     if (!state?.state || !state?.customerId || !state?.workspaceId) return null;
     return state;
   } catch {
