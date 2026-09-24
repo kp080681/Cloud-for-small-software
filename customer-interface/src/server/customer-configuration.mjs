@@ -211,6 +211,16 @@ export async function saveCustomerAppSecret(
     });
   }
 
+  // Authorize before charging anything against the rate-limit budget — an
+  // independent review (Opus 5.5) found this call used to run before any
+  // check that appId belonged to workspaceId at all, letting a caller
+  // burn another workspace's secret_write budget just by supplying its
+  // UUIDs. Non-locking (no forUpdate) since this is a pre-check, not the
+  // authoritative load — loadAuthorizedApp runs again with forUpdate:true
+  // inside the transaction below, the same defense-in-depth pattern used
+  // throughout this codebase.
+  await loadAuthorizedApp(db, { customerId, workspaceId, appId });
+
   // AWS KMS charges per Encrypt call regardless of whether any workspace
   // resource-count ceiling is hit, so this is bounded independently of
   // active-app/active-deployment limits. 60/hour is generous for legitimate

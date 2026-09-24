@@ -118,12 +118,17 @@ test("get_logs evidence is key-allowlisted, which is documented as necessary but
   }
 });
 
-test("env var key names are the narrowest of the three residual channels — confirms the character constraint that bounds them", () => {
+test("env var key names are the narrowest of the three residual channels — confirms the character AND length constraints that bound them", () => {
   const source = readSource("control-plane", "src", "env-requirement-detection.mjs");
   // ENV_KEY_PATTERN — the same constraint that makes destructuring/dot/
   // bracket detection safe also bounds what text can ever reach an agent
   // via missingConfig[].key or evidence.missingKeys: identifiers only, no
   // spaces, no punctuation, nothing that reads as a natural-language
-  // sentence regardless of how an attacker names their variable.
-  assert.match(source, /ENV_KEY_PATTERN\s*=\s*\/\^\[A-Za-z_\]\[A-Za-z0-9_\]\*\$\//);
+  // sentence regardless of how an attacker names their variable. Capped
+  // at 64 characters after an independent review (Opus 5.5) demonstrated
+  // a concrete 76-character suggestive identifier that fit the original,
+  // uncapped pattern — this test intentionally fails if the pattern
+  // changes shape again, forcing this finding to be re-examined rather
+  // than silently going stale.
+  assert.match(source, /ENV_KEY_PATTERN\s*=\s*\/\^\[A-Za-z_\]\[A-Za-z0-9_\]\{0,63\}\$\//);
 });

@@ -256,6 +256,33 @@ async function loadAuthorizedDeployment(db, { customerId, workspaceId, appId, de
   return deployment;
 }
 
+// Lightweight, non-locking check that appId genuinely belongs to
+// workspaceId, for use BEFORE anything that must run outside the main
+// transaction (rate limits, failure-cooldown). Deliberately separate from
+// loadAuthorizedDeployment/loadAuthorizedAppForRedeploy, which both take a
+// row lock (FOR UPDATE) and therefore must run inside a transaction — this
+// one doesn't lock anything, so it's safe and cheap to run first. The
+// heavier, locking checks still run again afterward inside the
+// transaction; this is intentional defense in depth, the same pattern
+// already used for the equivalent operator-only app-removal task,
+// not redundancy to trim.
+//
+// Added after an independent adversarial review (Opus 5.5) found that
+// enforceRateLimit and enforceFailureCooldown were both being called
+// before any authorization check at all — meaning a caller could burn
+// another workspace's rate-limit budget, or learn an app's existence and
+// pause state through differing error responses, just by guessing UUIDs.
+async function assertAppInWorkspaceForPreCheck(db, { customerId, workspaceId, appId }) {
+  await getAuthorizedWorkspace(db, { customerId, workspaceId });
+  const result = await db.query(`SELECT 1 FROM apps WHERE workspace_id = $1 AND id = $2 AND deleted_at IS NULL LIMIT 1`, [
+    workspaceId,
+    appId,
+  ]);
+  if (result.rowCount === 0) {
+    throw Object.assign(new Error("Application not found."), { status: 404, code: "APP_NOT_FOUND" });
+  }
+}
+
 async function loadRetryChildDeployment(db, { appId, parentDeploymentId }) {
   const result = await db.query(
     `
@@ -759,6 +786,20 @@ export async function startCustomerDeployment(
     triggerOrchestrator = triggerDeploymentOrchestrator,
   },
 ) {
+  // A second independent-review pass (Opus 5.5) found this function never
+  // checked paused_at at all — meaning a paused app (3+ recent failures,
+  // per deployment-failure-cooldown.mjs) could still be started through
+  // this path, which is exactly the one every first deploy and every
+  // MCP `deploy()` call goes through (retryFailedCustomerDeployment and
+  // redeployLiveCustomerApp both already call this same check; this was
+  // the one path that didn't). Authorize first, same as those two
+  // callers — checking cooldown before confirming the app belongs to
+  // this workspace would reintroduce the exact ordering bug already
+  // fixed there. Checked before anything else past that, so a pause
+  // decided here can't be undone by a later rollback in this function.
+  await assertAppInWorkspaceForPreCheck(db, { customerId, workspaceId, appId });
+  await enforceFailureCooldown(db, { appId });
+
   const readiness = await getDeploymentReadiness(db, { customerId, workspaceId, appId });
   if (readiness.deploymentId !== deploymentId) {
     throw Object.assign(new Error("Deployment is not the current deployment for this app."), {
@@ -880,14 +921,20 @@ export async function retryFailedCustomerDeployment(
   let retryDepth = 0;
   let retryLimitReached = false;
 
+  // Both checks below must run before any transaction, and after
+  // confirming the app actually belongs to this workspace — see
+  // assertAppInWorkspaceForPreCheck's comment for why (an independent
+  // review found this ordering let an unauthorized caller both burn
+  // budget on a workspace/app that wasn't theirs, and learn whether an
+  // app existed and was paused, and separately found the pause write
+  // itself was being rolled back because it used to run inside this
+  // function's own transaction, right before the throw that triggers
+  // that same transaction's rollback).
+  await assertAppInWorkspaceForPreCheck(db, { customerId, workspaceId, appId });
+  await enforceFailureCooldown(db, { appId });
+
   await db.query("BEGIN");
   try {
-    // Same automatic containment as redeployLiveCustomerApp: a repeatedly
-    // failing app gets paused rather than letting retries continue
-    // unbounded. Checked first, inside the transaction, so a pause decided
-    // by this exact call is committed atomically with everything else.
-    await enforceFailureCooldown(db, { appId });
-
     const requested = await loadAuthorizedDeployment(db, {
       customerId,
       workspaceId,
@@ -1081,6 +1128,17 @@ export async function redeployLiveCustomerApp(
   let reusedActive = false;
   let operationStage = "before_insert";
 
+  // Both checks below must run before any transaction, and after
+  // confirming the app actually belongs to this workspace — see
+  // assertAppInWorkspaceForPreCheck's comment for why (an independent
+  // review found the rate limit below was being charged against
+  // whatever workspaceId the caller supplied, before it was ever
+  // confirmed the app belonged there, and separately found the pause
+  // write inside enforceFailureCooldown was being rolled back because it
+  // used to run inside this function's own transaction, right before the
+  // throw that triggers that same transaction's rollback).
+  await assertAppInWorkspaceForPreCheck(db, { customerId, workspaceId, appId });
+
   // Bounds how fast redeploys can be requested — the concrete risk this
   // protects against is a stuck or fast-looping caller (today a human
   // double-clicking, tomorrow the intended MCP `deploy`/`redeploy` tool)
@@ -1094,17 +1152,17 @@ export async function redeployLiveCustomerApp(
     windowSeconds: 3600,
   });
 
+  // Automatic, no-founder-in-the-loop containment: if this app has already
+  // failed repeatedly in a short window, stop here with a clear reason
+  // instead of letting another attempt burn more build minutes on what is
+  // very likely the same underlying problem. Sticky — stays paused until a
+  // separate, explicit resume action. Run before BEGIN, not inside it: a
+  // pause this call decides on must commit on its own, since throwing
+  // AppPausedError right after would otherwise roll its own write back.
+  await enforceFailureCooldown(db, { appId });
+
   await db.query("BEGIN");
   try {
-    // Automatic, no-founder-in-the-loop containment: if this app has already
-    // failed repeatedly in a short window, stop here with a clear reason
-    // instead of letting another attempt burn more build minutes on what is
-    // very likely the same underlying problem. Sticky — stays paused until a
-    // separate, explicit resume action, unlike the rate limit above which
-    // just resets on the next window. Inside the transaction so a pause
-    // decided by this call commits atomically with everything else.
-    await enforceFailureCooldown(db, { appId });
-
     const app = await loadAuthorizedAppForRedeploy(db, { customerId, workspaceId, appId });
     if (!app.live_deployment_id || !app.live_source_commit_sha) {
       throw Object.assign(new Error("Redeploy requires an existing live deployment."), {

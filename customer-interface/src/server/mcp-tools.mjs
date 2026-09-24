@@ -1,7 +1,7 @@
 import { getAuthorizedWorkspace, listWorkspaceApplications } from "./customer-workspaces.mjs";
 import { analyzeSelectedRepository } from "./repository-analysis.mjs";
 import { listWorkspaceInstallationRepositories, selectWorkspaceRepository } from "./customer-github.mjs";
-import { redeployLiveCustomerApp, startCustomerDeployment, getCustomerDeploymentProgressWithResume } from "./customer-deployments.mjs";
+import { startCustomerDeployment, getCustomerDeploymentProgressWithResume } from "./customer-deployments.mjs";
 import { getDeploymentReadiness, saveCustomerAppSecret } from "./customer-configuration.mjs";
 
 // Implements the five tools locked in mcp/schemas/*.json (checklist item 7),
@@ -19,17 +19,6 @@ export class McpToolError extends Error {
     this.code = code;
     this.status = status;
   }
-}
-
-async function findExistingAppForRepo(db, { workspaceId, repo }) {
-  const result = await db.query(
-    `SELECT a.id FROM apps a
-       JOIN github_repositories r ON r.id = a.repository_id
-      WHERE a.workspace_id = $1 AND lower(r.full_name) = lower($2) AND a.deleted_at IS NULL
-      LIMIT 1`,
-    [workspaceId, repo],
-  );
-  return result.rows[0]?.id ?? null;
 }
 
 async function findSelectedRepositoryId(db, { workspaceId, repo }) {
@@ -75,13 +64,21 @@ function missingConfigFrom(requirements = []) {
     .map((item) => ({ key: item.envKey, public: Boolean(item.public) }));
 }
 
-// deploy — creates a new app (analyze) or redeploys an existing one,
-// transparently, matching the caller experience the schema promises: the
-// agent never needs to know or check which case applies. Every composed
-// step accepts an override (matching this codebase's existing convention —
-// triggerOrchestrator, createInstallationClient, listRepositories all work
-// the same way elsewhere) so the composition logic itself is testable
-// without re-mocking every downstream function's raw SQL.
+// deploy — always deploys the repository's current code. Composed from
+// analyzeSelectedRepository alone (no redeployLiveCustomerApp branch) —
+// an independent review (Opus 5.5) found the original design used
+// redeployLiveCustomerApp for an app's second-and-later deploy calls, but
+// that function rebuilds app.live_source_commit_sha (the commit that is
+// already live), never fetching the repository's current HEAD. An agent
+// pushing a fix and calling deploy would get "queued" back and could tell
+// the user their change was live when the platform had just rebuilt the
+// old code. redeployLiveCustomerApp's actual purpose — rebuilding the
+// exact same commit, e.g. after a transient build failure — is a
+// recovery action, not what a tool literally named "deploy" should mean;
+// analyzeSelectedRepository's own createOrReuseApp/createOrReuseDeployment
+// already correctly reuse the existing app and idempotently reuse-or-create
+// the deployment row for whatever commit is actually at HEAD right now,
+// which is the behavior this tool's name promises.
 export async function deploy(
   db,
   {
@@ -93,25 +90,12 @@ export async function deploy(
     createInstallationClient,
     deploymentKeyFactory,
     authorizeWorkspace = getAuthorizedWorkspace,
-    redeployApp = redeployLiveCustomerApp,
     analyzeRepository = analyzeSelectedRepository,
     checkReadiness = getDeploymentReadiness,
     startDeployment = startCustomerDeployment,
   },
 ) {
   await authorizeWorkspace(db, { customerId, workspaceId });
-
-  const existingAppId = await findExistingAppForRepo(db, { workspaceId, repo });
-  if (existingAppId) {
-    const result = await redeployApp(db, { customerId, workspaceId, appId: existingAppId, deploymentKeyFactory });
-    return {
-      appId: existingAppId,
-      deploymentId: result.deploymentId,
-      status: "queued",
-      message: "Redeploying — this'll take a moment.",
-      url: null,
-    };
-  }
 
   // branch is accepted by the schema for a future non-default-branch deploy,
   // but analyzeSelectedRepository always analyzes the repository's own
@@ -149,6 +133,9 @@ export async function deploy(
   const readiness = await checkReadiness(db, { customerId, workspaceId, appId: analysis.appId });
 
   if (readiness.readiness === "READY_TO_DEPLOY") {
+    // Safe even if this exact commit is already live: startCustomerDeployment
+    // recognizes an already-LIVE deployment and treats the call as a no-op
+    // success (alreadyStarted) rather than re-triggering anything.
     await startDeployment(db, {
       customerId,
       workspaceId,

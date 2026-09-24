@@ -31,29 +31,33 @@ class FakeDb {
 
 const noopAuthorize = async () => {};
 
-test("deploy redeploys an existing app when the repo already maps to one, without touching analysis at all", async () => {
-  const db = new FakeDb({ existingAppId: "app-1" });
-  let analyzeCalled = false;
+test("deploy always re-analyzes, even for an app that already exists — regression test for a bug an independent review (Opus 5.5) found: redeploying used to rebuild the already-live commit via redeployLiveCustomerApp, never fetching the repository's current code, so an agent pushing a fix and calling deploy would report success while the old code stayed live", async () => {
+  const db = new FakeDb({ selectedRepositoryId: "repo-1" });
+  let startCalled = null;
   const result = await deploy(db, {
     customerId: "identity-a",
     workspaceId: "workspace-a",
     repo: "kp080681/my-app",
     authorizeWorkspace: noopAuthorize,
-    redeployApp: async (_db, args) => {
-      assert.equal(args.appId, "app-1");
-      return { deploymentId: "dep-redeploy-1" };
+    analyzeRepository: async (_db, args) => {
+      assert.equal(args.repositoryId, "repo-1");
+      // analyzeSelectedRepository's own createOrReuseApp/createOrReuseDeployment
+      // are what actually handle "this app already exists" correctly —
+      // deploy() itself no longer branches on that at all.
+      return { appId: "app-1", deploymentId: "dep-fresh-analysis", supported: true };
     },
-    analyzeRepository: async () => {
-      analyzeCalled = true;
+    checkReadiness: async () => ({ readiness: "READY_TO_DEPLOY", deploymentId: "dep-fresh-analysis", requirements: [] }),
+    startDeployment: async (_db, args) => {
+      startCalled = args;
     },
   });
 
-  assert.equal(analyzeCalled, false, "redeploy path must never call analysis");
+  assert.ok(startCalled, "a ready, freshly-analyzed deployment must actually be started");
   assert.deepEqual(result, {
     appId: "app-1",
-    deploymentId: "dep-redeploy-1",
+    deploymentId: "dep-fresh-analysis",
     status: "queued",
-    message: "Redeploying — this'll take a moment.",
+    message: "Deploying — this'll take a moment.",
     url: null,
   });
 });

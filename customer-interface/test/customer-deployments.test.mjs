@@ -401,6 +401,31 @@ function addRetryDeployment(db, overrides = {}) {
   return deployment;
 }
 
+test("a paused app cannot be started through the first-deploy path — regression test for a gap a second independent-review pass (Opus 5.5) found: this function never checked paused_at at all, even though retryFailedCustomerDeployment and redeployLiveCustomerApp both already did, so a paused app's very first deployment (or, after item 9's stale-commit fix, any MCP deploy() call, which always routes through this same function) could bypass the containment entirely", async () => {
+  const db = new FakeDb();
+  let triggerCalled = false;
+  const now = new Date();
+  for (let i = 0; i < 3; i += 1) {
+    addRetryDeployment(db, {
+      id: `deployment-failed-${i}`,
+      app_id: "app-a",
+      workspace_id: "workspace-a",
+      status: "FAILED",
+      error_code: "BUILD_FAILED",
+      updated_at: now,
+    });
+  }
+
+  await assert.rejects(
+    startCustomerDeployment(db, { ...startArgs(), triggerOrchestrator: async () => { triggerCalled = true; return { id: "run" }; } }),
+    (error) => error.code === "APP_PAUSED",
+  );
+  assert.equal(triggerCalled, false, "the orchestrator must never be triggered for a paused app");
+
+  const app = db.apps.find((a) => a.id === "app-a");
+  assert.ok(app.paused_at, "the app must actually be paused as a side effect of this check firing here too");
+});
+
 test("ready deployment invokes the approved orchestrator with deterministic idempotency", async () => {
   const db = new FakeDb();
   const calls = [];
@@ -1280,4 +1305,51 @@ test("live app redeploy enforces authorization and requires an existing live dep
     }),
     /Redeploy requires an existing live deployment/,
   );
+});
+
+test("auto-pause write actually persists — regression test for a bug an independent review (Opus 5.5) found: the pause UPDATE used to run inside this function's own transaction, right before the throw that triggers that transaction's rollback, silently undoing it every time", async () => {
+  const db = new FakeDb();
+  db.deployments[0].status = "LIVE";
+  db.deployments[0].live_url = "https://app.example";
+  db.deployments[0].orchestrator_run_id = "run-live";
+  // Three recent FAILED deployments for this app cross the auto-pause
+  // threshold (deployment-failure-cooldown.mjs).
+  for (let i = 0; i < 3; i += 1) {
+    db.deployments.push({
+      id: `deployment-failed-${i}`,
+      deployment_key: `dep_failed_${i}`,
+      workspace_id: "workspace-a",
+      app_id: "app-a",
+      status: "FAILED",
+      error_code: "BUILD_FAILED",
+      source_commit_sha: "a".repeat(40),
+      source_branch: "main",
+      parent_deployment_id: null,
+      orchestrator_run_id: null,
+      live_url: null,
+      provider_deployment_id: null,
+      created_at: 1,
+      updated_at: new Date(),
+    });
+  }
+
+  await assert.rejects(
+    redeployLiveCustomerApp(db, { ...startArgs({ deploymentId: undefined }), triggerOrchestrator: async () => ({ id: "run" }) }),
+    (error) => error.code === "APP_PAUSED",
+  );
+
+  const app = db.apps.find((a) => a.id === "app-a");
+  assert.ok(app.paused_at, "the app must actually be paused, not just have thrown");
+
+  // FakeDb doesn't simulate real transaction rollback (BEGIN/COMMIT/
+  // ROLLBACK are no-ops — see its query() method), which is exactly why
+  // no existing test caught the original bug: a fake without real
+  // rollback semantics can't observe a write being undone by one. What IS
+  // verifiable, and is what the actual fix changed, is the order: the
+  // pause write must happen before BEGIN is ever issued, so a real
+  // Postgres ROLLBACK later in this same call can never reach it.
+  const pauseIndex = db.queries.findIndex((q) => q.text.startsWith("UPDATE apps SET paused_at=now()"));
+  const beginIndex = db.queries.findIndex((q) => q.text === "BEGIN");
+  assert.ok(pauseIndex >= 0, "the pause write must have happened");
+  assert.ok(beginIndex === -1 || pauseIndex < beginIndex, "the pause write must happen before BEGIN, or BEGIN must never be reached at all");
 });

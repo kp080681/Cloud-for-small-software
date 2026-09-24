@@ -3,7 +3,7 @@ import { connectDatabase } from "@/src/server/db.mjs";
 import { requireCustomerSession } from "@/src/server/customer-shell.mjs";
 import { ensureInitialWorkspace, defaultWorkspaceName } from "@/src/server/customer-workspaces.mjs";
 import { selectedWorkspaceCookieName } from "@/src/server/session.mjs";
-import { createAuthorizationCode } from "@/src/server/mcp-auth.mjs";
+import { createAuthorizationCode, resolveMcpClient } from "@/src/server/mcp-auth.mjs";
 
 export const dynamic = "force-dynamic";
 
@@ -32,9 +32,21 @@ export async function GET(request) {
   }
 
   let db;
+  let redirectUriTrusted = false;
   try {
     const session = await requireCustomerSession(await cookies());
     db = await connectDatabase();
+
+    // Validate client_id + redirect_uri FIRST, on their own, before
+    // anything else that could throw. Only once this succeeds is
+    // redirectUri confirmed to belong to a registered client — RFC 6749
+    // §4.1.2.1 requires never redirecting the user-agent before that's
+    // established, since doing so turns this endpoint into an open
+    // redirect off a trusted domain. An independent review (Opus 5.5)
+    // found the previous version redirected on every error, including
+    // this exact case.
+    await resolveMcpClient(db, { clientId, redirectUri });
+    redirectUriTrusted = true;
 
     const initialWorkspace = await ensureInitialWorkspace(db, {
       customerId: session.customerId,
@@ -71,8 +83,21 @@ export async function GET(request) {
         { status: 401 },
       );
     }
-    const target = new URL(redirectUri || "/", request.url);
-    target.searchParams.set("error", error?.code === "INVALID_CLIENT" || error?.code === "INVALID_REDIRECT_URI" ? error.code.toLowerCase() : "server_error");
+    if (!redirectUriTrusted) {
+      // redirect_uri itself could not be confirmed safe (unknown client,
+      // or redirect_uri not on that client's allowlist) — never redirect
+      // the browser anywhere in this case, per RFC 6749 §4.1.2.1. Report
+      // the error directly instead.
+      return Response.json(
+        { error: error?.code ? error.code.toLowerCase() : "invalid_request", message: error?.message || "Authorization request is invalid." },
+        { status: Number.isInteger(error?.status) ? error.status : 400 },
+      );
+    }
+    // redirectUri is confirmed safe at this point — any error from here
+    // (workspace not found, invalid PKCE parameters) is safe to report by
+    // redirecting back to the client's own registered callback.
+    const target = new URL(redirectUri, request.url);
+    target.searchParams.set("error", "server_error");
     if (state) target.searchParams.set("state", state);
     return Response.redirect(target);
   } finally {

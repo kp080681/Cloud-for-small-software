@@ -1,6 +1,5 @@
 import crypto from "node:crypto";
 import { getAuthorizedWorkspace } from "./customer-workspaces.mjs";
-import { enforceRateLimit } from "../shared/control-plane/rate-limit.mjs";
 import {
   ACCESS_TOKEN_TTL_SECONDS,
   AUTHORIZATION_CODE_TTL_SECONDS,
@@ -146,19 +145,19 @@ export async function exchangeAuthorizationCode(db, { code, clientId, redirectUr
 }
 
 // The actual per-tool-call authentication entrypoint a future MCP server
-// (item 9) calls before running deploy/get_status/etc — the MCP-transport
-// analogue of requireCustomerSession for the cookie-based web session.
+// calls before running deploy/get_status/etc — the MCP-transport analogue
+// of requireCustomerSession for the cookie-based web session.
 //
-// Bounds aggregate MCP call volume per workspace (60/hour, reusing the
-// exact rate-limit.mjs infrastructure item 3 built — no new mechanism, one
-// more bucket). Applied only once the token itself is already confirmed
-// valid: this limit is about bounding a legitimate, authenticated caller's
-// volume, the same concern as item 3's other buckets, not about
-// rate-limiting invalid-token guessing attempts, which is a different
-// problem this function doesn't try to solve. Checked here rather than
-// once per individual tool (deploy/get_status/etc) so every MCP call, of
-// any kind, counts against one shared budget — an agent can't dodge the
-// limit by spreading calls across different tools.
+// Deliberately validates the token ONLY — rate limiting used to live here
+// too, but an independent review (Opus 5.5) found two problems with that:
+// withMcpAuth (the caller) can only turn a failure here into a 401, so a
+// rate-limited caller was being told "invalid token" instead of "slow
+// down"; and every protocol message (initialize, tools/list, notifications)
+// passed through here and counted against the budget, not just real tool
+// executions. Rate limiting now happens in the route's own tool-dispatch
+// wrapper instead, where a limit failure can be reported as a normal,
+// friendly tool-result error rather than forced through the auth layer's
+// narrower AuthInfo-or-undefined contract.
 export async function verifyAccessToken(db, { accessToken }) {
   if (typeof accessToken !== "string" || !accessToken) {
     throw new McpAuthError("INVALID_TOKEN", "Access token is required.", 401);
@@ -173,13 +172,6 @@ export async function verifyAccessToken(db, { accessToken }) {
     throw new McpAuthError("INVALID_TOKEN", "Access token is invalid, revoked, or expired.", 401);
   }
 
-  await enforceRateLimit(db, {
-    workspaceId: row.workspace_id,
-    action: "mcp_tool_call",
-    limit: 60,
-    windowSeconds: 3600,
-  });
-
   return { customerId: row.customer_identity_id, workspaceId: row.workspace_id, mcpClientId: row.mcp_client_id };
 }
 
@@ -190,37 +182,55 @@ export async function rotateRefreshToken(db, { refreshToken, clientId }) {
   const clientResult = await db.query(`SELECT id FROM mcp_clients WHERE client_id=$1 AND disabled_at IS NULL`, [clientId]);
   if (clientResult.rowCount === 0) throw new McpAuthError("INVALID_CLIENT", "Unknown or disabled MCP client.", 400);
   const client = clientResult.rows[0];
+  const refreshHash = hashToken(refreshToken);
 
-  const result = await db.query(
-    `SELECT id, token_family_id, customer_identity_id, workspace_id, mcp_client_id, refresh_token_expires_at, rotated_at, revoked_at
-       FROM mcp_tokens WHERE refresh_token_hash=$1`,
-    [hashToken(refreshToken)],
+  // Atomic claim: only one concurrent request can ever win this UPDATE,
+  // closing a read-then-write race an independent review (Opus 5.5)
+  // found — two simultaneous rotation attempts (a legitimate client and
+  // an attacker replaying a stolen token) could previously both observe
+  // rotated_at IS NULL before either write landed, both succeed, and
+  // reuse detection would never fire. Same compare-and-swap pattern
+  // already used for authorization codes and provider operations.
+  const claimed = await db.query(
+    `UPDATE mcp_tokens
+        SET rotated_at = now()
+      WHERE refresh_token_hash = $1
+        AND mcp_client_id = $2
+        AND rotated_at IS NULL
+        AND revoked_at IS NULL
+        AND refresh_token_expires_at > now()
+      RETURNING id, token_family_id, customer_identity_id, workspace_id, mcp_client_id`,
+    [refreshHash, client.id],
   );
-  const row = result.rows[0];
-  if (!row || row.mcp_client_id !== client.id) {
-    throw new McpAuthError("INVALID_GRANT", "Refresh token is invalid.", 400);
-  }
-  if (row.rotated_at) {
-    // Reuse of an already-rotated refresh token is a signal the token was
-    // stolen and both the legitimate holder and an attacker are now
-    // presenting it — revoke the entire family rather than just this
-    // token, forcing a fresh authorization rather than trusting anything
-    // downstream of a possible compromise.
-    await db.query(
-      `UPDATE mcp_tokens SET revoked_at = now() WHERE token_family_id = $1 AND revoked_at IS NULL`,
-      [row.token_family_id],
+
+  if (claimed.rowCount === 0) {
+    // The claim failed — look up why, only to report a good error and,
+    // if this is genuine reuse, revoke the family. This lookup cannot
+    // reintroduce the race: the one security-relevant decision (who gets
+    // to rotate) already happened atomically above. If a concurrent
+    // racer lost the claim above because someone else's rotation just
+    // landed, rotated_at will now be set here too — correctly treated as
+    // reuse, since we can no longer tell which caller was legitimate.
+    const existing = await db.query(
+      `SELECT token_family_id, mcp_client_id, rotated_at, revoked_at
+         FROM mcp_tokens WHERE refresh_token_hash = $1`,
+      [refreshHash],
     );
-    throw new McpAuthError(
-      "REUSE_DETECTED",
-      "This refresh token was already used. All tokens in this session have been revoked; please re-authorize.",
-      400,
-    );
-  }
-  if (row.revoked_at || isExpired(row.refresh_token_expires_at)) {
-    throw new McpAuthError("INVALID_GRANT", "Refresh token is revoked or expired.", 400);
+    const row = existing.rows[0];
+    if (row && row.mcp_client_id === client.id && row.rotated_at && !row.revoked_at) {
+      await db.query(`UPDATE mcp_tokens SET revoked_at = now() WHERE token_family_id = $1 AND revoked_at IS NULL`, [
+        row.token_family_id,
+      ]);
+      throw new McpAuthError(
+        "REUSE_DETECTED",
+        "This refresh token was already used. All tokens in this session have been revoked; please re-authorize.",
+        400,
+      );
+    }
+    throw new McpAuthError("INVALID_GRANT", "Refresh token is invalid, revoked, or expired.", 400);
   }
 
-  await db.query(`UPDATE mcp_tokens SET rotated_at = now() WHERE id = $1`, [row.id]);
+  const row = claimed.rows[0];
   return issueTokenPair(db, {
     clientId: row.mcp_client_id,
     customerId: row.customer_identity_id,
