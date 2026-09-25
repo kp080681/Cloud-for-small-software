@@ -24,10 +24,25 @@ const redirectUris = requireOperatorEnv("MCP_CLIENT_REDIRECT_URIS")
 if (redirectUris.length === 0) {
   throw new Error("MCP_CLIENT_REDIRECT_URIS must list at least one redirect URI.");
 }
+// RFC 8252 (OAuth for native apps) treats a loopback HTTP redirect as
+// secure enough for a native/CLI client specifically: the request never
+// leaves the user's own machine, so there's no network eavesdropper for
+// TLS to protect against, unlike a real https redirect_uri whose absence
+// would matter. Found missing during an actual attempt to connect Claude
+// Code (a real native client) to this server — its OAuth callback is
+// exactly this kind of loopback URI, and the original https-only check
+// rejected it outright with no exception, making every native/CLI client
+// (Claude Code, Codex, and similar) impossible to register at all.
+function isAcceptableRedirectUri(parsed) {
+  if (parsed.protocol === "https:") return true;
+  const isLoopbackHost = parsed.hostname === "localhost" || parsed.hostname === "127.0.0.1" || parsed.hostname === "::1";
+  return parsed.protocol === "http:" && isLoopbackHost;
+}
+
 for (const uri of redirectUris) {
   const parsed = new URL(uri); // throws on malformed input
-  if (parsed.protocol !== "https:") {
-    throw new Error(`Redirect URI must use https: ${uri}`);
+  if (!isAcceptableRedirectUri(parsed)) {
+    throw new Error(`Redirect URI must use https:, or http: on localhost/127.0.0.1 for a native client: ${uri}`);
   }
 }
 
