@@ -43,3 +43,4 @@ Important work should not exist only inside a chat, local machine, or uncommitte
 8. Avoid unnecessary platform-added runtime latency.
 9. Every critical operation must be observable and recoverable.
 10. No hidden platform-specific hacks for proof applications.
+# Utplava
