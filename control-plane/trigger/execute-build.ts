@@ -41,17 +41,54 @@ function safeProviderErrorBody(body: any) {
   return { error: error ? { code: error.code ?? null, message: error.message ?? null } : null, code: body.code ?? null, message: body.message ?? null };
 }
 
+// 25s bound on every Vercel API call. Found missing after a real customer
+// deployment ("math-game") got stuck at BUILDING with no provider_deployment_id
+// and no error, twice in a row, even through the self-healing resume path —
+// traced to this exact fetch() having no timeout at all: if Vercel's API
+// hangs rather than erroring, nothing ever throws, so withTransientRetry
+// never triggers (it only reacts to a thrown, classified error) and even a
+// fresh orchestrator resume just re-issues the same unprotected call and
+// hangs again. A timeout here throws a real, classified, retryable error
+// instead, so this failure mode now flows through the same recovery path
+// every other Vercel error already does.
+const VERCEL_REQUEST_TIMEOUT_MS = 25_000;
+
 async function vercelRequest(path: string, options: RequestInit = {}) {
   const token = process.env.VERCEL_TOKEN;
   if (!token) throw new Error("Missing VERCEL_TOKEN");
-  const response = await fetch(`${API}${path}`, { ...options, headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json", ...(options.headers ?? {}) } });
+  const controller = new AbortController();
+  const timeoutHandle = setTimeout(() => controller.abort(), VERCEL_REQUEST_TIMEOUT_MS);
+  let response: Response;
+  try {
+    response = await fetch(`${API}${path}`, { ...options, headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json", ...(options.headers ?? {}) }, signal: controller.signal });
+  } catch (error: any) {
+    if (error?.name === "AbortError") { const timeoutError: any = new Error(`Vercel API request timed out after ${VERCEL_REQUEST_TIMEOUT_MS}ms: ${path}`); timeoutError.isTimeout = true; throw timeoutError; }
+    throw error;
+  } finally {
+    clearTimeout(timeoutHandle);
+  }
   const text = await response.text(); let body: any = null;
   if (text) { try { body = JSON.parse(text); } catch { body = null; } }
   if (!response.ok) { const safe = safeProviderErrorBody(body); const error: any = new Error(`Vercel API ${response.status} ${response.statusText}${safe ? `: ${JSON.stringify(safe)}` : ""}`); error.status=response.status; error.safeBody=safe; throw error; }
   return body;
 }
 
+// Utplava's own framework taxonomy (project-detection.mjs: exactly "nextjs"
+// or "nodejs") isn't the same as Vercel's own projectSettings.framework
+// enum, which wants "node" for a plain Node.js app, not "nodejs". Every
+// prior real deployment (dealupwebsite, Vantage, DealUp Website) was
+// Next.js, where the two values happen to already match — this is the
+// first plain Node.js app to ever hit this exact code path, and Vercel's
+// API correctly rejected the mismatched value with a 400. Confirmed live,
+// with the actual Vercel error message, thanks to the BUILD_EXECUTION_ERROR
+// wrapper above — this bug would have been invisible without it.
+function toVercelFrameworkValue(framework: string) {
+  if (framework === "nodejs") return "node";
+  return framework;
+}
+
 function classifyProviderError(error: any) {
+  if(error?.isTimeout)return{classification:"PROVIDER_TIMEOUT",errorCode:"VERCEL_TIMEOUT",userMessage:"Deployment provider did not respond in time. Retrying automatically.",retryableNow:true};
   const code=error?.safeBody?.error?.code ?? error?.safeBody?.code ?? null; const message=error?.safeBody?.error?.message ?? error?.safeBody?.message ?? null;
   if(error?.status===402&&code==="payment_required"&&/api-deployments-free-per-day/i.test(String(message)))return{classification:"BLOCKED_EXTERNAL_QUOTA",errorCode:"VERCEL_DAILY_DEPLOYMENT_QUOTA",userMessage:"Deployment provider daily limit reached. Retry after the provider quota resets.",retryableNow:false};
   if(error?.status===429)return{classification:"PROVIDER_RATE_LIMITED",errorCode:"VERCEL_RATE_LIMIT",userMessage:"Deployment provider is rate limiting requests. Retry later.",retryableNow:true};
@@ -206,6 +243,26 @@ async function attachProviderDeployment(db: pg.Client, deployment: any, provider
 export const executeBuild=task({id:"ssc-control-plane-execute-build",retry:{maxAttempts:3,minTimeoutInMs:2000,maxTimeoutInMs:10000,factor:2,randomize:false},run:async(payload:{deploymentId:string})=>{
  if(!process.env.DATABASE_URL)throw new Error("Missing DATABASE_URL");const db=new Client({connectionString:process.env.DATABASE_URL});await db.connect();
  try{
+  return await runExecuteBuild(db,payload);
+ }finally{await db.end()}
+}});
+
+// Everything this task does beyond its two initial lookups used to have no
+// error handling at all: only the one catch block around the final
+// deployment-creation call ever wrote a deployment_events row. A real
+// customer deployment ("math-game") got stuck silently — twice — with
+// nothing in our own event log to show why, because whichever earlier
+// Vercel call (getVercelProject, enforceGitAutoDeployments,
+// listCandidateDeployments — none of which had error handling) actually
+// failed left no trace here at all, visible only on Trigger.dev's own
+// dashboard as a failed task run. This wrapper doesn't change what the
+// task does or its retry semantics — Trigger.dev's own task-level retry
+// (see the task() options above) still applies exactly as before, since
+// this rethrows — it just guarantees SOME diagnosable event lands in our
+// own database on any failure here, not only the one specific call site
+// that happened to have a catch block already.
+async function runExecuteBuild(db:any,payload:{deploymentId:string}){
+ try{
   const existing=await db.query(`SELECT provider,provider_deployment_id,provider_deployment_url,source_commit_sha,status FROM deployment_builds WHERE deployment_id=$1`,[payload.deploymentId]);
   if(existing.rowCount===1){const build=existing.rows[0];return{result:"NODE_04_10_REPLAY_NOOP",deploymentId:payload.deploymentId,provider:build.provider,providerDeploymentId:build.provider_deployment_id,providerDeploymentUrl:build.provider_deployment_url,sourceCommitSha:build.source_commit_sha,buildStatus:build.status}}
   const result=await db.query(`SELECT d.id,d.workspace_id,d.app_id,d.status,d.runtime_project_id,a.slug,a.framework,rt.provider,rt.provider_project_id,rt.provider_project_name,bi.repository_full_name,bi.commit_sha,bi.root_directory,bi.install_command,bi.build_command,bi.manifest_sha256,bi.manifest->>'framework' AS build_input_framework FROM deployments d JOIN apps a ON a.id=d.app_id JOIN app_runtimes rt ON rt.app_id=d.app_id JOIN deployment_build_inputs bi ON bi.deployment_id=d.id WHERE d.id=$1`,[payload.deploymentId]);
@@ -246,7 +303,8 @@ export const executeBuild=task({id:"ssc-control-plane-execute-build",retry:{maxA
   if(!claim.claimed){
     return{result:"NODE_15R_4_BUILD_CREATE_ALREADY_CLAIMED",deploymentId:payload.deploymentId,status:"BUILDING",providerProjectId:deployment.provider_project_id,sourceCommitSha:deployment.commit_sha,createdNewDeployment:false,operationStatus:claim.operation.status};
   }
-  const body:any={name:deployment.provider_project_name,project:deployment.provider_project_id,target:"production",gitSource:{type:"github",org,repo,ref:deployment.commit_sha},meta:sscDeploymentMeta({deploymentId:payload.deploymentId,sourceCommitSha:deployment.commit_sha,manifestSha256:deployment.manifest_sha256}),projectSettings:{framework:deployment.build_input_framework||deployment.framework||"nextjs",installCommand:deployment.install_command,buildCommand:deployment.build_command}};
+  const resolvedFramework=deployment.build_input_framework||deployment.framework||"nextjs";
+  const body:any={name:deployment.provider_project_name,project:deployment.provider_project_id,target:"production",gitSource:{type:"github",org,repo,ref:deployment.commit_sha},meta:sscDeploymentMeta({deploymentId:payload.deploymentId,sourceCommitSha:deployment.commit_sha,manifestSha256:deployment.manifest_sha256}),projectSettings:{framework:toVercelFrameworkValue(resolvedFramework),installCommand:deployment.install_command,buildCommand:deployment.build_command}};
   // Retries transparently, silently, when the failure is classified as
   // retryableNow (currently just Vercel rate limiting) — so a rate-limit
   // blip that clears within a few seconds never becomes a customer-visible
@@ -258,5 +316,26 @@ export const executeBuild=task({id:"ssc-control-plane-execute-build",retry:{maxA
     return{result:"NODE_15R_4_BUILD_PROVIDER_RESULT_STALE",deploymentId:payload.deploymentId,provider:"vercel",providerProjectId:deployment.provider_project_id,...attached,sourceCommitSha:deployment.commit_sha,manifestSha256:deployment.manifest_sha256,target:"production",createdNewDeployment:true,providerResourceTraceable:true};
   }
   return{result:"NODE_04_10_BUILD_STARTED",deploymentId:payload.deploymentId,provider:"vercel",providerProjectId:deployment.provider_project_id,...attached,sourceCommitSha:deployment.commit_sha,manifestSha256:deployment.manifest_sha256,target:"production",createdNewDeployment:true};
- }finally{await db.end()}
-}});
+ }catch(error:any){
+  // Records SOME diagnosable trace of any failure this task hits before
+  // reaching its one specific, already-handled catch block above — not a
+  // replacement for that block's precise classification, just a floor so
+  // "the task failed and nothing shows why" can't happen again. Best-effort:
+  // if even this insert fails, the original error still propagates, since
+  // that's strictly more informative than a swallowed logging failure.
+  await db.query(`INSERT INTO deployment_events (deployment_id,from_status,to_status,event_type,message,metadata) VALUES ($1,'BUILDING','BUILDING','BUILD_EXECUTION_ERROR',$2,$3::jsonb)`,[payload.deploymentId,"Build execution hit an unexpected error.",JSON.stringify({errorMessage:String(error?.message??error),errorName:error?.name??null})]).catch(()=>{});
+  // Also releases any operation this run claimed (CREATE_REQUESTED) back
+  // to FAILED, so the next resume attempt can reclaim and retry it. Found
+  // needed the hard way: an unclassified error (classifyProviderError
+  // returns null for anything outside its specific known cases — a plain
+  // Vercel 400, for instance) skips the one specific catch block that
+  // normally does this reset, since it rethrows before reaching that
+  // block's own cleanup. Without this, ANY error outside that narrow
+  // known set leaves the operation permanently stuck exactly like the
+  // original timeout bug did, just via a different code path — an
+  // operator would need to manually reset it again for every new kind of
+  // unclassified failure, not just this one already-fixed instance.
+  await db.query(`UPDATE deployment_provider_operations SET status='FAILED',updated_at=now() WHERE deployment_id=$1 AND status='CREATE_REQUESTED' AND provider_resource_id IS NULL`,[payload.deploymentId]).catch(()=>{});
+  throw error;
+ }
+}

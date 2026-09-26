@@ -257,11 +257,23 @@ test("DealUp-style provider evidence satisfies the new identity flow", () => {
   assert.equal(publicHealth.publiclyReachable, true);
 });
 
-test("execute-build uses immutable build input framework before mutable app framework", () => {
+test("execute-build uses immutable build input framework before mutable app framework, and normalizes it for Vercel's own framework enum before sending it", () => {
   const source = fs.readFileSync(path.join(root, "trigger", "execute-build.ts"), "utf8");
 
   assert.match(source, /bi\.manifest->>'framework' AS build_input_framework/);
-  assert.match(source, /framework:deployment\.build_input_framework\|\|deployment\.framework\|\|"nextjs"/);
+  assert.match(source, /resolvedFramework=deployment\.build_input_framework\|\|deployment\.framework\|\|"nextjs"/);
+  // Utplava's own taxonomy is exactly "nextjs" or "nodejs" (see
+  // project-detection.mjs) — neither of those is necessarily Vercel's own
+  // projectSettings.framework enum value, and sending the wrong one is a
+  // real, confirmed-live bug (Vercel rejects "nodejs" with a 400; it wants
+  // "node"). This asserts the resolved value is never sent to Vercel
+  // un-normalized, and specifically that the one confirmed mismatch is
+  // actually mapped — not just that some function gets called.
+  assert.match(source, /framework:toVercelFrameworkValue\(resolvedFramework\)/);
+  assert.match(source, /function toVercelFrameworkValue/);
+  const mappingSection = source.slice(source.indexOf("function toVercelFrameworkValue"), source.indexOf("function toVercelFrameworkValue") + 300);
+  assert.match(mappingSection, /framework\s*===\s*"nodejs"/);
+  assert.match(mappingSection, /return\s*"node"/);
 });
 
 test("public access task verifies provider binding before anonymous reachability can mark LIVE", () => {
