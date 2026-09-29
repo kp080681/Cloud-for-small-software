@@ -88,6 +88,12 @@ async function vercelRequest(path: string, options: RequestInit = {}) {
 // wrapper above — this bug would have been invisible without it.
 function toVercelFrameworkValue(framework: string) {
   if (framework === "nodejs") return "node";
+  // "static" is Utplava's own taxonomy for a project with a build step
+  // but no server process (see project-detection.mjs). Vercel has no
+  // "static" enum value of its own — null is its documented convention
+  // for "Other / no specific framework, just serve the output", exactly
+  // matching a static site.
+  if (framework === "static") return null;
   return framework;
 }
 

@@ -46,3 +46,44 @@ test("rejects unsupported package without node build/start scripts", () => {
   assert.equal(result.supported, false);
   assert.equal(result.reason, "UNSUPPORTED_PROJECT");
 });
+
+test("classifies a package with only a build script (no start, no next) as a supported static site, not a Node.js server", () => {
+  // Regression guard for a real, confirmed-live bug: a real external
+  // repository ("math-game") had exactly this shape — a build script that
+  // was just `echo 'static site, nothing to build'`, no start script at
+  // all — and was previously classified as "nodejs", which Vercel's own
+  // API correctly rejected at deploy time with "No entrypoint found",
+  // since there was no server process to actually run.
+  const result = detectProject({
+    packageJson: {
+      name: "quick-math-game",
+      scripts: { build: "echo 'static site, nothing to build'" },
+    },
+    rootFiles: ["package.json", "index.html"],
+  });
+  assert.equal(result.supported, true);
+  assert.equal(result.framework, "static");
+  assert.equal(result.runtime, "static");
+});
+
+test("a real start script still correctly means a Node.js server app, build script or not", () => {
+  const result = detectProject({
+    packageJson: {
+      scripts: { build: "tsc", start: "node dist/server.js" },
+    },
+    rootFiles: ["package.json"],
+  });
+  assert.equal(result.supported, true);
+  assert.equal(result.framework, "nodejs");
+  assert.equal(result.runtime, "nodejs");
+});
+
+test("a start script alone, with no build script at all, is still correctly a Node.js server app", () => {
+  const result = detectProject({
+    packageJson: { scripts: { start: "node index.js" } },
+    rootFiles: ["package.json"],
+  });
+  assert.equal(result.supported, true);
+  assert.equal(result.framework, "nodejs");
+  assert.equal(result.runtime, "nodejs");
+});

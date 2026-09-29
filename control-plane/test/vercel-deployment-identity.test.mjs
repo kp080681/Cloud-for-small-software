@@ -276,6 +276,16 @@ test("execute-build uses immutable build input framework before mutable app fram
   assert.match(mappingSection, /return\s*"node"/);
 });
 
+test("execute-build also normalizes Utplava's own \"static\" framework value to Vercel's documented convention for it (null, meaning \"Other\" / no specific framework) — a static site has no Vercel enum value of its own to map to", () => {
+  const source = fs.readFileSync(path.join(root, "trigger", "execute-build.ts"), "utf8");
+  const start = source.indexOf("function toVercelFrameworkValue");
+  const end = source.indexOf("function classifyProviderError");
+  const mappingFunction = source.slice(start, end);
+
+  assert.match(mappingFunction, /framework\s*===\s*"static"/);
+  assert.match(mappingFunction, /return\s*null/);
+});
+
 test("execute-build falls back to uploading files directly only for the one specific, well-understood error Vercel returns when its own account-level GitHub connection can't see a repository — confirmed live for a real external repository (Alistair's math-game) before ever being wired into a real deployment attempt", () => {
   const source = fs.readFileSync(path.join(root, "trigger", "execute-build.ts"), "utf8");
 
