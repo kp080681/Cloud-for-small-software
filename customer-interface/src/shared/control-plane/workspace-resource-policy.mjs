@@ -3,11 +3,12 @@ export const DEFAULT_WORKSPACE_RESOURCE_POLICY = Object.freeze({
 });
 
 export class WorkspaceResourcePolicyError extends Error {
-  constructor(code, message, details = {}) {
+  constructor(code, message, details = {}, status = undefined) {
     super(message);
     this.name = "WorkspaceResourcePolicyError";
     this.code = code;
     this.details = details;
+    this.status = status;
   }
 }
 
@@ -100,9 +101,16 @@ function limitDecision({ code, allowed, observed, limit, message }) {
   return allowed ? { allowed: true } : { allowed: false, code, observed, limit, message };
 }
 
+// A limit-reached block is a caller-resolvable conflict with current
+// workspace state (409), not a server fault: the status lets HTTP/MCP
+// surfaces pass the safe message through instead of a generic 500.
+// WORKSPACE_POLICY_INVALID is deliberately left without a status — an
+// invalid stored policy is a server-side misconfiguration.
 function policyError(decision) {
-  return new WorkspaceResourcePolicyError(decision.code, decision.message, {
-    observed: decision.observed,
-    limit: decision.limit,
-  });
+  return new WorkspaceResourcePolicyError(
+    decision.code,
+    decision.message,
+    { observed: decision.observed, limit: decision.limit },
+    409,
+  );
 }

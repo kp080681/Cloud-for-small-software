@@ -8,6 +8,7 @@ import {
   WorkspaceResourcePolicyError,
   activeAppLimitDecision,
   activeDeploymentLimitDecision,
+  enforceActiveAppLimit,
   ensureBuildOperationWithinWorkspaceLimit,
   providerOperationLimitDecision,
   validateWorkspaceResourcePolicy,
@@ -277,4 +278,26 @@ test("workspace resource policy migration has no billing tiers and the managed d
   assert.match(migration, /max_concurrent_provider_operations integer NOT NULL DEFAULT 2/);
   assert.match(databaseMigration, /max_managed_databases integer NOT NULL DEFAULT 3/);
   assert.doesNotMatch(migration + databaseMigration, /policy_tier|tier|price|billing|max_database_storage/i);
+});
+
+test("limit-reached policy errors carry a 409 status so HTTP/MCP surfaces show the safe message; invalid-policy errors do not", async () => {
+  const db = {
+    async query(sql) {
+      if (/FROM workspaces/.test(sql)) return { rowCount: 1, rows: [{ id: "ws" }] };
+      if (/FROM workspace_resource_policies/.test(sql)) return { rowCount: 1, rows: [{ max_active_apps: 3 }] };
+      if (/FROM apps/.test(sql)) return { rowCount: 1, rows: [{ count: 3 }] };
+      return { rowCount: 0, rows: [] };
+    },
+  };
+  await assert.rejects(
+    () => enforceActiveAppLimit(db, { workspaceId: "ws" }),
+    (error) => error instanceof WorkspaceResourcePolicyError
+      && error.code === "WORKSPACE_APP_LIMIT_REACHED"
+      && error.status === 409
+      && error.message === "Workspace active app limit reached: 3/3.",
+  );
+  assert.throws(
+    () => validateWorkspaceResourcePolicy({ maxActiveApps: -1 }),
+    (error) => error.code === "WORKSPACE_POLICY_INVALID" && error.status === undefined,
+  );
 });
