@@ -269,7 +269,8 @@ test("execute-build uses immutable build input framework before mutable app fram
   // "node"). This asserts the resolved value is never sent to Vercel
   // un-normalized, and specifically that the one confirmed mismatch is
   // actually mapped — not just that some function gets called.
-  assert.match(source, /framework:toVercelFrameworkValue\(resolvedFramework\)/);
+  assert.match(source, /vercelFramework=toVercelFrameworkValue\(resolvedFramework\)/);
+  assert.match(source, /framework:vercelFramework/);
   assert.match(source, /function toVercelFrameworkValue/);
   const mappingSection = source.slice(source.indexOf("function toVercelFrameworkValue"), source.indexOf("function toVercelFrameworkValue") + 300);
   assert.match(mappingSection, /framework\s*===\s*"nodejs"/);
@@ -284,6 +285,27 @@ test("execute-build also normalizes Utplava's own \"static\" framework value to 
 
   assert.match(mappingFunction, /framework\s*===\s*"static"/);
   assert.match(mappingFunction, /return\s*null/);
+});
+
+test("execute-build explicitly syncs the Vercel project's own persisted Framework Preset before creating a deployment, not just the per-deployment projectSettings.framework", () => {
+  // Confirmed live: a Vercel project's own Framework Preset, once set by
+  // an earlier successful deployment, does NOT get reset by a later
+  // deployment sending framework: null — it appears to mean "leave the
+  // existing preset alone", not "clear it to Other". A static site kept
+  // failing with Vercel trying to auto-detect Next.js specifically
+  // because of exactly this: an earlier attempt (before this fix existed)
+  // had already set this project's preset to Next.js. This must be
+  // patched directly, not just sent per-deployment.
+  const source = fs.readFileSync(path.join(root, "trigger", "execute-build.ts"), "utf8");
+
+  assert.match(source, /updateVercelProject\(deployment\.provider_project_id,\{framework:vercelFramework\}\)/);
+
+  // Best-effort: a failure syncing the project's own setting must never
+  // block the deployment attempt itself, since the per-deployment value
+  // still applies correctly for any non-null framework regardless.
+  const syncSection = source.slice(source.indexOf("A Vercel PROJECT (not just a deployment)"), source.indexOf("A Vercel PROJECT (not just a deployment)") + 1200);
+  assert.match(syncSection, /try\{/);
+  assert.match(syncSection, /\}catch\{/);
 });
 
 test("execute-build falls back to uploading files directly only for the one specific, well-understood error Vercel returns when its own account-level GitHub connection can't see a repository — confirmed live for a real external repository (Alistair's math-game) before ever being wired into a real deployment attempt", () => {

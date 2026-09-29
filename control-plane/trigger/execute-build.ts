@@ -383,7 +383,28 @@ async function runExecuteBuild(db:any,payload:{deploymentId:string}){
     return{result:"NODE_15R_4_BUILD_CREATE_ALREADY_CLAIMED",deploymentId:payload.deploymentId,status:"BUILDING",providerProjectId:deployment.provider_project_id,sourceCommitSha:deployment.commit_sha,createdNewDeployment:false,operationStatus:claim.operation.status};
   }
   const resolvedFramework=deployment.build_input_framework||deployment.framework||"nextjs";
-  const gitSourceBody:any={name:deployment.provider_project_name,project:deployment.provider_project_id,target:"production",gitSource:{type:"github",org,repo,ref:deployment.commit_sha},meta:sscDeploymentMeta({deploymentId:payload.deploymentId,sourceCommitSha:deployment.commit_sha,manifestSha256:deployment.manifest_sha256}),projectSettings:{framework:toVercelFrameworkValue(resolvedFramework),installCommand:deployment.install_command,buildCommand:deployment.build_command}};
+  const vercelFramework=toVercelFrameworkValue(resolvedFramework);
+  const gitSourceBody:any={name:deployment.provider_project_name,project:deployment.provider_project_id,target:"production",gitSource:{type:"github",org,repo,ref:deployment.commit_sha},meta:sscDeploymentMeta({deploymentId:payload.deploymentId,sourceCommitSha:deployment.commit_sha,manifestSha256:deployment.manifest_sha256}),projectSettings:{framework:vercelFramework,installCommand:deployment.install_command,buildCommand:deployment.build_command}};
+
+  // A Vercel PROJECT (not just a deployment) has its own persisted
+  // Framework Preset, set the first time any deployment for it succeeds
+  // in being created. A non-null framework on a later deployment request
+  // correctly overrides that preset — but null does NOT reset an
+  // already-set preset back to "Other"; it appears to mean "leave the
+  // project's existing setting alone". Confirmed live: a static site
+  // (framework -> null) kept failing with a real, different error —
+  // Vercel trying to auto-detect Next.js — because this exact project's
+  // preset had been set to Next.js by an earlier attempt, before this
+  // static-site fix existed. Explicitly patching the project's own
+  // setting closes that gap; best-effort, since the per-deployment value
+  // above still applies correctly for any non-null framework regardless.
+  try{
+    await withTransientRetry(()=>updateVercelProject(deployment.provider_project_id,{framework:vercelFramework}),{maxAttempts:3,baseDelayMs:1000,maxDelayMs:8000,isRetryable:(error:any)=>classifyProviderError(error)?.retryableNow===true});
+  }catch{
+    // Best-effort: the per-deployment projectSettings.framework above
+    // still takes effect for any non-null value even if this sync fails,
+    // so a failure here should never block the deployment attempt itself.
+  }
 
   // Records the same classified-failure trail (deployments.error_code,
   // the operation marked FAILED, a BUILD_PROVIDER_BLOCKED event) that used
