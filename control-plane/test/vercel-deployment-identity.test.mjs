@@ -276,6 +276,37 @@ test("execute-build uses immutable build input framework before mutable app fram
   assert.match(mappingSection, /return\s*"node"/);
 });
 
+test("execute-build falls back to uploading files directly only for the one specific, well-understood error Vercel returns when its own account-level GitHub connection can't see a repository — confirmed live for a real external repository (Alistair's math-game) before ever being wired into a real deployment attempt", () => {
+  const source = fs.readFileSync(path.join(root, "trigger", "execute-build.ts"), "utf8");
+
+  // The fallback must check the exact, specific error code — not a bare
+  // catch-and-retry-with-anything-else, which would silently mask
+  // genuinely different failures (a real framework mismatch, an auth
+  // problem, a rate limit) as if they were the "can't see this repo" case.
+  assert.match(source, /safeBody\?\.error\?\.code\s*===\s*"incorrect_git_source_info"/);
+
+  // The file-upload attempt must genuinely be an alternative to gitSource,
+  // not an addition to it — Vercel's API rejects a body containing both.
+  const fallbackSection = source.slice(source.indexOf("isGitSourceUnreachable"));
+  assert.match(fallbackSection, /files,/);
+  assert.doesNotMatch(fallbackSection.split("fileUploadBody")[1]?.split("};")[0] ?? "", /gitSource:/);
+
+  // Any error that ISN'T this specific case must still go through the
+  // exact same classification path as before — the fallback must never
+  // become a silent catch-all for unrelated failures.
+  assert.match(source, /if\(!isGitSourceUnreachable\)\{[\s\S]{0,120}classifyProviderError\(error\)/);
+});
+
+test("uploadFileToVercel and buildFilesArrayFromRepository never proceed with missing credentials, and every network call has a real timeout — the same lesson item this session's own timeout bug taught for the primary create-deployment call, applied consistently to the new fallback path", () => {
+  const source = fs.readFileSync(path.join(root, "trigger", "execute-build.ts"), "utf8");
+
+  assert.match(source, /Missing VERCEL_TOKEN/);
+  assert.match(source, /GITHUB_APP_ID.*GITHUB_APP_PRIVATE_KEY|GITHUB_APP_PRIVATE_KEY.*GITHUB_APP_ID/);
+  assert.match(source, /VERCEL_FILE_UPLOAD_TIMEOUT_MS/);
+  const uploadFnSection = source.slice(source.indexOf("async function uploadFileToVercel"), source.indexOf("async function buildFilesArrayFromRepository"));
+  assert.match(uploadFnSection, /new AbortController\(\)/);
+});
+
 test("public access task verifies provider binding before anonymous reachability can mark LIVE", () => {
   const source = fs.readFileSync(path.join(root, "trigger", "configure-public-access.ts"), "utf8");
   const aliasLookup = source.indexOf("/v4/aliases/");

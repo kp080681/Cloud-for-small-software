@@ -1,3 +1,6 @@
+import { createHash } from "node:crypto";
+import { createAppAuth } from "@octokit/auth-app";
+import { Octokit } from "@octokit/rest";
 import { task } from "@trigger.dev/sdk";
 import pg from "pg";
 import {
@@ -8,6 +11,7 @@ import {
   sscDeploymentMeta,
 } from "../src/vercel-deployment-recovery.mjs";
 import { withTransientRetry } from "../src/transient-retry.mjs";
+import { selectFilesUnderRoot } from "../src/repository-file-selection.mjs";
 import {
   assertProviderProjectNotOwnedByAnotherApp,
   assertRemoteProjectMatchesSscApp,
@@ -85,6 +89,75 @@ async function vercelRequest(path: string, options: RequestInit = {}) {
 function toVercelFrameworkValue(framework: string) {
   if (framework === "nodejs") return "node";
   return framework;
+}
+
+// File-upload fallback: only reached when Vercel's gitSource-based create
+// fails with incorrect_git_source_info specifically — meaning Vercel's own
+// account-level GitHub connection (tied to whichever account owns
+// VERCEL_TOKEN) can't see this repository, which is expected for any
+// repository that isn't that account's own. Utplava's own GitHub App
+// installation can still read it — the same one this task's earlier
+// analysis/build-input steps already used successfully to get this far.
+// Confirmed live end-to-end against a real external repository before
+// this was ever wired into a real deployment attempt: fetch the file tree
+// (git_tree_sha was already computed and stored by prepare-build-input.ts,
+// so no extra commit lookup is needed here), upload each file to Vercel's
+// plain file-upload endpoint (the same mechanism `vercel deploy` itself
+// uses for every ordinary developer — no gitAccessToken, no special
+// account capability), then create the deployment with `files` instead of
+// `gitSource`. Only ever attempted for this one specific, well-understood
+// failure; any other error still goes through classifyProviderError
+// completely unchanged.
+const VERCEL_FILE_UPLOAD_TIMEOUT_MS = 25_000;
+
+async function uploadFileToVercel(content: Buffer, sha: string) {
+  const token = process.env.VERCEL_TOKEN;
+  if (!token) throw new Error("Missing VERCEL_TOKEN");
+  const controller = new AbortController();
+  const timeoutHandle = setTimeout(() => controller.abort(), VERCEL_FILE_UPLOAD_TIMEOUT_MS);
+  let response: Response;
+  try {
+    response = await fetch(`${API}/v2/files`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/octet-stream", "x-vercel-digest": sha },
+      body: content,
+      signal: controller.signal,
+    });
+  } catch (error: any) {
+    if (error?.name === "AbortError") { const timeoutError: any = new Error(`Vercel file upload timed out after ${VERCEL_FILE_UPLOAD_TIMEOUT_MS}ms`); timeoutError.isTimeout = true; throw timeoutError; }
+    throw error;
+  } finally {
+    clearTimeout(timeoutHandle);
+  }
+  if (!response.ok) {
+    const text = await response.text();
+    const error: any = new Error(`Vercel file upload ${response.status}: ${text}`);
+    error.status = response.status;
+    throw error;
+  }
+}
+
+async function buildFilesArrayFromRepository(deployment: any): Promise<Array<{ file: string; sha: string; size: number }>> {
+  for (const name of ["GITHUB_APP_ID", "GITHUB_APP_PRIVATE_KEY"]) {
+    if (!process.env[name]) throw new Error(`Missing ${name}`);
+  }
+  const [owner, repo] = String(deployment.repository_full_name).split("/");
+  const auth = createAppAuth({ appId: process.env.GITHUB_APP_ID!, privateKey: process.env.GITHUB_APP_PRIVATE_KEY!.replace(/\\n/g, "\n") });
+  const installationAuth = await auth({ type: "installation", installationId: Number(deployment.github_installation_id) });
+  const octokit = new Octokit({ auth: installationAuth.token });
+
+  const tree = await octokit.git.getTree({ owner, repo, tree_sha: deployment.git_tree_sha, recursive: "true" });
+  const blobs = selectFilesUnderRoot(tree.data.tree as any[], deployment.root_directory || ".");
+
+  const files: Array<{ file: string; sha: string; size: number }> = [];
+  for (const entry of blobs) {
+    const blob = await octokit.git.getBlob({ owner, repo, file_sha: entry.sha });
+    const content = Buffer.from(blob.data.content, blob.data.encoding as BufferEncoding);
+    const sha = createHash("sha1").update(content).digest("hex");
+    await uploadFileToVercel(content, sha);
+    files.push({ file: entry.path, sha, size: content.length });
+  }
+  return files;
 }
 
 function classifyProviderError(error: any) {
@@ -265,7 +338,7 @@ async function runExecuteBuild(db:any,payload:{deploymentId:string}){
  try{
   const existing=await db.query(`SELECT provider,provider_deployment_id,provider_deployment_url,source_commit_sha,status FROM deployment_builds WHERE deployment_id=$1`,[payload.deploymentId]);
   if(existing.rowCount===1){const build=existing.rows[0];return{result:"NODE_04_10_REPLAY_NOOP",deploymentId:payload.deploymentId,provider:build.provider,providerDeploymentId:build.provider_deployment_id,providerDeploymentUrl:build.provider_deployment_url,sourceCommitSha:build.source_commit_sha,buildStatus:build.status}}
-  const result=await db.query(`SELECT d.id,d.workspace_id,d.app_id,d.status,d.runtime_project_id,a.slug,a.framework,rt.provider,rt.provider_project_id,rt.provider_project_name,bi.repository_full_name,bi.commit_sha,bi.root_directory,bi.install_command,bi.build_command,bi.manifest_sha256,bi.manifest->>'framework' AS build_input_framework FROM deployments d JOIN apps a ON a.id=d.app_id JOIN app_runtimes rt ON rt.app_id=d.app_id JOIN deployment_build_inputs bi ON bi.deployment_id=d.id WHERE d.id=$1`,[payload.deploymentId]);
+  const result=await db.query(`SELECT d.id,d.workspace_id,d.app_id,d.status,d.runtime_project_id,a.slug,a.framework,rt.provider,rt.provider_project_id,rt.provider_project_name,bi.repository_full_name,bi.commit_sha,bi.root_directory,bi.install_command,bi.build_command,bi.manifest_sha256,bi.manifest->>'framework' AS build_input_framework,bi.git_tree_sha,gi.github_installation_id FROM deployments d JOIN apps a ON a.id=d.app_id JOIN app_runtimes rt ON rt.app_id=d.app_id JOIN deployment_build_inputs bi ON bi.deployment_id=d.id JOIN github_repositories gr ON gr.id=a.repository_id JOIN github_installations gi ON gi.id=gr.github_installation_id WHERE d.id=$1`,[payload.deploymentId]);
   if(result.rowCount===0)throw new Error(`Build prerequisites not found: ${payload.deploymentId}`);const deployment=result.rows[0];
   if(deployment.status!=="BUILDING")throw new Error(`Build can only execute from BUILDING; current status is ${deployment.status}`);if(deployment.provider!=="vercel")throw new Error(`Unsupported build provider: ${deployment.provider}`);if(deployment.runtime_project_id!==deployment.provider_project_id)throw new Error("Runtime project binding mismatch");
   assertRuntimeMatchesDeployment({workspace_id:deployment.workspace_id,app_id:deployment.app_id,provider_project_id:deployment.provider_project_id},deployment);
@@ -304,13 +377,51 @@ async function runExecuteBuild(db:any,payload:{deploymentId:string}){
     return{result:"NODE_15R_4_BUILD_CREATE_ALREADY_CLAIMED",deploymentId:payload.deploymentId,status:"BUILDING",providerProjectId:deployment.provider_project_id,sourceCommitSha:deployment.commit_sha,createdNewDeployment:false,operationStatus:claim.operation.status};
   }
   const resolvedFramework=deployment.build_input_framework||deployment.framework||"nextjs";
-  const body:any={name:deployment.provider_project_name,project:deployment.provider_project_id,target:"production",gitSource:{type:"github",org,repo,ref:deployment.commit_sha},meta:sscDeploymentMeta({deploymentId:payload.deploymentId,sourceCommitSha:deployment.commit_sha,manifestSha256:deployment.manifest_sha256}),projectSettings:{framework:toVercelFrameworkValue(resolvedFramework),installCommand:deployment.install_command,buildCommand:deployment.build_command}};
+  const gitSourceBody:any={name:deployment.provider_project_name,project:deployment.provider_project_id,target:"production",gitSource:{type:"github",org,repo,ref:deployment.commit_sha},meta:sscDeploymentMeta({deploymentId:payload.deploymentId,sourceCommitSha:deployment.commit_sha,manifestSha256:deployment.manifest_sha256}),projectSettings:{framework:toVercelFrameworkValue(resolvedFramework),installCommand:deployment.install_command,buildCommand:deployment.build_command}};
+
+  // Records the same classified-failure trail (deployments.error_code,
+  // the operation marked FAILED, a BUILD_PROVIDER_BLOCKED event) that used
+  // to live inline in the single catch block below — now shared so the
+  // file-upload fallback's own failure path (see isRetryable below) can
+  // report exactly as informatively as the primary path always has,
+  // without duplicating this logic a second time.
+  async function recordClassifiedFailure(classifiedError:ReturnType<typeof classifyProviderError>){
+    await db.query(`UPDATE deployments SET error_code=$1,error_message=$2,updated_at=now() WHERE id=$3`,[classifiedError!.errorCode,classifiedError!.userMessage,payload.deploymentId]);
+    await db.query(`UPDATE deployment_provider_operations SET status='FAILED',updated_at=now(),metadata=metadata||$1::jsonb WHERE id=$2`,[JSON.stringify({classification:classifiedError!.classification,errorCode:classifiedError!.errorCode}),operation.id]);
+    await db.query(`INSERT INTO deployment_events (deployment_id,from_status,to_status,event_type,message,metadata) VALUES ($1,'BUILDING','BUILDING','BUILD_PROVIDER_BLOCKED',$2,$3::jsonb)`,[payload.deploymentId,classifiedError!.userMessage,JSON.stringify({provider:"vercel",classification:classifiedError!.classification,errorCode:classifiedError!.errorCode,retryableNow:classifiedError!.retryableNow,providerOperationId:operation.id})]);
+    return{result:`NODE_04_10_${classifiedError!.classification}`,deploymentId:payload.deploymentId,provider:"vercel",sourceCommitSha:deployment.commit_sha,deploymentStatus:deployment.status,errorCode:classifiedError!.errorCode,message:classifiedError!.userMessage,retryableNow:classifiedError!.retryableNow};
+  }
+
   // Retries transparently, silently, when the failure is classified as
   // retryableNow (currently just Vercel rate limiting) — so a rate-limit
   // blip that clears within a few seconds never becomes a customer-visible
-  // failure at all. Any non-retryable or still-failing-after-retries error
-  // falls through to the exact same catch block as before, unchanged.
-  let created:any;try{created=await withTransientRetry(()=>vercelRequest(`/v13/deployments${teamQuery()}`,{method:"POST",body:JSON.stringify(body)}),{maxAttempts:3,baseDelayMs:1000,maxDelayMs:8000,isRetryable:(error:any)=>classifyProviderError(error)?.retryableNow===true})}catch(error:any){const classifiedError=classifyProviderError(error);if(!classifiedError)throw error;await db.query(`UPDATE deployments SET error_code=$1,error_message=$2,updated_at=now() WHERE id=$3`,[classifiedError.errorCode,classifiedError.userMessage,payload.deploymentId]);await db.query(`UPDATE deployment_provider_operations SET status='FAILED',updated_at=now(),metadata=metadata||$1::jsonb WHERE id=$2`,[JSON.stringify({classification:classifiedError.classification,errorCode:classifiedError.errorCode}),operation.id]);await db.query(`INSERT INTO deployment_events (deployment_id,from_status,to_status,event_type,message,metadata) VALUES ($1,'BUILDING','BUILDING','BUILD_PROVIDER_BLOCKED',$2,$3::jsonb)`,[payload.deploymentId,classifiedError.userMessage,JSON.stringify({provider:"vercel",classification:classifiedError.classification,errorCode:classifiedError.errorCode,retryableNow:classifiedError.retryableNow,providerOperationId:operation.id})]);return{result:`NODE_04_10_${classifiedError.classification}`,deploymentId:payload.deploymentId,provider:"vercel",sourceCommitSha:deployment.commit_sha,deploymentStatus:deployment.status,errorCode:classifiedError.errorCode,message:classifiedError.userMessage,retryableNow:classifiedError.retryableNow}}
+  // failure at all.
+  let created:any;
+  try{
+    created=await withTransientRetry(()=>vercelRequest(`/v13/deployments${teamQuery()}`,{method:"POST",body:JSON.stringify(gitSourceBody)}),{maxAttempts:3,baseDelayMs:1000,maxDelayMs:8000,isRetryable:(error:any)=>classifyProviderError(error)?.retryableNow===true});
+  }catch(error:any){
+    const isGitSourceUnreachable=error?.safeBody?.error?.code==="incorrect_git_source_info";
+    if(!isGitSourceUnreachable){
+      const classifiedError=classifyProviderError(error);
+      if(!classifiedError)throw error;
+      return await recordClassifiedFailure(classifiedError);
+    }
+    // Vercel's own account-level GitHub connection can't see this
+    // repository — expected for any repository that isn't the connected
+    // account's own. Fall back to fetching the source via Utplava's own
+    // GitHub App (already used successfully by this exact deployment's
+    // earlier analysis/build-input steps) and uploading it directly,
+    // instead of referencing it by git commit.
+    try{
+      const files=await buildFilesArrayFromRepository(deployment);
+      const fileUploadBody:any={name:gitSourceBody.name,project:gitSourceBody.project,target:gitSourceBody.target,files,meta:gitSourceBody.meta,projectSettings:gitSourceBody.projectSettings};
+      created=await withTransientRetry(()=>vercelRequest(`/v13/deployments${teamQuery()}`,{method:"POST",body:JSON.stringify(fileUploadBody)}),{maxAttempts:3,baseDelayMs:1000,maxDelayMs:8000,isRetryable:(error:any)=>classifyProviderError(error)?.retryableNow===true});
+    }catch(fallbackError:any){
+      const classifiedError=classifyProviderError(fallbackError);
+      if(!classifiedError)throw fallbackError;
+      return await recordClassifiedFailure(classifiedError);
+    }
+  }
   const attached=await attachProviderDeployment(db,deployment,created,operation.id,"BUILD_STARTED");
   if(attached.stale){
     return{result:"NODE_15R_4_BUILD_PROVIDER_RESULT_STALE",deploymentId:payload.deploymentId,provider:"vercel",providerProjectId:deployment.provider_project_id,...attached,sourceCommitSha:deployment.commit_sha,manifestSha256:deployment.manifest_sha256,target:"production",createdNewDeployment:true,providerResourceTraceable:true};
