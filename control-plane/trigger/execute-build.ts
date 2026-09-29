@@ -384,7 +384,16 @@ async function runExecuteBuild(db:any,payload:{deploymentId:string}){
   }
   const resolvedFramework=deployment.build_input_framework||deployment.framework||"nextjs";
   const vercelFramework=toVercelFrameworkValue(resolvedFramework);
-  const gitSourceBody:any={name:deployment.provider_project_name,project:deployment.provider_project_id,target:"production",gitSource:{type:"github",org,repo,ref:deployment.commit_sha},meta:sscDeploymentMeta({deploymentId:payload.deploymentId,sourceCommitSha:deployment.commit_sha,manifestSha256:deployment.manifest_sha256}),projectSettings:{framework:vercelFramework,installCommand:deployment.install_command,buildCommand:deployment.build_command}};
+  // A static site's output is its own source root, not a "public"
+  // subfolder — Vercel's normal fallback to "." when no "public" exists
+  // doesn't reliably apply once any real build command runs (a
+  // documented Vercel behavior, confirmed live here too: a build step
+  // that's just an echo statement was enough to disable the fallback,
+  // producing "No Output Directory named 'public' found"). Only set for
+  // "static" specifically — every other framework's own convention
+  // (Next.js's .next, etc.) must be left alone.
+  const outputDirectory=resolvedFramework==="static"?".":undefined;
+  const gitSourceBody:any={name:deployment.provider_project_name,project:deployment.provider_project_id,target:"production",gitSource:{type:"github",org,repo,ref:deployment.commit_sha},meta:sscDeploymentMeta({deploymentId:payload.deploymentId,sourceCommitSha:deployment.commit_sha,manifestSha256:deployment.manifest_sha256}),projectSettings:{framework:vercelFramework,installCommand:deployment.install_command,buildCommand:deployment.build_command,outputDirectory}};
 
   // A Vercel PROJECT (not just a deployment) has its own persisted
   // Framework Preset, set the first time any deployment for it succeeds
@@ -399,7 +408,7 @@ async function runExecuteBuild(db:any,payload:{deploymentId:string}){
   // setting closes that gap; best-effort, since the per-deployment value
   // above still applies correctly for any non-null framework regardless.
   try{
-    await withTransientRetry(()=>updateVercelProject(deployment.provider_project_id,{framework:vercelFramework}),{maxAttempts:3,baseDelayMs:1000,maxDelayMs:8000,isRetryable:(error:any)=>classifyProviderError(error)?.retryableNow===true});
+    await withTransientRetry(()=>updateVercelProject(deployment.provider_project_id,{framework:vercelFramework,outputDirectory:outputDirectory??null}),{maxAttempts:3,baseDelayMs:1000,maxDelayMs:8000,isRetryable:(error:any)=>classifyProviderError(error)?.retryableNow===true});
   }catch{
     // Best-effort: the per-deployment projectSettings.framework above
     // still takes effect for any non-null value even if this sync fails,

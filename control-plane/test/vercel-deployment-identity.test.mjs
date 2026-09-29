@@ -298,7 +298,7 @@ test("execute-build explicitly syncs the Vercel project's own persisted Framewor
   // patched directly, not just sent per-deployment.
   const source = fs.readFileSync(path.join(root, "trigger", "execute-build.ts"), "utf8");
 
-  assert.match(source, /updateVercelProject\(deployment\.provider_project_id,\{framework:vercelFramework\}\)/);
+  assert.match(source, /updateVercelProject\(deployment\.provider_project_id,\{framework:vercelFramework,outputDirectory:outputDirectory\?\?null\}\)/);
 
   // Best-effort: a failure syncing the project's own setting must never
   // block the deployment attempt itself, since the per-deployment value
@@ -306,6 +306,22 @@ test("execute-build explicitly syncs the Vercel project's own persisted Framewor
   const syncSection = source.slice(source.indexOf("A Vercel PROJECT (not just a deployment)"), source.indexOf("A Vercel PROJECT (not just a deployment)") + 1200);
   assert.match(syncSection, /try\{/);
   assert.match(syncSection, /\}catch\{/);
+});
+
+test("a static site's output directory is explicitly set to its own root, and this is scoped to static specifically, never applied to other frameworks' own conventions", () => {
+  // Confirmed live: even after the framework-preset fix, a static site
+  // still failed with "No Output Directory named 'public' found" —
+  // Vercel's normal fallback to "." when no "public" folder exists
+  // doesn't reliably apply once any real build command runs (a
+  // documented Vercel behavior), and math-game's build script, however
+  // trivial, was enough to trigger exactly that.
+  const source = fs.readFileSync(path.join(root, "trigger", "execute-build.ts"), "utf8");
+
+  assert.match(source, /outputDirectory=resolvedFramework===\s*"static"\s*\?\s*"\."\s*:\s*undefined/);
+  // Must be conditional on "static" specifically — an unconditional "."
+  // would break Next.js's own output directory convention (.next),
+  // which must be left alone.
+  assert.doesNotMatch(source, /outputDirectory\s*=\s*"\."\s*;/);
 });
 
 test("execute-build falls back to uploading files directly only for the one specific, well-understood error Vercel returns when its own account-level GitHub connection can't see a repository — confirmed live for a real external repository (Alistair's math-game) before ever being wired into a real deployment attempt", () => {
