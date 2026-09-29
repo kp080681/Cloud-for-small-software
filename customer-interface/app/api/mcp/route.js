@@ -53,6 +53,9 @@ async function verifyToken(_request, bearerToken) {
 // SQLSTATE (e.g. "22P02"), which the isSqlState check excludes
 // specifically; anything else uncategorized falls through to the fully
 // generic message.
+const GENERIC_TOOL_ERROR_MESSAGE =
+  "Something went wrong on Utplava's side. Try again shortly; if it keeps happening, check the dashboard.";
+
 function safeToolErrorMessage(error) {
   if (error instanceof RateLimitError) return "You're doing that a bit too fast — please wait a few minutes and try again.";
   const code = typeof error?.code === "string" ? error.code : null;
@@ -61,7 +64,29 @@ function safeToolErrorMessage(error) {
   if (code && !isSqlState && status >= 400 && status < 500 && typeof error?.message === "string") {
     return error.message;
   }
-  return "Something went wrong on Utplava's side. Try again shortly; if it keeps happening, check the dashboard.";
+  return GENERIC_TOOL_ERROR_MESSAGE;
+}
+
+// The generic message above hides the real error from the caller, so it
+// must be recorded server-side or it is lost entirely (deploy failures were
+// previously undiagnosable from Vercel logs). Logs only the error's own
+// fields — never tool arguments (set_env carries plaintext secret values)
+// and never Postgres `detail`/`where`, which can echo row values. Message
+// and stack are capped to keep one bad error from flooding the log.
+function logUnexpectedToolError(toolName, workspaceId, error) {
+  const cap = (value, max) => (typeof value === "string" ? value.slice(0, max) : undefined);
+  console.error(
+    "mcp_tool_unexpected_error",
+    JSON.stringify({
+      tool: toolName,
+      workspaceId,
+      name: cap(error?.name ?? error?.constructor?.name, 100),
+      code: typeof error?.code === "string" || typeof error?.code === "number" ? error.code : undefined,
+      status: Number.isFinite(Number(error?.status)) ? Number(error.status) : undefined,
+      message: cap(error?.message, 1000),
+      stack: cap(error?.stack, 4000),
+    }),
+  );
 }
 
 // Runs a tool handler with its own DB connection and identity resolved from
@@ -79,7 +104,7 @@ function safeToolErrorMessage(error) {
 // counted against the budget, not just real tool executions. Here, a limit
 // hit is reported as a normal, friendly tool-result error — an agent can
 // read it and back off — and only genuine tool calls consume the budget.
-async function runTool(ctx, fn) {
+async function runTool(toolName, ctx, fn) {
   const authInfo = ctx.http?.authInfo;
   const identity = authInfo?.extra;
   if (!identity?.customerId || !identity?.workspaceId) {
@@ -92,7 +117,9 @@ async function runTool(ctx, fn) {
     const output = await fn(db, identity);
     return { content: [{ type: "text", text: JSON.stringify(output) }], structuredContent: output };
   } catch (error) {
-    return { isError: true, content: [{ type: "text", text: safeToolErrorMessage(error) }] };
+    const message = safeToolErrorMessage(error);
+    if (message === GENERIC_TOOL_ERROR_MESSAGE) logUnexpectedToolError(toolName, identity.workspaceId, error);
+    return { isError: true, content: [{ type: "text", text: message }] };
   } finally {
     if (db) await db.end();
   }
@@ -114,7 +141,7 @@ const handler = createMcpHandler(
           branch: z.string().optional().describe("Omit to deploy the repository's default branch — branch overrides are not yet supported."),
         }),
       },
-      async ({ repo, branch }, ctx) => runTool(ctx, (db, identity) => deploy(db, { ...identity, repo, branch })),
+      async ({ repo, branch }, ctx) => runTool("deploy", ctx, (db, identity) => deploy(db, { ...identity, repo, branch })),
     );
 
     server.registerTool(
@@ -124,7 +151,7 @@ const handler = createMcpHandler(
         description: "Plain-language status of an app's most recent deployment. `status` is for branching logic; `stage` and `message` are what to show a person.",
         inputSchema: z.object({ appId: z.string().uuid() }),
       },
-      async ({ appId }, ctx) => runTool(ctx, (db, identity) => getStatus(db, { ...identity, appId })),
+      async ({ appId }, ctx) => runTool("get_status", ctx, (db, identity) => getStatus(db, { ...identity, appId })),
     );
 
     server.registerTool(
@@ -138,7 +165,7 @@ const handler = createMcpHandler(
           limit: z.number().int().min(1).max(50).optional().describe("Most recent entries to return. Defaults to 10."),
         }),
       },
-      async ({ appId, limit }, ctx) => runTool(ctx, (db, identity) => getLogs(db, { ...identity, appId, limit })),
+      async ({ appId, limit }, ctx) => runTool("get_logs", ctx, (db, identity) => getLogs(db, { ...identity, appId, limit })),
     );
 
     server.registerTool(
@@ -156,7 +183,7 @@ const handler = createMcpHandler(
           value: z.string().min(1),
         }),
       },
-      async ({ appId, key, value }, ctx) => runTool(ctx, (db, identity) => setEnv(db, { ...identity, appId, key, value })),
+      async ({ appId, key, value }, ctx) => runTool("set_env", ctx, (db, identity) => setEnv(db, { ...identity, appId, key, value })),
     );
 
     server.registerTool(
@@ -166,7 +193,7 @@ const handler = createMcpHandler(
         description: "Lists apps in the authenticated workspace. Scope comes entirely from the caller's token — there is no workspace parameter.",
         inputSchema: z.object({}),
       },
-      async (_args, ctx) => runTool(ctx, (db, identity) => listApps(db, identity)),
+      async (_args, ctx) => runTool("list_apps", ctx, (db, identity) => listApps(db, identity)),
     );
   },
   { serverInfo: { name: "utplava", version: "1.0.0" } },
