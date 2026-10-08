@@ -25,7 +25,31 @@ async function withDb<T>(fn: (db: pg.Client) => Promise<T>): Promise<T> {
 }
 function teamQuery() { const teamId=process.env.VERCEL_TEAM_ID; return teamId?`?teamId=${encodeURIComponent(teamId)}`:""; }
 function safeProviderErrorBody(body:any){ if(!body||typeof body!=="object")return body; const error=body.error&&typeof body.error==="object"?body.error:null; return {error:error?{code:error.code??null,message:error.message??null}:null,code:body.code??null,message:body.message??null}; }
-async function request(path:string,options:RequestInit={}){ const token=process.env.VERCEL_TOKEN; if(!token)throw new Error("Missing VERCEL_TOKEN"); const response=await fetch(`${API}${path}`,{...options,headers:{Authorization:`Bearer ${token}`,"Content-Type":"application/json",...(options.headers??{})}}); const text=await response.text(); let body:any=null; if(text){try{body=JSON.parse(text)}catch{body=text}} if(!response.ok){const safeBody=safeProviderErrorBody(body);const details=safeBody?`: ${JSON.stringify(safeBody)}`:"";const error:any=new Error(`Vercel API ${response.status} ${response.statusText}${details}`);error.status=response.status;throw error;} return body; }
+
+// 25s bound on every Vercel API call, matching the identical fix already
+// made to execute-build.ts's own vercelRequest. Found the same way: a real
+// deployment (puttur-skin-clinic-landing) got stuck at PROVISIONING
+// indefinitely with no error, and even a fresh orchestrator resume just
+// re-issued the same unprotected call and hung again — an unbounded fetch
+// never throws, so nothing could ever trigger Trigger.dev's own
+// task-level retry either.
+const VERCEL_REQUEST_TIMEOUT_MS = 25_000;
+
+async function request(path:string,options:RequestInit={}){
+ const token=process.env.VERCEL_TOKEN; if(!token)throw new Error("Missing VERCEL_TOKEN");
+ const controller=new AbortController();
+ const timeoutHandle=setTimeout(()=>controller.abort(),VERCEL_REQUEST_TIMEOUT_MS);
+ let response:Response;
+ try{
+  response=await fetch(`${API}${path}`,{...options,headers:{Authorization:`Bearer ${token}`,"Content-Type":"application/json",...(options.headers??{})},signal:controller.signal});
+ }catch(error:any){
+  if(error?.name==="AbortError"){const timeoutError:any=new Error(`Vercel API request timed out after ${VERCEL_REQUEST_TIMEOUT_MS}ms: ${path}`);timeoutError.isTimeout=true;throw timeoutError;}
+  throw error;
+ }finally{
+  clearTimeout(timeoutHandle);
+ }
+ const text=await response.text(); let body:any=null; if(text){try{body=JSON.parse(text)}catch{body=text}} if(!response.ok){const safeBody=safeProviderErrorBody(body);const details=safeBody?`: ${JSON.stringify(safeBody)}`:"";const error:any=new Error(`Vercel API ${response.status} ${response.statusText}${details}`);error.status=response.status;throw error;} return body;
+}
 async function getRuntime(name:string){try{return await request(`/v9/projects/${encodeURIComponent(name)}${teamQuery()}`)}catch(error:any){if(error.status===404)return null;throw error}}
 async function enforceRuntimeGitAutoDeployments(project:any){const result=await ensureGitAutoDeploymentsDisabled({project,projectId:project?.id,trustedVercelProjectResponse:true});if(!result.ok)throw new Error(`Vercel Git auto-deploy containment failed: ${result.result}`);return result}
 async function ensureRuntime({name,rootDirectory,workspaceId,appId,slug}:{name:string;repository:string;rootDirectory:string;workspaceId:string;appId:string;slug:string}){const existing=await getRuntime(name);const action=runtimeRecoveryAction({localRuntime:null,remoteProject:existing});if(action.action==="reconcile-remote-project"){assertRemoteProjectMatchesSscApp(existing,{workspaceId,appId,slug});const gitAutoDeploy=await enforceRuntimeGitAutoDeployments(existing);return{resource:existing,created:false,reconciled:true,gitAutoDeploy};}const normalizedRootDirectory=vercelRootDirectory(rootDirectory);try{const created=await request(`/v11/projects${teamQuery()}`,{method:"POST",body:JSON.stringify({name,framework:"nextjs",...(normalizedRootDirectory?{rootDirectory:normalizedRootDirectory}:{}),...sscManagedProjectGitSettings()})});assertRemoteProjectMatchesSscApp(created,{workspaceId,appId,slug});const gitAutoDeploy=await enforceRuntimeGitAutoDeployments(created);return{resource:created,created:true,reconciled:false,gitAutoDeploy}}catch(error:any){if([400,409].includes(error.status)){const reconciled=await getRuntime(name);if(reconciled){assertRemoteProjectMatchesSscApp(reconciled,{workspaceId,appId,slug});const gitAutoDeploy=await enforceRuntimeGitAutoDeployments(reconciled);return{resource:reconciled,created:false,reconciled:true,gitAutoDeploy}}}throw error}}
@@ -33,6 +57,22 @@ async function ensureRuntime({name,rootDirectory,workspaceId,appId,slug}:{name:s
 export const provisionRuntime=task({
  id:"ssc-control-plane-provision-runtime", retry:{maxAttempts:3,minTimeoutInMs:2000,maxTimeoutInMs:10000,factor:2,randomize:false},
  run:async(payload:{deploymentId:string})=>withDb(async(db)=>{
+  try{
+   return await runProvisionRuntime(db,payload);
+  }catch(error:any){
+   // Records SOME diagnosable trace of any failure this task hits —
+   // matching the identical gap found and fixed in execute-build.ts: a
+   // real deployment got stuck here with nothing in our own event log to
+   // show why, visible only on Trigger.dev's own dashboard as a failed
+   // task run. Best-effort: if even this insert fails, the original
+   // error still propagates.
+   await db.query(`INSERT INTO deployment_events (deployment_id,from_status,to_status,event_type,message,metadata) VALUES ($1,'PROVISIONING','PROVISIONING','RUNTIME_PROVISION_ERROR',$2,$3::jsonb)`,[payload.deploymentId,"Runtime provisioning hit an unexpected error.",JSON.stringify({errorMessage:String(error?.message??error),errorName:error?.name??null})]).catch(()=>{});
+   throw error;
+  }
+ })
+});
+
+async function runProvisionRuntime(db:pg.Client,payload:{deploymentId:string}){
   const result=await db.query(`SELECT d.id,d.workspace_id,d.app_id,d.status,a.slug,a.root_directory,r.full_name AS repository_full_name FROM deployments d JOIN apps a ON a.id=d.app_id JOIN github_repositories r ON r.id=a.repository_id WHERE d.id=$1`,[payload.deploymentId]);
   if(result.rowCount===0)throw new Error(`Deployment not found: ${payload.deploymentId}`);const deployment=result.rows[0];
   if(!["PROVISIONING","BUILDING"].includes(deployment.status))throw new Error(`Runtime cannot be provisioned from status ${deployment.status}`);
@@ -79,5 +119,4 @@ export const provisionRuntime=task({
    await db.query(`INSERT INTO deployment_events (deployment_id,from_status,to_status,event_type,message,metadata) VALUES ($1,'PROVISIONING','BUILDING','RUNTIME_PROVISIONED','Application runtime provisioned or reconciled',$2::jsonb)`,[payload.deploymentId,JSON.stringify({provider:"vercel",providerProjectId:project.id,providerProjectName:project.name??projectName,reconciliationKey,created:provisioned.created,reconciled:provisioned.reconciled,skipGitConnectDuringLink:true,gitAutoDeploy:provisioned.gitAutoDeploy})]);await db.query("COMMIT");
   }catch(error){await db.query("ROLLBACK");throw error}
   return{result:"NODE_04_8_RUNTIME_PROVISIONED",deploymentId:payload.deploymentId,status:"BUILDING",provider:"vercel",providerProjectId:project.id,providerProjectName:project.name??projectName,reconciliationKey,created:provisioned.created,reconciled:provisioned.reconciled,skipGitConnectDuringLink:true,gitAutoDeploy:provisioned.gitAutoDeploy};
- })
-});
+}
