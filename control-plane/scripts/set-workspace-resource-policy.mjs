@@ -20,7 +20,26 @@ function optionalIntegerEnv(name, fallback) {
 }
 
 if (!process.env.DATABASE_URL) throw new Error("Missing required environment variable: DATABASE_URL");
-const workspaceId = requireEnv("CONTROL_PLANE_WORKSPACE_ID");
+
+// CONTROL_PLANE_WORKSPACE_ID is optional: if there's exactly one workspace
+// (the common case for a single-operator alpha), auto-select it rather than
+// forcing the operator to go look up a UUID by hand. Any ambiguity (zero or
+// more than one workspace) still requires an explicit id, listed below.
+async function resolveWorkspaceId(db) {
+  const explicit = process.env.CONTROL_PLANE_WORKSPACE_ID?.trim();
+  if (explicit) return requireEnv("CONTROL_PLANE_WORKSPACE_ID");
+  const { rows } = await db.query(`SELECT id, name FROM workspaces ORDER BY created_at`);
+  if (rows.length === 1) {
+    console.log(JSON.stringify({ result: "WORKSPACE_AUTO_SELECTED", workspaceId: rows[0].id, workspaceName: rows[0].name }, null, 2));
+    return rows[0].id;
+  }
+  console.log(JSON.stringify({
+    result: "WORKSPACE_ID_REQUIRED",
+    reason: rows.length === 0 ? "No workspaces exist" : "Multiple workspaces exist; pass CONTROL_PLANE_WORKSPACE_ID explicitly",
+    workspaces: rows,
+  }, null, 2));
+  process.exit(1);
+}
 
 const policy = validateWorkspaceResourcePolicy({
   maxActiveApps: optionalIntegerEnv("CONTROL_PLANE_MAX_ACTIVE_APPS", DEFAULT_WORKSPACE_RESOURCE_POLICY.maxActiveApps),
@@ -34,6 +53,7 @@ const db = new Client({ connectionString: process.env.DATABASE_URL });
 await db.connect();
 
 try {
+  const workspaceId = await resolveWorkspaceId(db);
   await db.query("BEGIN");
   const workspace = await db.query(
     `SELECT id, name FROM workspaces WHERE id=$1 FOR UPDATE`,
