@@ -2,7 +2,17 @@
 
 import { useEffect, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
-import { friendlyErrorMessage, readinessLabel, redeployFailureMessage, redeploySuccessMessage, retrySuccessMessage, stageLabelForStatus } from "@/src/shared/deployment-ui-state.mjs";
+import {
+  deploymentStageIndex,
+  deploymentStageOrder,
+  deploymentStageTrackerLabel,
+  friendlyErrorMessage,
+  readinessLabel,
+  redeployFailureMessage,
+  redeploySuccessMessage,
+  retrySuccessMessage,
+  stageLabelForStatus,
+} from "@/src/shared/deployment-ui-state.mjs";
 
 export function GitHubPanel({ workspaceId, github }) {
   const router = useRouter();
@@ -254,10 +264,11 @@ export function GitHubPanel({ workspaceId, github }) {
 
                 {isAnalysing ? (
                   <div className="analysis-progress" role="status">
-                    <span>Analysing repository...</span>
-                    <span>Source identified</span>
-                    <span>Framework detected</span>
-                    <span>Requirements detected</span>
+                    <span className="pulse-dot" aria-hidden="true" />
+                    <div>
+                      <div>Analysing your repository</div>
+                      <small className="analysis-progress-detail">Checking the source, framework, and what it needs to run</small>
+                    </div>
                   </div>
                 ) : null}
 
@@ -456,9 +467,19 @@ function AnalysisResult({
           <strong>Deployment</strong>
           <small>{currentDeployment.stage}</small>
         </div>
+        {!failed ? <DeployTracker status={currentDeployment.status} /> : null}
+        {failed && currentDeployment.diagnostic ? (
+          <div className="deploy-failure">
+            <span className="deploy-failure-icon" aria-hidden="true">!</span>
+            <div>
+              <strong>{currentDeployment.diagnostic.title}</strong>
+              <small>{currentDeployment.diagnostic.action}</small>
+            </div>
+          </div>
+        ) : null}
         {currentDeployment.events?.length ? (
-          <div className="deployment-events">
-            {currentDeployment.events.slice(-5).map((event) => (
+          <div className="deployment-log">
+            {currentDeployment.events.slice(-2).map((event) => (
               <small key={event.id}>{event.title}</small>
             ))}
           </div>
@@ -468,9 +489,6 @@ function AnalysisResult({
             <small>Your app is live.</small>
             <a href={currentDeployment.liveUrl} target="_blank" rel="noreferrer">Open app</a>
           </div>
-        ) : null}
-        {failed && currentDeployment.diagnostic ? (
-          <small>{currentDeployment.diagnostic.title}: {currentDeployment.diagnostic.action}</small>
         ) : null}
         {failed && retryLimitReached ? (
           <small role="status">This deployment has been retried enough times without success. Review what went wrong before trying again.</small>
@@ -511,4 +529,35 @@ function AnalysisResult({
 
 function terminalDeploymentStatus(status) {
   return ["LIVE", "FAILED", "DELETED"].includes(status);
+}
+
+// Shows the deployment's real pipeline position as a step-by-step tracker.
+// Every marker reflects the deployment's actual current status — nothing
+// here is guessed or simulated, so a status outside the known pipeline
+// order (FAILED, DELETING, DELETED) renders nothing rather than a wrong
+// step. The caller is responsible for showing failure state separately.
+function DeployTracker({ status }) {
+  const order = deploymentStageOrder();
+  const currentIndex = deploymentStageIndex(status);
+  if (currentIndex === -1) return null;
+  const isLive = status === "LIVE";
+  return (
+    <div
+      className="deploy-tracker"
+      role="status"
+      aria-label={`Deployment progress: ${deploymentStageTrackerLabel(status)}`}
+    >
+      {order.map((stage, index) => {
+        const done = isLive || index < currentIndex;
+        const current = !isLive && index === currentIndex;
+        const state = done ? "done" : current ? "current" : "pending";
+        return (
+          <div className={`deploy-step ${state}`} key={stage}>
+            <span className="deploy-marker" aria-hidden="true">{done ? "✓" : ""}</span>
+            <span className="deploy-step-label">{deploymentStageTrackerLabel(stage)}</span>
+          </div>
+        );
+      })}
+    </div>
+  );
 }

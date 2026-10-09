@@ -58,6 +58,39 @@ export function stageLabelForStatus(status) {
   return labels[status] || "Not started yet";
 }
 
+// Canonical order of the deployment pipeline's real stages, used to render
+// step-by-step progress in the UI. FAILED, DELETING and DELETED are
+// terminal/branch states, not positions in this sequence — a caller checks
+// for those separately rather than looking them up here.
+const DEPLOYMENT_STAGE_ORDER = ["ANALYZING", "PROVISIONING", "BUILDING", "DEPLOYING", "HEALTH_CHECKING", "LIVE"];
+
+// Short label for a pipeline stage marker in a step tracker — distinct from
+// stageLabelForStatus's longer headline text, which doesn't fit under a
+// small step marker.
+const STAGE_TRACKER_LABELS = {
+  ANALYZING: "Analyzing",
+  PROVISIONING: "Setting up",
+  BUILDING: "Building",
+  DEPLOYING: "Deploying",
+  HEALTH_CHECKING: "Checking",
+  LIVE: "Live",
+};
+
+export function deploymentStageOrder() {
+  return DEPLOYMENT_STAGE_ORDER;
+}
+
+export function deploymentStageTrackerLabel(status) {
+  return STAGE_TRACKER_LABELS[status] || status;
+}
+
+// Index of a status within the pipeline order, or -1 if it isn't a pipeline
+// stage (FAILED, DELETING, DELETED) — the caller decides what -1 means for
+// its own rendering rather than this function guessing.
+export function deploymentStageIndex(status) {
+  return DEPLOYMENT_STAGE_ORDER.indexOf(status);
+}
+
 export function readinessLabel(readiness) {
   const labels = {
     READY_TO_DEPLOY: "Ready to deploy",

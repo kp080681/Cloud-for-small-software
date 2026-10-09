@@ -1,6 +1,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  deploymentStageIndex,
+  deploymentStageOrder,
+  deploymentStageTrackerLabel,
   friendlyErrorMessage,
   readinessLabel,
   redeployFailureMessage,
@@ -59,6 +62,34 @@ test("friendlyErrorMessage covers the analysis errorCode set too, not just deplo
   assert.match(friendlyErrorMessage("PACKAGE_JSON_NOT_FOUND"), /package\.json/);
   assert.match(friendlyErrorMessage("UNSUPPORTED_PROJECT"), /not a supported/);
   assert.match(friendlyErrorMessage("APP_SLUG_CONFLICT"), /already used/);
+});
+
+test("deploymentStageOrder lists the real pipeline in the order it actually runs, with LIVE last", () => {
+  const order = deploymentStageOrder();
+  assert.deepEqual(order, ["ANALYZING", "PROVISIONING", "BUILDING", "DEPLOYING", "HEALTH_CHECKING", "LIVE"]);
+});
+
+test("deploymentStageIndex finds every pipeline stage in order and returns -1 for terminal/branch states the tracker must not guess at", () => {
+  const order = deploymentStageOrder();
+  order.forEach((status, index) => {
+    assert.equal(deploymentStageIndex(status), index);
+  });
+  // FAILED, DELETING, DELETED are not positions in the linear pipeline — the
+  // UI's step tracker renders nothing for these rather than inventing a
+  // guessed position, so this must stay -1 and never accidentally match a
+  // real index.
+  for (const terminal of ["FAILED", "DELETING", "DELETED", "SOMETHING_UNKNOWN", undefined]) {
+    assert.equal(deploymentStageIndex(terminal), -1);
+  }
+});
+
+test("deploymentStageTrackerLabel gives a short plain-language caption for every pipeline stage, distinct from the longer stageLabelForStatus headline", () => {
+  for (const status of deploymentStageOrder()) {
+    const trackerLabel = deploymentStageTrackerLabel(status);
+    assert.equal(typeof trackerLabel, "string");
+    assert.ok(trackerLabel.length > 0);
+    assert.notEqual(trackerLabel, status);
+  }
 });
 
 test("retrySuccessMessage and redeploySuccessMessage stay plain language across every branch", () => {

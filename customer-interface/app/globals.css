@@ -466,16 +466,166 @@ main#main-content {
 }
 
 .analysis-progress {
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: none;
 }
 
-.analysis-progress span,
+.analysis-progress,
 .analysis-result {
   border: 1px solid var(--line);
   border-radius: 8px;
   padding: 10px;
   color: var(--muted);
   font-size: 13px;
+}
+
+.analysis-progress {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.analysis-progress .pulse-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--accent);
+  flex-shrink: 0;
+  animation: pulse-dot 1.6s ease-in-out infinite;
+}
+
+@keyframes pulse-dot {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.35; transform: scale(0.7); }
+}
+
+.analysis-progress-detail {
+  margin: 0;
+  color: var(--muted);
+}
+
+/* The real deployment pipeline, shown as an honest step tracker — each
+   marker reflects the deployment's actual current status, never a guess. */
+.deploy-tracker {
+  display: grid;
+  grid-template-columns: repeat(6, 1fr);
+  gap: 4px;
+  margin: 4px 0;
+}
+
+.deploy-step {
+  position: relative;
+  display: grid;
+  justify-items: center;
+  gap: 6px;
+  text-align: center;
+}
+
+.deploy-step::before {
+  content: "";
+  position: absolute;
+  top: 9px;
+  right: 50%;
+  width: 100%;
+  height: 2px;
+  background: var(--line);
+  z-index: 0;
+}
+
+.deploy-step:first-child::before {
+  display: none;
+}
+
+.deploy-step.done + .deploy-step::before {
+  background: var(--accent);
+}
+
+.deploy-marker {
+  position: relative;
+  z-index: 1;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  border: 2px solid var(--line);
+  background: var(--panel);
+  display: grid;
+  place-items: center;
+  font-size: 11px;
+  font-weight: 800;
+  color: var(--muted);
+}
+
+.deploy-step.done .deploy-marker {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: white;
+}
+
+.deploy-step.current .deploy-marker {
+  border-color: var(--accent);
+  background: var(--panel);
+  color: var(--accent);
+  animation: marker-pulse 1.6s ease-in-out infinite;
+}
+
+@keyframes marker-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(20, 108, 95, 0.3); }
+  50% { box-shadow: 0 0 0 5px rgba(20, 108, 95, 0); }
+}
+
+.deploy-step-label {
+  font-size: 12px;
+  color: var(--muted);
+  line-height: 1.3;
+}
+
+.deploy-step.done .deploy-step-label,
+.deploy-step.current .deploy-step-label {
+  color: var(--ink);
+  font-weight: 700;
+}
+
+.deploy-failure {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  border: 1px solid var(--warn);
+  border-radius: 8px;
+  padding: 12px;
+  background: #fdf6ec;
+}
+
+.deploy-failure-icon {
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: var(--warn);
+  color: white;
+  display: grid;
+  place-items: center;
+  font-size: 12px;
+  font-weight: 800;
+  flex-shrink: 0;
+}
+
+.deploy-failure strong {
+  display: block;
+  color: var(--warn);
+}
+
+.deployment-log {
+  display: grid;
+  gap: 4px;
+}
+
+.deployment-log small {
+  color: var(--muted);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .analysis-progress .pulse-dot,
+  .deploy-step.current .deploy-marker {
+    animation: none;
+  }
 }
 
 .analysis-columns {
@@ -578,10 +728,33 @@ main#main-content {
   .heading,
   .row,
   .inline-form,
-  .analysis-progress,
   .analysis-columns {
     flex-direction: column;
     align-items: stretch;
     grid-template-columns: 1fr;
+  }
+
+  .deploy-tracker {
+    grid-template-columns: 1fr;
+    justify-items: start;
+    gap: 14px;
+  }
+
+  .deploy-step {
+    grid-template-columns: 20px 1fr;
+    grid-auto-flow: column;
+    align-items: center;
+    justify-items: start;
+    gap: 10px;
+    text-align: left;
+    width: 100%;
+  }
+
+  .deploy-step::before {
+    top: -14px;
+    right: auto;
+    left: 9px;
+    width: 2px;
+    height: 14px;
   }
 }
