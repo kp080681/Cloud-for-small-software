@@ -37,17 +37,38 @@ function safeProviderErrorBody(body: any) {
   };
 }
 
+// 25s bound on every Vercel API call — same fix, same reason, as
+// execute-build.ts and provision-runtime.ts: an unbounded fetch here can
+// hang forever instead of throwing, which strands a deployment at BUILDING
+// with no error and no way for retry logic to ever react.
+const VERCEL_REQUEST_TIMEOUT_MS = 25_000;
+
 async function vercelRequest(path: string, options: RequestInit = {}) {
   const token = process.env.VERCEL_TOKEN;
   if (!token) throw new Error("Missing VERCEL_TOKEN");
-  const response = await fetch(`${API}${path}`, {
-    ...options,
-    headers: {
-      Authorization: `Bearer ${token}`,
-      "Content-Type": "application/json",
-      ...(options.headers ?? {}),
-    },
-  });
+  const controller = new AbortController();
+  const timeoutHandle = setTimeout(() => controller.abort(), VERCEL_REQUEST_TIMEOUT_MS);
+  let response: Response;
+  try {
+    response = await fetch(`${API}${path}`, {
+      ...options,
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "Content-Type": "application/json",
+        ...(options.headers ?? {}),
+      },
+      signal: controller.signal,
+    });
+  } catch (error: any) {
+    if (error?.name === "AbortError") {
+      const timeoutError: any = new Error(`Vercel API request timed out after ${VERCEL_REQUEST_TIMEOUT_MS}ms: ${path}`);
+      timeoutError.isTimeout = true;
+      throw timeoutError;
+    }
+    throw error;
+  } finally {
+    clearTimeout(timeoutHandle);
+  }
   const text = await response.text();
   let body: any = null;
   if (text) { try { body = JSON.parse(text); } catch { body = null; } }
@@ -230,6 +251,20 @@ export const applyRuntimeEnv = task({
         plaintextPrinted: false,
         plaintextPersisted: false,
       };
+    } catch (error: any) {
+      // Same gap already found and fixed in provision-runtime.ts: this stage
+      // sits in the critical per-deployment path (applies env vars right
+      // before build) and previously had zero error-visibility beyond
+      // Trigger.dev's own dashboard. Best-effort — a failed insert must
+      // never mask the real error.
+      await db.query(
+        `INSERT INTO deployment_events
+           (deployment_id, from_status, to_status, event_type, message, metadata)
+         VALUES ($1,'BUILDING','BUILDING','RUNTIME_ENV_APPLY_ERROR',$2,$3::jsonb)`,
+        [payload.deploymentId, "Applying runtime environment variables hit an unexpected error.",
+         JSON.stringify({ errorMessage: String(error?.message ?? error), errorName: error?.name ?? null })],
+      ).catch(() => {});
+      throw error;
     } finally {
       await db.end();
     }

@@ -69,7 +69,26 @@ export const ingestBuildLogs = task({
         }
 
         const url = `${API}/v3/deployments/${encodeURIComponent(build.provider_deployment_id)}/events?direction=forward&follow=0&limit=${MAX_EVENTS}${teamQuery()}`;
-        const response = await fetch(url, { headers: { Authorization: `Bearer ${process.env.VERCEL_TOKEN}` } });
+        // 25s bound — same fix as the other trigger tasks: an unbounded
+        // fetch here can hang forever instead of throwing. Failure here is
+        // non-blocking to the pipeline (only affects whether build logs
+        // display), so no new error-visibility wrapper is added below —
+        // just make sure it fails loud instead of hanging silently.
+        const controller = new AbortController();
+        const timeoutHandle = setTimeout(() => controller.abort(), 25_000);
+        let response: Response;
+        try {
+          response = await fetch(url, { headers: { Authorization: `Bearer ${process.env.VERCEL_TOKEN}` }, signal: controller.signal });
+        } catch (error: any) {
+          if (error?.name === "AbortError") {
+            const timeoutError: any = new Error("Vercel build log lookup timed out after 25000ms");
+            timeoutError.isTimeout = true;
+            throw timeoutError;
+          }
+          throw error;
+        } finally {
+          clearTimeout(timeoutHandle);
+        }
         if (!response.ok) throw new Error(`Vercel build log lookup failed: ${response.status} ${response.statusText}`);
         const body: any = await response.json();
         const events = Array.isArray(body) ? body : Array.isArray(body?.events) ? body.events : [];

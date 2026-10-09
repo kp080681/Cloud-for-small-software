@@ -15,12 +15,33 @@ function teamQuery() {
   return teamId ? `?teamId=${encodeURIComponent(teamId)}` : "";
 }
 
+// 25s bound on every Vercel API call — same fix as provision-runtime.ts,
+// apply-runtime-env.ts, configure-public-access.ts and reconcile-build.ts:
+// an unbounded fetch here can hang forever instead of throwing, stranding
+// an app deletion with no error and no way for retry logic to ever react.
+const VERCEL_REQUEST_TIMEOUT_MS = 25_000;
+
 async function deleteVercelProject(projectId: string) {
   if (!process.env.VERCEL_TOKEN) throw new Error("Missing VERCEL_TOKEN");
-  const response = await fetch(`${API}/v9/projects/${encodeURIComponent(projectId)}${teamQuery()}`, {
-    method: "DELETE",
-    headers: { Authorization: `Bearer ${process.env.VERCEL_TOKEN}` },
-  });
+  const controller = new AbortController();
+  const timeoutHandle = setTimeout(() => controller.abort(), VERCEL_REQUEST_TIMEOUT_MS);
+  let response: Response;
+  try {
+    response = await fetch(`${API}/v9/projects/${encodeURIComponent(projectId)}${teamQuery()}`, {
+      method: "DELETE",
+      headers: { Authorization: `Bearer ${process.env.VERCEL_TOKEN}` },
+      signal: controller.signal,
+    });
+  } catch (error: any) {
+    if (error?.name === "AbortError") {
+      const timeoutError: any = new Error(`Vercel project deletion timed out after ${VERCEL_REQUEST_TIMEOUT_MS}ms: ${projectId}`);
+      timeoutError.isTimeout = true;
+      throw timeoutError;
+    }
+    throw error;
+  } finally {
+    clearTimeout(timeoutHandle);
+  }
   if (response.status === 204 || response.status === 404 || response.status === 410) return;
   const text = await response.text();
   throw new Error(`Vercel project deletion failed: ${response.status} ${response.statusText}${text ? `: ${text.slice(0, 500)}` : ""}`);
@@ -28,9 +49,24 @@ async function deleteVercelProject(projectId: string) {
 
 async function getVercelProject(projectId: string) {
   if (!process.env.VERCEL_TOKEN) throw new Error("Missing VERCEL_TOKEN");
-  const response = await fetch(`${API}/v9/projects/${encodeURIComponent(projectId)}${teamQuery()}`, {
-    headers: { Authorization: `Bearer ${process.env.VERCEL_TOKEN}` },
-  });
+  const controller = new AbortController();
+  const timeoutHandle = setTimeout(() => controller.abort(), VERCEL_REQUEST_TIMEOUT_MS);
+  let response: Response;
+  try {
+    response = await fetch(`${API}/v9/projects/${encodeURIComponent(projectId)}${teamQuery()}`, {
+      headers: { Authorization: `Bearer ${process.env.VERCEL_TOKEN}` },
+      signal: controller.signal,
+    });
+  } catch (error: any) {
+    if (error?.name === "AbortError") {
+      const timeoutError: any = new Error(`Vercel project lookup timed out after ${VERCEL_REQUEST_TIMEOUT_MS}ms: ${projectId}`);
+      timeoutError.isTimeout = true;
+      throw timeoutError;
+    }
+    throw error;
+  } finally {
+    clearTimeout(timeoutHandle);
+  }
   if (response.status === 404) return null;
   if (!response.ok) {
     const text = await response.text();

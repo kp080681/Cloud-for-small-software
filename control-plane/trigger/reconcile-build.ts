@@ -19,11 +19,32 @@ function teamQuery() {
   return process.env.VERCEL_TEAM_ID ? `?teamId=${encodeURIComponent(process.env.VERCEL_TEAM_ID)}` : "";
 }
 
+// 25s bound on this call — same fix as provision-runtime.ts,
+// apply-runtime-env.ts and configure-public-access.ts: an unbounded fetch
+// here can hang forever instead of throwing, stranding a deployment at
+// BUILDING with no error and no way for retry logic to ever react.
+const VERCEL_REQUEST_TIMEOUT_MS = 25_000;
+
 async function getVercelDeployment(id: string) {
   if (!process.env.VERCEL_TOKEN) throw new Error("Missing VERCEL_TOKEN");
-  const response = await fetch(`${API}/v13/deployments/${encodeURIComponent(id)}${teamQuery()}`, {
-    headers: { Authorization: `Bearer ${process.env.VERCEL_TOKEN}` },
-  });
+  const controller = new AbortController();
+  const timeoutHandle = setTimeout(() => controller.abort(), VERCEL_REQUEST_TIMEOUT_MS);
+  let response: Response;
+  try {
+    response = await fetch(`${API}/v13/deployments/${encodeURIComponent(id)}${teamQuery()}`, {
+      headers: { Authorization: `Bearer ${process.env.VERCEL_TOKEN}` },
+      signal: controller.signal,
+    });
+  } catch (error: any) {
+    if (error?.name === "AbortError") {
+      const timeoutError: any = new Error(`Vercel deployment lookup timed out after ${VERCEL_REQUEST_TIMEOUT_MS}ms: ${id}`);
+      timeoutError.isTimeout = true;
+      throw timeoutError;
+    }
+    throw error;
+  } finally {
+    clearTimeout(timeoutHandle);
+  }
   if (!response.ok) throw new Error(`Vercel deployment lookup failed: ${response.status} ${response.statusText}`);
   return response.json();
 }
@@ -147,6 +168,21 @@ export const reconcileBuild = task({
         sourceIdentityMatches,
         nextDeploymentStatus: terminalSuccess ? "DEPLOYING" : terminalFailure || sourceUnverified ? "FAILED" : build.deployment_status,
       };
+    } catch (error: any) {
+      // Same gap already found and fixed in provision-runtime.ts: this task
+      // runs in the critical path right after execute-build.ts and handles
+      // the BUILDING -> DEPLOYING transition. An unhandled error here
+      // previously left no trace beyond Trigger.dev's own dashboard — a
+      // strong candidate to become a third stuck-deployment incident.
+      // Best-effort; the specific branches above still write their own
+      // detailed events on their own success paths, this is only the catch-all.
+      await db.query(
+        `INSERT INTO deployment_events (deployment_id,from_status,to_status,event_type,message,metadata)
+         VALUES ($1,'BUILDING','BUILDING','BUILD_RECONCILE_ERROR',$2,$3::jsonb)`,
+        [payload.deploymentId, "Reconciling the build hit an unexpected error.",
+         JSON.stringify({ errorMessage: String(error?.message ?? error), errorName: error?.name ?? null })],
+      ).catch(() => {});
+      throw error;
     } finally {
       await db.end();
     }

@@ -18,11 +18,34 @@ function teamQuery(extra: Record<string, string> = {}) {
   return text ? `?${text}` : "";
 }
 
+// 25s bound on every Vercel API call — same fix as the other trigger tasks:
+// an unbounded fetch here can hang forever instead of throwing. This task
+// is a scheduled, workspace-wide maintenance scan (not deployment-scoped),
+// so a hang here just silently stalls the scan rather than stranding a
+// customer deployment — but it should still fail loud via Trigger.dev's
+// own retry/dashboard rather than hang indefinitely.
+const VERCEL_REQUEST_TIMEOUT_MS = 25_000;
+
 async function vercelRequest(path: string) {
   if (!process.env.VERCEL_TOKEN) throw new Error("Missing VERCEL_TOKEN");
-  const response = await fetch(`${API}${path}`, {
-    headers: { Authorization: `Bearer ${process.env.VERCEL_TOKEN}` },
-  });
+  const controller = new AbortController();
+  const timeoutHandle = setTimeout(() => controller.abort(), VERCEL_REQUEST_TIMEOUT_MS);
+  let response: Response;
+  try {
+    response = await fetch(`${API}${path}`, {
+      headers: { Authorization: `Bearer ${process.env.VERCEL_TOKEN}` },
+      signal: controller.signal,
+    });
+  } catch (error: any) {
+    if (error?.name === "AbortError") {
+      const timeoutError: any = new Error(`Vercel API request timed out after ${VERCEL_REQUEST_TIMEOUT_MS}ms: ${path}`);
+      timeoutError.isTimeout = true;
+      throw timeoutError;
+    }
+    throw error;
+  } finally {
+    clearTimeout(timeoutHandle);
+  }
   const text = await response.text();
   let body: any = null;
   if (text) { try { body = JSON.parse(text); } catch { body = null; } }
