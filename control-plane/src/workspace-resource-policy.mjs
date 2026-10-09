@@ -15,9 +15,17 @@ export const ACTIVE_PROVIDER_OPERATION_STATUSES = Object.freeze([
   "CREATE_REQUESTED",
 ]);
 
+// maxActiveApps/maxActiveDeployments started at 3 each as a conservative
+// V1 ceiling while the platform was unproven. Raised once real client
+// workloads started hitting it in normal use — see Node 04.17 follow-up:
+// an app build actually refused to start with WORKSPACE_APP_LIMIT_REACHED
+// well before any real capacity concern (CPU/memory/storage limits are a
+// separate, still-unraised axis — this was purely an arbitrary headcount
+// cap). 25 gives real headroom for a small agency's own client roster
+// without being effectively unbounded.
 export const DEFAULT_WORKSPACE_RESOURCE_POLICY = Object.freeze({
-  maxActiveApps: 3,
-  maxActiveDeployments: 3,
+  maxActiveApps: 25,
+  maxActiveDeployments: 25,
   maxActiveDeploymentsPerApp: 1,
   maxConcurrentProviderOperations: 2,
   maxManagedDatabases: 3,
