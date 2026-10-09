@@ -4,6 +4,7 @@ import { githubInstallCallbackRedirectPath } from "@/src/server/github-install-s
 import { selectedWorkspaceCookieName } from "@/src/server/session.mjs";
 import { WorkspaceSelectForm, WorkspaceRenameForm } from "./workspace-forms.js";
 import { GitHubPanel } from "./github-panel.js";
+import { McpGrantsPanel } from "./mcp-grants-panel.js";
 
 export const dynamic = "force-dynamic";
 
@@ -137,6 +138,7 @@ export default async function Home({ searchParams }) {
           <button className="active">Applications</button>
           <div className="nav-caption">Workspace</div>
           <a className="nav-link" href="#github-connection">GitHub connection</a>
+          <a className="nav-link" href="#mcp-connections">Connected apps</a>
         </aside>
         <main id="main-content">
           <div className="crumb"><span>Applications</span></div>
@@ -152,6 +154,7 @@ export default async function Home({ searchParams }) {
             <WorkspaceRenameForm workspace={active} />
           </section>
           <GitHubPanel workspaceId={active.id} github={shell.github} />
+          <McpGrantsPanel workspaceId={active.id} />
         </main>
       </div>
     </>

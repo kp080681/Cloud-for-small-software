@@ -135,6 +135,12 @@ small,
   padding: 22px;
 }
 
+.consent-form {
+  display: grid;
+  gap: 10px;
+  margin-top: 6px;
+}
+
 .panel h2,
 .panel p {
   margin-top: 0;

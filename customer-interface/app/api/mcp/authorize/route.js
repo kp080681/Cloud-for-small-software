@@ -3,7 +3,7 @@ import { connectDatabase } from "@/src/server/db.mjs";
 import { requireCustomerSession } from "@/src/server/customer-shell.mjs";
 import { ensureInitialWorkspace, defaultWorkspaceName } from "@/src/server/customer-workspaces.mjs";
 import { selectedWorkspaceCookieName } from "@/src/server/session.mjs";
-import { createAuthorizationCode, resolveMcpClient } from "@/src/server/mcp-auth.mjs";
+import { resolveMcpClient } from "@/src/server/mcp-auth.mjs";
 
 export const dynamic = "force-dynamic";
 
@@ -12,12 +12,13 @@ export const dynamic = "force-dynamic";
 // every other page) — an MCP client that isn't logged in gets redirected
 // through the normal sign-in flow first, not handled specially here.
 //
-// No consent screen yet, by design and noted explicitly rather than
-// silently skipped: for v1, an authenticated customer using their own
-// already-connected AI platform is treated as sufficient authorization —
-// matching the platform's zero-config default. A future explicit
-// "<client> wants access to <workspace> — Allow / Deny" screen is a UI
-// task, not this item's scope.
+// This endpoint's job is just to validate the request and pick a workspace,
+// then hand off to an explicit "<client> wants access to <workspace> —
+// Allow / Deny" consent screen (/mcp/consent) rather than minting a code
+// itself. The actual code is only created once the customer clicks Allow,
+// in /api/mcp/authorize/decision — see that route for why every check done
+// here (client/redirect_uri validation, workspace authorization) is
+// deliberately repeated there rather than trusted from this redirect alone.
 export async function GET(request) {
   const url = new URL(request.url);
   const clientId = url.searchParams.get("client_id");
@@ -57,19 +58,14 @@ export async function GET(request) {
     const cookieWorkspaceId = (await cookies()).get(selectedWorkspaceCookieName)?.value;
     const workspaceId = cookieWorkspaceId || initialWorkspace.id;
 
-    const { code } = await createAuthorizationCode(db, {
-      customerId: session.customerId,
-      workspaceId,
-      clientId,
-      redirectUri,
-      codeChallenge,
-      codeChallengeMethod,
-    });
-
-    const target = new URL(redirectUri);
-    target.searchParams.set("code", code);
-    if (state) target.searchParams.set("state", state);
-    return Response.redirect(target);
+    const consentUrl = new URL("/mcp/consent", request.url);
+    consentUrl.searchParams.set("client_id", clientId);
+    consentUrl.searchParams.set("redirect_uri", redirectUri);
+    consentUrl.searchParams.set("code_challenge", codeChallenge);
+    consentUrl.searchParams.set("code_challenge_method", codeChallengeMethod);
+    consentUrl.searchParams.set("workspace_id", workspaceId);
+    if (state) consentUrl.searchParams.set("state", state);
+    return Response.redirect(consentUrl);
   } catch (error) {
     if (error?.status === 401) {
       // Not logged in. Deliberately NOT chaining through the login flow and
