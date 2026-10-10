@@ -63,10 +63,25 @@ export function GitHubPanel({ workspaceId, github }) {
       ...current,
       [repositoryId]: { pending: true },
     }));
-    const response = await fetch(
-      `/api/workspaces/${encodeURIComponent(workspaceId)}/repositories/${encodeURIComponent(repositoryId)}/analysis`,
-      { method: "POST" },
-    );
+    let response;
+    try {
+      response = await fetch(
+        `/api/workspaces/${encodeURIComponent(workspaceId)}/repositories/${encodeURIComponent(repositoryId)}/analysis`,
+        { method: "POST" },
+      );
+    } catch {
+      // The request never reached a response at all (dropped connection,
+      // offline, a gateway timing out the connection outright). Without
+      // this, analysisState stayed pending forever with no way to recover
+      // short of a page refresh.
+      const error = "Repository analysis didn't finish — the connection was interrupted. Try again.";
+      setAnalysisState((current) => ({
+        ...current,
+        [repositoryId]: { pending: false, error },
+      }));
+      setMessage(error);
+      return;
+    }
     const body = await response.json().catch(() => ({}));
     if (!response.ok) {
       const error = body.message || friendlyErrorMessage(body.error, "Repository analysis could not be completed.");
