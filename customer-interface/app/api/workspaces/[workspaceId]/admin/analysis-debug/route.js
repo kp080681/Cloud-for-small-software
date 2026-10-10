@@ -38,7 +38,7 @@ export async function GET(request, { params }) {
     let events = [];
     if (appIds.length) {
       const deploymentsResult = await db.query(
-        `SELECT id, app_id, deployment_key, source_commit_sha, source_branch, status, error_code, error_message, created_at, updated_at
+        `SELECT id, app_id, deployment_key, source_commit_sha, source_branch, status, error_code, error_message, orchestrator_run_id, created_at, updated_at
            FROM deployments
           WHERE app_id = ANY($1::uuid[])
           ORDER BY created_at DESC
@@ -71,12 +71,45 @@ export async function GET(request, { params }) {
       [workspaceId],
     );
 
+    // Trigger.dev enqueues a run and hands back a run id immediately, which
+    // only proves the orchestrator task was accepted into the queue — not
+    // that it ran, finished, or succeeded. Nothing in our own database is
+    // updated if the run itself fails inside Trigger.dev, so the only way to
+    // tell what actually happened to a given run is to ask Trigger.dev
+    // directly, using this app's own already-configured TRIGGER_SECRET_KEY.
+    let runStatuses = null;
+    if (new URL(request.url).searchParams.get("runStatus")) {
+      const secret = process.env.TRIGGER_SECRET_KEY;
+      const baseUrl = (process.env.TRIGGER_API_URL || "https://api.trigger.dev").replace(/\/$/, "");
+      const runIds = [...new Set(deployments.map((d) => d.orchestrator_run_id).filter(Boolean))].slice(0, 5);
+      if (!secret) {
+        runStatuses = { error: "TRIGGER_SECRET_KEY_NOT_SET_IN_THIS_RUNTIME" };
+      } else if (!runIds.length) {
+        runStatuses = { error: "NO_ORCHESTRATOR_RUN_ID_RECORDED" };
+      } else {
+        runStatuses = await Promise.all(
+          runIds.map(async (runId) => {
+            try {
+              const res = await fetch(`${baseUrl}/api/v3/runs/${encodeURIComponent(runId)}`, {
+                headers: { Authorization: `Bearer ${secret}` },
+              });
+              const body = await res.json().catch(() => ({}));
+              return { runId, httpStatus: res.status, body };
+            } catch (error) {
+              return { runId, error: String(error?.message || error) };
+            }
+          }),
+        );
+      }
+    }
+
     return Response.json({
       now: new Date().toISOString(),
       apps: relevantApps,
       deployments,
       deploymentEvents: events,
       repositoryAnalysisRateLimit: rateLimit.rows,
+      runStatuses,
     });
   } catch (error) {
     return safeErrorResponse(error);
