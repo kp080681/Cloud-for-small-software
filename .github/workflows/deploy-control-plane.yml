@@ -1,0 +1,36 @@
+name: Deploy control plane (Trigger.dev)
+
+# Permanent fix for 2026-10-12: control-plane/trigger/* has no deploy step of
+# its own, unlike the Vercel-hosted customer-interface app which deploys
+# itself on every push. A code fix could sit on main, fully committed, while
+# Trigger.dev kept running the old build -- reproduced live today, twice, on
+# the same bug. This workflow is the fix: every push to main that touches
+# control-plane now deploys it automatically, on GitHub's own runners (never
+# blocked by this session's or any agent's sandboxed network policy).
+on:
+  push:
+    branches: [main]
+    paths:
+      - "control-plane/**"
+      - ".github/workflows/deploy-control-plane.yml"
+  workflow_dispatch: {}
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: control-plane
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Install dependencies
+        run: npm install
+      - name: Run control-plane tests
+        run: npm test
+      - name: Deploy to Trigger.dev
+        env:
+          TRIGGER_ACCESS_TOKEN: ${{ secrets.TRIGGER_ACCESS_TOKEN }}
+        run: npx trigger deploy
