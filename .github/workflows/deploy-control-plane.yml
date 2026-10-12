@@ -33,4 +33,13 @@ jobs:
       - name: Deploy to Trigger.dev
         env:
           TRIGGER_ACCESS_TOKEN: ${{ secrets.TRIGGER_ACCESS_TOKEN }}
-        run: npx trigger deploy
+        run: |
+          set +e
+          npx trigger deploy 2>&1 | tee /tmp/trigger-deploy.log
+          status=${PIPESTATUS[0]}
+          if [ "$status" -ne 0 ]; then
+            {
+              echo "::error title=Trigger.dev deploy failed::$(tail -c 3000 /tmp/trigger-deploy.log | sed ':a;N;$!ba;s/\n/%0A/g')"
+            }
+            exit "$status"
+          fi
