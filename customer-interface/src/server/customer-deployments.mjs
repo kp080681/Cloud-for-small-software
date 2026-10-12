@@ -666,10 +666,11 @@ async function markOrchestrationRunFailed(db, { deploymentId, fromStatus, runId 
 // Sanitized read of what Trigger.dev actually reported for a deployment's
 // orchestration run, for operator diagnosis when a deployment has already
 // failed. This is the only way outside this file to learn why, which keeps
-// the credential itself confined here — callers never see it. Deliberately
-// returns only a short error name/kind and coarse timing, never the run's
-// own free-text error message or stack trace: that text originates inside a
-// Trigger.dev task and isn't vetted for what it might contain.
+// the credential itself confined here — callers never see it. Returns the
+// error's name and first line of its message (capped, no stack trace) —
+// control-plane task errors here are things like a failed SQL query against
+// our own schema, not provider secrets, so the first line is safe and is
+// exactly what's needed to tell a misconfiguration apart from a real bug.
 export async function describeOrchestratorFailure(
   db,
   { customerId, workspaceId, appId, deploymentId, env = process.env, fetchImpl = fetch },
@@ -692,6 +693,7 @@ export async function describeOrchestratorFailure(
     status: run.status ?? null,
     isFailed: Boolean(run.isFailed),
     errorKind: run.error?.name ? String(run.error.name).slice(0, 80) : null,
+    errorMessage: run.error?.message ? String(run.error.message).split("\n")[0].slice(0, 300) : null,
     createdAt: run.createdAt ?? null,
     startedAt: run.startedAt ?? null,
     finishedAt: run.finishedAt ?? null,
