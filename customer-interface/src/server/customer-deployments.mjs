@@ -375,6 +375,18 @@ async function retryLineageRoot(db, { appId, deployment }) {
         code: "DEPLOYMENT_RETRY_LINEAGE_CORRUPT",
       });
     }
+    // MAX_CUSTOMER_RETRY_DEPTH exists to stop a genuinely broken app/source
+    // from being retried forever, not to ration deploys for an app's whole
+    // lifetime. A non-FAILED parent (LIVE, most often) means a deploy from
+    // this source already succeeded, so the chain of *retries* starts fresh
+    // after it -- otherwise one unrelated platform bug on a redeploy years
+    // into an app's life could burn through the entire retry budget using
+    // up attempts that were never failures of this immutable source at all.
+    // Reproduced 2026-10-12: puttur-skin-clinic-landing went DRAFT->FAILED
+    // (platform DB misconfig) ->LIVE (fixed) ->FAILED (unrelated platform
+    // bug) and was then refused any further retry, despite only ever having
+    // one real failure in a row.
+    if (parent.status !== "FAILED") return current;
     seen.add(parent.id);
     current = parent;
   }

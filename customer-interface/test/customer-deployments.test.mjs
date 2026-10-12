@@ -969,6 +969,31 @@ test("stale ancestor retry can create the third and final retry attempt", async 
   assert.equal(deployment.retry.retryDepth, 3);
 });
 
+test("retry depth resets after a successful deployment in the lineage", async () => {
+  const db = new FakeDb();
+  db.deployments[0].status = "FAILED";
+  db.deployments[0].error_code = "HEALTH_CHECK_FAILED";
+  addRetryDeployment(db, { id: "deployment-b", deployment_key: "dep_b", status: "FAILED", parent_deployment_id: "deployment-a", created_at: 2 });
+  addRetryDeployment(db, { id: "deployment-c", deployment_key: "dep_c", status: "LIVE", error_code: null, parent_deployment_id: "deployment-b", created_at: 3 });
+  addRetryDeployment(db, { id: "deployment-d", deployment_key: "dep_d", status: "FAILED", parent_deployment_id: "deployment-c", created_at: 4 });
+
+  // Two real failures happened in this app's history (a, b), then a genuine
+  // LIVE success (c), then one unrelated new failure (d) -- e.g. the exact
+  // puttur-skin-clinic-landing sequence from 2026-10-12. This must still be
+  // retryable: the retry budget tracks a losing streak, not lifetime deploys.
+  const deployment = await retryFailedCustomerDeployment(db, {
+    ...startArgs({ deploymentId: "deployment-d" }),
+    deploymentKeyFactory: () => "dep_e",
+    triggerOrchestrator: async () => ({ id: "run-e" }),
+  });
+  const child = db.deployments.find((row) => row.id === deployment.deploymentId);
+
+  assert.equal(deployment.retry.limitReached, false);
+  assert.equal(deployment.retry.created, true);
+  assert.equal(child.parent_deployment_id, "deployment-d");
+  assert.equal(deployment.retry.retryDepth, 1);
+});
+
 test("retry limit returns stable response without mutating history or triggering", async () => {
   const db = new FakeDb();
   db.deployments[0].status = "FAILED";
