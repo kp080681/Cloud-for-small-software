@@ -98,7 +98,17 @@ export const configurePublicAccess=task({id:"ssc-control-plane-configure-public-
   if(providerDeployment?.target!=="production")throw new Error(`Provider deployment is not production-targeted; target is ${providerDeployment?.target??"null"}`);
   if((providerDeployment?.readyState??providerDeployment?.state)!=="READY")throw new Error(`Provider production deployment is not READY`);
   const project=await vercelRequest(`/v9/projects/${encodeURIComponent(row.provider_project_id)}${teamQuery()}`);
-  const productionHosts=publicBindingHostCandidates({providerDeployment,project});
+  // Node 04.19 fix: publicBindingHostCandidates() mixes in every domain
+  // attached to the Vercel project, which now includes the SSC branded
+  // subdomain (<slug>.utplava.dev) once a prior deployment attached one --
+  // see attachBrandedDomainBestEffort below. That host must never be chosen
+  // here: this anonymous check exists to verify OUR OWN Vercel-issued URL is
+  // reachable, assertSafeWorkloadUrl deliberately only trusts vercel.app for
+  // that reason, and the branded domain's own DNS is independent, best-effort
+  // and not something a redeploy should block on. Restrict candidates to
+  // Vercel-owned hosts so attaching a branded domain can never again make the
+  // *next* redeploy fail this step (reproduced 2026-10-12 on puttur-skin-clinic-landing).
+  const productionHosts=publicBindingHostCandidates({providerDeployment,project}).filter((host)=>host==="vercel.app"||host.endsWith(".vercel.app"));
   const deploymentAliases=await vercelRequestOptional(`/v2/deployments/${encodeURIComponent(row.provider_deployment_id)}/aliases${teamQuery()}`);
   let publicBinding:any={status:PublicBindingStatus.UNAVAILABLE,canonicalHost:productionHosts[0]??null};let productionHost=productionHosts[0]??`${project.name}.vercel.app`;
   for(const candidateHost of productionHosts){const alias=await vercelRequestOptional(`/v4/aliases/${encodeURIComponent(candidateHost)}${teamQuery({projectId:row.provider_project_id})}`);const candidateBinding=verifyPublicBinding({alias,deploymentAliases,canonicalHost:candidateHost,providerDeploymentId:row.provider_deployment_id,providerProjectId:row.provider_project_id});if(candidateBinding.status===PublicBindingStatus.MATCH){publicBinding=candidateBinding;productionHost=candidateHost;break}if(publicBinding.status===PublicBindingStatus.UNAVAILABLE)publicBinding=candidateBinding}
