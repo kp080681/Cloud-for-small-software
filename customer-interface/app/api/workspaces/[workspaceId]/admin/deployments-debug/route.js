@@ -7,6 +7,25 @@ import { safeErrorResponse } from "@/src/server/http.mjs";
 
 export const dynamic = "force-dynamic";
 
+// Never the credential itself — host, port and database name only, parsed
+// from this runtime's own working connection string, so the value this app
+// actually uses can be compared against whatever was pasted into another
+// runtime's config without ever exposing the password.
+function workingDatabaseTarget() {
+  const raw = process.env.DATABASE_URL;
+  if (!raw) return null;
+  try {
+    const parsed = new URL(raw);
+    return {
+      host: parsed.hostname || null,
+      port: parsed.port || null,
+      database: parsed.pathname.replace(/^\//, "") || null,
+    };
+  } catch {
+    return null;
+  }
+}
+
 // Temporary, read-only operator diagnostic: every app in this workspace with
 // its latest deployment and that deployment's event trail, in one call, so a
 // "still stuck" report can be checked directly instead of going back and
@@ -80,6 +99,7 @@ export async function GET(request, { params }) {
       latestDeployments,
       deploymentEvents: events,
       orchestratorRunStatuses,
+      thisAppsOwnWorkingDatabaseTarget: workingDatabaseTarget(),
     });
   } catch (error) {
     return safeErrorResponse(error);
