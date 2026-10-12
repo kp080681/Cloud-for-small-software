@@ -57,6 +57,7 @@ const eventTitles = Object.freeze({
   DEPLOYMENT_RESUME_REQUESTED: "Deployment continuing",
   DEPLOYMENT_RESUME_STARTED: "Deployment continuing",
   DEPLOYMENT_RESUME_FAILED: "Deployment needs attention",
+  ORCHESTRATION_RUN_FAILED: "Deployment needs attention",
 });
 
 const safeEvidenceKeys = new Set([
@@ -184,6 +185,7 @@ function failureDiagnostic(deployment) {
     HEALTH_CHECK_FAILED: ["Application did not become healthy", "Review runtime configuration or startup behavior before redeploying."],
     PUBLIC_ACCESS_BLOCKED: ["Public access blocked", "Anonymous HTTPS verification did not pass."],
     DEPLOYMENT_ABANDONED: ["Deployment abandoned", "Start a new deployment when ready."],
+    ORCHESTRATION_RUN_FAILED: ["Deployment automation failed to run", "Try deploying again. If this keeps happening, it's a platform issue, not something in your app or configuration."],
   };
   const [title, action] = diagnostics[code] ?? ["Deployment needs attention", "Review deployment progress before retrying."];
   return { code, title, action };
@@ -596,6 +598,71 @@ export async function triggerDeploymentOrchestrator({
   return { id: body.id };
 }
 
+// Enqueueing a run only proves Trigger.dev accepted it into its queue, not
+// that it ran or finished — the only way to tell whether a previously
+// triggered run actually succeeded, is still running, or already failed is
+// to ask Trigger.dev for that run's own status. Returns null (never throws)
+// on any failure to reach Trigger.dev or when no secret is configured in
+// this runtime, so callers fall back to the existing stale-retry behavior
+// rather than blocking on a diagnostic call that isn't essential to it.
+async function fetchOrchestratorRunStatus({ runId, env = process.env, fetchImpl = fetch }) {
+  if (!runId) return null;
+  const secret = env.TRIGGER_SECRET_KEY;
+  if (!secret) return null;
+  try {
+    const response = await fetchImpl(`${triggerBaseUrl(env)}/api/v3/runs/${encodeURIComponent(runId)}`, {
+      headers: { Authorization: `Bearer ${secret}` },
+    });
+    if (!response.ok) return null;
+    return await response.json().catch(() => null);
+  } catch {
+    return null;
+  }
+}
+
+// Moves a deployment straight to FAILED once its orchestration run is known
+// to have failed, instead of leaving it to silently re-queue forever. The
+// status-matching WHERE clause means this is a no-op (returns null) if the
+// deployment already moved on by the time this runs — e.g. a concurrent
+// resume got there first, or the run actually succeeded and advanced the
+// status after this check read it. Deliberately does not persist the run's
+// own error text: that text comes from inside a Trigger.dev task and isn't
+// guaranteed safe to store verbatim (AGENTS.md: never persist secrets), and
+// the admin run-status diagnostic can already pull the real message live
+// from Trigger.dev when someone needs to see it.
+async function markOrchestrationRunFailed(db, { deploymentId, fromStatus, runId }) {
+  await db.query("BEGIN");
+  try {
+    const updated = await db.query(
+      `UPDATE deployments
+          SET status = 'FAILED',
+              error_code = 'ORCHESTRATION_RUN_FAILED',
+              error_message = 'The deployment automation run did not complete successfully.',
+              finished_at = now(),
+              updated_at = now()
+        WHERE id = $1 AND status = $2
+        RETURNING id, workspace_id, app_id, status, error_code, source_commit_sha, source_branch,
+                  parent_deployment_id, orchestrator_run_id, live_url, created_at, updated_at`,
+      [deploymentId, fromStatus],
+    );
+    if (updated.rowCount === 1) {
+      await recordDeploymentEvent(db, {
+        deploymentId,
+        fromStatus,
+        toStatus: "FAILED",
+        eventType: "ORCHESTRATION_RUN_FAILED",
+        message: "The deployment automation run did not complete successfully.",
+        metadata: { runId, valuesPrinted: false },
+      });
+    }
+    await db.query("COMMIT");
+    return updated.rows[0] ?? null;
+  } catch (error) {
+    await db.query("ROLLBACK").catch(() => {});
+    throw error;
+  }
+}
+
 export async function getCustomerDeploymentProgress(db, { customerId, workspaceId, appId, deploymentId }) {
   const deployment = await loadAuthorizedDeployment(db, { customerId, workspaceId, appId, deploymentId });
   const events = await loadDeploymentEvents(db, deploymentId);
@@ -613,6 +680,8 @@ export async function resumeCustomerDeployment(
     staleAfterMs,
     now = Date.now(),
     env = process.env,
+    checkRunStatus = fetchOrchestratorRunStatus,
+    fetchImpl = fetch,
   },
 ) {
   const effectiveStaleAfterMs = customerResumeStaleThresholdMs({
@@ -622,6 +691,43 @@ export async function resumeCustomerDeployment(
     appId,
     staleAfterMs,
   });
+
+  // A resume only ever asks "has enough time passed since the last DB
+  // write to assume this deployment is stuck?" — it has no way to tell a
+  // genuinely still-running orchestration run from one that already
+  // crashed, because triggering a run only confirms Trigger.dev accepted
+  // it into its queue, not that it ever finished. Without this, a run
+  // that fails immediately (wrong credentials, a bad env var, anything)
+  // leaves the deployment silently re-queuing a fresh run every
+  // staleAfterMs forever, with nothing in our own events ever saying so —
+  // exactly what happened to a real customer's first non-trivial app.
+  // Before deciding whether to queue another run, ask Trigger.dev
+  // directly what happened to the previous one, using this app's own
+  // already-configured TRIGGER_SECRET_KEY, and fail the deployment loudly
+  // if it's done and failed, instead of trying again in silence.
+  const priorSnapshot = await loadAuthorizedDeployment(db, { customerId, workspaceId, appId, deploymentId });
+  if (
+    RESUMABLE_STATUSES.has(priorSnapshot.status) &&
+    !priorSnapshot.error_code &&
+    priorSnapshot.orchestrator_run_id
+  ) {
+    const runStatus = await checkRunStatus({ runId: priorSnapshot.orchestrator_run_id, env, fetchImpl });
+    if (runStatus?.isFailed) {
+      const failed = await markOrchestrationRunFailed(db, {
+        deploymentId,
+        fromStatus: priorSnapshot.status,
+        runId: priorSnapshot.orchestrator_run_id,
+      });
+      if (failed) {
+        const events = await loadDeploymentEvents(db, deploymentId);
+        return {
+          ...safeCustomerDeployment(failed, events),
+          resume: { attempted: false, started: false, suppressed: true, reason: "orchestration-run-failed" },
+        };
+      }
+    }
+  }
+
   let shouldTrigger = false;
   let marker = null;
   let resumeStatus = null;
