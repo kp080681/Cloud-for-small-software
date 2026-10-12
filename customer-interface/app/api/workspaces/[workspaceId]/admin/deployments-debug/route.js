@@ -2,6 +2,7 @@ import { cookies } from "next/headers";
 import { connectDatabase } from "@/src/server/db.mjs";
 import { requireCustomerSession } from "@/src/server/customer-shell.mjs";
 import { getAuthorizedWorkspace } from "@/src/server/customer-workspaces.mjs";
+import { describeOrchestratorFailure } from "@/src/server/customer-deployments.mjs";
 import { safeErrorResponse } from "@/src/server/http.mjs";
 
 export const dynamic = "force-dynamic";
@@ -58,11 +59,27 @@ export async function GET(request, { params }) {
       }
     }
 
+    const orchestratorRunStatuses = await Promise.all(
+      latestDeployments
+        .filter((d) => d.orchestrator_run_id)
+        .map(async (d) => ({
+          appId: d.app_id,
+          deploymentId: d.id,
+          ...(await describeOrchestratorFailure(db, {
+            customerId: session.customerId,
+            workspaceId,
+            appId: d.app_id,
+            deploymentId: d.id,
+          })),
+        })),
+    );
+
     return Response.json({
       now: new Date().toISOString(),
       apps: apps.rows,
       latestDeployments,
       deploymentEvents: events,
+      orchestratorRunStatuses,
     });
   } catch (error) {
     return safeErrorResponse(error);

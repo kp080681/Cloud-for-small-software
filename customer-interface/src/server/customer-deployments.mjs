@@ -663,6 +663,42 @@ async function markOrchestrationRunFailed(db, { deploymentId, fromStatus, runId 
   }
 }
 
+// Sanitized read of what Trigger.dev actually reported for a deployment's
+// orchestration run, for operator diagnosis when a deployment has already
+// failed. This is the only way outside this file to learn why, which keeps
+// the credential itself confined here — callers never see it. Deliberately
+// returns only a short error name/kind and coarse timing, never the run's
+// own free-text error message or stack trace: that text originates inside a
+// Trigger.dev task and isn't vetted for what it might contain.
+export async function describeOrchestratorFailure(
+  db,
+  { customerId, workspaceId, appId, deploymentId, env = process.env, fetchImpl = fetch },
+) {
+  const deployment = await loadAuthorizedDeployment(db, { customerId, workspaceId, appId, deploymentId });
+  if (!deployment.orchestrator_run_id) {
+    return { runId: null, status: null, errorKind: null, note: "No orchestration run has been recorded yet." };
+  }
+  const run = await fetchOrchestratorRunStatus({ runId: deployment.orchestrator_run_id, env, fetchImpl });
+  if (!run) {
+    return {
+      runId: deployment.orchestrator_run_id,
+      status: null,
+      errorKind: null,
+      note: "Could not reach Trigger.dev, or no secret configured in this runtime, to check the run.",
+    };
+  }
+  return {
+    runId: deployment.orchestrator_run_id,
+    status: run.status ?? null,
+    isFailed: Boolean(run.isFailed),
+    errorKind: run.error?.name ? String(run.error.name).slice(0, 80) : null,
+    createdAt: run.createdAt ?? null,
+    startedAt: run.startedAt ?? null,
+    finishedAt: run.finishedAt ?? null,
+    durationMs: run.durationMs ?? null,
+  };
+}
+
 export async function getCustomerDeploymentProgress(db, { customerId, workspaceId, appId, deploymentId }) {
   const deployment = await loadAuthorizedDeployment(db, { customerId, workspaceId, appId, deploymentId });
   const events = await loadDeploymentEvents(db, deploymentId);
