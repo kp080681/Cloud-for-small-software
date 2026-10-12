@@ -1,7 +1,14 @@
 import { task, tasks, wait } from "@trigger.dev/sdk";
 import pg from "pg";
 import { recordRemoteBuildContainment } from "../src/vercel-deployment-cancellation.mjs";
-const { Client }=pg; const BUILD_POLL_SECONDS=15; const HEALTH_RETRY_SECONDS=10;
+// These are polling intervals only -- how often we re-check Vercel's own
+// build/health state -- not verification steps themselves. Shortening them
+// doesn't weaken anything LIVE depends on (the build still has to actually
+// finish, the health check still has to actually pass); it only shrinks the
+// wasted gap between "the real thing finished" and "we noticed." Lowered
+// 2026-10-12 in response to real deploy-time complaints (6-10 minutes);
+// the floor is still Vercel's own build time, which this cannot reduce.
+const { Client }=pg; const BUILD_POLL_SECONDS=5; const HEALTH_RETRY_SECONDS=4;
 async function deploymentSnapshot(deploymentId:string){if(!process.env.DATABASE_URL)throw new Error("Missing DATABASE_URL");const db=new Client({connectionString:process.env.DATABASE_URL});await db.connect();try{const result=await db.query(`SELECT d.id,d.workspace_id,d.app_id,d.status,d.error_code,d.error_message,b.provider_deployment_id,b.status AS build_status,b.created_at AS build_created_at,COALESCE(p.max_build_minutes,15) AS max_build_minutes,COALESCE(p.max_health_attempts,3) AS max_health_attempts FROM deployments d LEFT JOIN deployment_builds b ON b.deployment_id=d.id LEFT JOIN app_resource_policies p ON p.app_id=d.app_id WHERE d.id=$1`,[deploymentId]);if(result.rowCount===0)throw new Error(`Deployment not found: ${deploymentId}`);return result.rows[0]}finally{await db.end()}}
 function buildElapsedMs(snapshot:any){const started=snapshot.build_created_at?new Date(snapshot.build_created_at).getTime():0;return started?Math.max(0,Date.now()-started):0}
 async function containTimedOutBuild(deploymentId:string){if(!process.env.DATABASE_URL)throw new Error("Missing DATABASE_URL");const db=new Client({connectionString:process.env.DATABASE_URL});await db.connect();try{const result=await db.query(`SELECT d.status,d.error_code,b.provider_deployment_id FROM deployments d LEFT JOIN deployment_builds b ON b.deployment_id=d.id WHERE d.id=$1`,[deploymentId]);if(result.rowCount===0)throw new Error(`Deployment not found: ${deploymentId}`);const row=result.rows[0];if(row.status==="FAILED"&&row.error_code==="BUILD_TIMEOUT"&&row.provider_deployment_id)return recordRemoteBuildContainment(db,{deploymentId,fromStatus:"FAILED",providerDeploymentId:row.provider_deployment_id,reason:"BUILD_TIMEOUT"});return null}finally{await db.end()}}
