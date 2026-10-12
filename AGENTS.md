@@ -33,6 +33,7 @@ Core capabilities:
 - Basic resource limits
 
 Later, only after the core is reliable:
+- Auto-redeploy on GitHub push (webhook-triggered, no manual "Redeploy" click) — queued by Kiran on 2026-10-12 as the next feature once current hardening is confirmed solid. Do not start this during the hardening phase below.
 - Custom domains
 - Rollback
 - Backups
