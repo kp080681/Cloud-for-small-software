@@ -338,6 +338,25 @@ main#main-content {
   gap: 12px;
 }
 
+.repo-right {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.app-link {
+  font-size: 13px;
+  color: var(--muted);
+  text-decoration: none;
+  border-bottom: 1px solid transparent;
+  white-space: nowrap;
+}
+
+.app-link:hover {
+  color: var(--ink);
+  border-bottom-color: var(--line);
+}
+
 .repo small {
   display: block;
   color: var(--muted);

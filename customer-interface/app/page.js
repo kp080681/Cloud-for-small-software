@@ -96,7 +96,14 @@ function Applications({ apps }) {
                 <small>{app.latestDeploymentStatus ? `Latest deployment ${app.latestDeploymentStatus}` : "No deployments yet"}</small>
               </span>
             </span>
-            <Status tone={app.liveUrl ? "live" : "neutral"}>{app.liveUrl ? "Live" : "Not live"}</Status>
+            <span className="repo-right">
+              {app.liveUrl ? (
+                <a className="app-link" href={app.liveUrl} target="_blank" rel="noreferrer">
+                  {app.liveUrl.replace(/^https?:\/\//, "")}
+                </a>
+              ) : null}
+              <Status tone={app.liveUrl ? "live" : "neutral"}>{app.liveUrl ? "Live" : "Not live"}</Status>
+            </span>
           </div>
         ))}
       </section>
