@@ -434,6 +434,15 @@ function AnalysisResult({
   const managed = requirements.filter((item) => item.managed);
   const optional = requirements.filter((item) => !item.required && !item.managed);
   const ready = configuration?.readiness === "READY_TO_DEPLOY";
+  // CONFIGURATION_REQUIRED is overloaded server-side: it means "still
+  // analysing, don't know the requirements yet" (blockingCode
+  // ANALYSIS_REQUIRED) just as much as it means "requirements are known and
+  // something's missing." Before analysis finishes, `requirements` is
+  // still empty too, so the two lines below used to read "No configuration
+  // required." directly above "Waiting on configuration" -- contradictory,
+  // and visible in every frame of a deployment recording (caught 2026-10-15
+  // reviewing a launch video). Tell them apart so the copy doesn't lie.
+  const stillAnalyzing = configuration?.blockingCode === "ANALYSIS_REQUIRED";
   const currentDeployment = deployment ?? analysis.currentDeployment ?? {
     deploymentId: analysis.deploymentId,
     appId: analysis.appId,
@@ -515,9 +524,9 @@ function AnalysisResult({
       </div>
       <div className="configuration-state">
         <strong>Configuration</strong>
-        {requirements.length ? null : <small>No configuration required.</small>}
+        {requirements.length || stillAnalyzing ? null : <small>No configuration required.</small>}
         {optional.map((item) => <small key={item.envKey}>{item.envKey} detected, optional / not blocking</small>)}
-        <small>{ready ? "Ready to deploy" : readinessLabel(configuration?.readiness)}</small>
+        <small>{ready ? "Ready to deploy" : stillAnalyzing ? "Still analysing — requirements aren't known yet" : readinessLabel(configuration?.readiness)}</small>
       </div>
       <div className="deployment-state">
         <div>
