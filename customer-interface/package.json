@@ -14,6 +14,7 @@
     "@modelcontextprotocol/server": "^2.0.0",
     "@octokit/auth-app": "^8.1.0",
     "@octokit/rest": "^22.0.0",
+    "geist": "1.7.2",
     "mcp-handler": "^2.2.0",
     "next": "^16.3.4",
     "pg": "^8.16.3",

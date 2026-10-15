@@ -9,6 +9,8 @@
   --warn: #9a5a12;
   --good: #126b3f;
   --shadow: 0 14px 40px rgba(34, 28, 20, 0.08);
+  --font-sans: var(--font-geist-sans), ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-mono: var(--font-geist-mono), ui-monospace, "SF Mono", Menlo, monospace;
   color-scheme: light;
 }
 
@@ -20,7 +22,9 @@ html {
   min-height: 100%;
   background: var(--bg);
   color: var(--ink);
-  font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-family: var(--font-sans);
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
 }
 
 body {
@@ -131,6 +135,12 @@ button:disabled {
   background: transparent;
 }
 
+.mono {
+  font-family: var(--font-mono);
+  font-feature-settings: "ss01" 1;
+  letter-spacing: -0.01em;
+}
+
 .muted {
   color: var(--muted);
 }
@@ -176,7 +186,8 @@ small,
   text-align: center;
   font-size: clamp(42px, 8vw, 78px);
   line-height: 0.95;
-  letter-spacing: 0;
+  letter-spacing: -0.03em;
+  font-weight: 650;
 }
 
 .panel {
@@ -332,6 +343,8 @@ main#main-content {
   margin: 0 0 6px;
   font-size: 34px;
   line-height: 1.1;
+  font-weight: 650;
+  letter-spacing: -0.02em;
 }
 
 .heading p {
@@ -546,8 +559,7 @@ main#main-content {
 .analysis-columns,
 .configuration-state,
 .deployment-state,
-.deployment-events,
-.live-result {
+.deployment-events {
   display: grid;
   gap: 10px;
 }
@@ -571,18 +583,27 @@ main#main-content {
   gap: 10px;
 }
 
-.analysis-progress .pulse-dot {
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  background: var(--accent);
+.thinking-dots {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
   flex-shrink: 0;
-  animation: pulse-dot 1.6s ease-in-out infinite;
 }
 
-@keyframes pulse-dot {
-  0%, 100% { opacity: 1; transform: scale(1); }
-  50% { opacity: 0.35; transform: scale(0.7); }
+.thinking-dots span {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--accent);
+  animation: thinking-bounce 1s ease-in-out infinite;
+}
+
+.thinking-dots span:nth-child(2) { animation-delay: 0.15s; }
+.thinking-dots span:nth-child(3) { animation-delay: 0.3s; }
+
+@keyframes thinking-bounce {
+  0%, 60%, 100% { opacity: 0.35; transform: translateY(0) scale(0.85); }
+  30% { opacity: 1; transform: translateY(-4px) scale(1); }
 }
 
 .analysis-progress-detail {
@@ -709,7 +730,7 @@ main#main-content {
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .analysis-progress .pulse-dot,
+  .thinking-dots span,
   .deploy-step.current .deploy-marker {
     animation: none;
   }
@@ -736,18 +757,101 @@ main#main-content {
   justify-self: start;
 }
 
-.live-result a {
+.live-reveal {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  border: 1px solid #bfe0d6;
+  background: #effaf4;
+  border-radius: 10px;
+  padding: 14px 16px;
+  animation: live-reveal-in 420ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+.live-reveal-check {
+  width: 30px;
+  height: 30px;
+  flex-shrink: 0;
+  color: var(--good);
+}
+
+.live-reveal-check circle {
+  stroke-dasharray: 70;
+  stroke-dashoffset: 70;
+  animation: live-reveal-ring 480ms ease-out 80ms forwards;
+}
+
+.live-reveal-check path {
+  stroke-dasharray: 16;
+  stroke-dashoffset: 16;
+  animation: live-reveal-check 280ms ease-out 420ms forwards;
+}
+
+.live-reveal-body {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.live-reveal-body strong {
+  color: var(--accent-strong);
+  font-size: 14px;
+}
+
+.live-reveal-url-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.live-reveal-url {
   color: var(--ink);
-  font-size: 13px;
-  font-weight: 700;
+  font-size: 14px;
+  font-weight: 600;
   text-decoration: none;
   border-bottom: 1px solid var(--line);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   transition: border-color 120ms ease, color 120ms ease;
 }
 
-.live-result a:hover {
+.live-reveal-url:hover {
   color: var(--accent-strong);
   border-bottom-color: var(--accent-strong);
+}
+
+.live-reveal-copy {
+  min-height: 26px;
+  font-size: 12px;
+  color: var(--muted);
+  flex-shrink: 0;
+}
+
+@keyframes live-reveal-in {
+  from { opacity: 0; transform: translateY(6px) scale(0.98); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+@keyframes live-reveal-ring {
+  to { stroke-dashoffset: 0; }
+}
+
+@keyframes live-reveal-check {
+  to { stroke-dashoffset: 0; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .live-reveal {
+    animation: none;
+  }
+
+  .live-reveal-check circle,
+  .live-reveal-check path {
+    animation: none;
+    stroke-dashoffset: 0;
+  }
 }
 
 .secret-field {

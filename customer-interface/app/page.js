@@ -92,13 +92,13 @@ function Applications({ apps }) {
               <span className="repo-icon">{app.name.slice(0, 1).toUpperCase()}</span>
               <span>
                 <strong>{app.name}</strong>
-                <small>{app.slug}</small>
+                <small className="mono">{app.slug}</small>
                 <small>{app.latestDeploymentStatus ? `Latest deployment ${app.latestDeploymentStatus}` : "No deployments yet"}</small>
               </span>
             </span>
             <span className="repo-right">
               {app.liveUrl ? (
-                <a className="app-link" href={app.liveUrl} target="_blank" rel="noreferrer">
+                <a className="app-link mono" href={app.liveUrl} target="_blank" rel="noreferrer">
                   {app.liveUrl.replace(/^https?:\/\//, "")}
                 </a>
               ) : null}

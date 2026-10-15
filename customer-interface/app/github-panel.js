@@ -279,7 +279,11 @@ export function GitHubPanel({ workspaceId, github }) {
 
                 {isAnalysing ? (
                   <div className="analysis-progress" role="status">
-                    <span className="pulse-dot" aria-hidden="true" />
+                    <span className="thinking-dots" aria-hidden="true">
+                      <span />
+                      <span />
+                      <span />
+                    </span>
                     <div>
                       <div>Analysing your repository</div>
                       <small className="analysis-progress-detail">Checking the source, framework, and what it needs to run</small>
@@ -355,6 +359,44 @@ export function GitHubPanel({ workspaceId, github }) {
         </div>
       ) : null}
     </section>
+  );
+}
+
+// The payoff moment: this is the only point in the whole flow where a
+// non-technical founder gets proof their app actually exists on the
+// internet. A plain line of text buried it. Give it real presence instead:
+// a checkmark that draws itself in, and the URL as the headline, not an
+// afterthought link below some smaller text.
+function LiveReveal({ url }) {
+  const [copied, setCopied] = useState(false);
+  const displayUrl = url.replace(/^https?:\/\//, "");
+
+  async function copyUrl() {
+    try {
+      await navigator.clipboard.writeText(url);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1800);
+    } catch {
+      // Clipboard permission denied or unavailable -- "Open app" still works.
+    }
+  }
+
+  return (
+    <div className="live-reveal">
+      <svg className="live-reveal-check" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+        <circle cx="12" cy="12" r="11" stroke="currentColor" strokeWidth="2" />
+        <path d="M7 12.5l3 3 7-7" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" />
+      </svg>
+      <div className="live-reveal-body">
+        <strong>Your app is live</strong>
+        <div className="live-reveal-url-row">
+          <a className="live-reveal-url mono" href={url} target="_blank" rel="noreferrer">{displayUrl}</a>
+          <button type="button" className="plain live-reveal-copy" onClick={copyUrl}>
+            {copied ? "Copied" : "Copy"}
+          </button>
+        </div>
+      </div>
+    </div>
   );
 }
 
@@ -499,12 +541,7 @@ function AnalysisResult({
             ))}
           </div>
         ) : null}
-        {live && currentDeployment.liveUrl ? (
-          <div className="live-result">
-            <small>Your app is live.</small>
-            <a href={currentDeployment.liveUrl} target="_blank" rel="noreferrer">Open app</a>
-          </div>
-        ) : null}
+        {live && currentDeployment.liveUrl ? <LiveReveal url={currentDeployment.liveUrl} /> : null}
         {failed && retryLimitReached ? (
           <small role="status">This deployment has been retried enough times without success. Review what went wrong before trying again.</small>
         ) : null}
