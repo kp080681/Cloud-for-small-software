@@ -52,12 +52,33 @@ button,
   gap: 8px;
   text-decoration: none;
   cursor: pointer;
+  transition: background-color 120ms ease, border-color 120ms ease, transform 80ms ease, box-shadow 120ms ease;
+}
+
+button:hover:not(:disabled),
+.button:hover {
+  border-color: #c7bca9;
+  background: #fff5e4;
+}
+
+button:active:not(:disabled),
+.button:active {
+  transform: scale(0.97);
+  transition-duration: 40ms;
+}
+
+button:focus-visible,
+.button:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 3px rgba(20, 108, 95, 0.25);
+  border-color: var(--accent);
 }
 
 button:disabled {
   cursor: not-allowed;
   color: #948b81;
   background: #f1ece4;
+  transform: none;
 }
 
 .button.primary {
@@ -65,6 +86,33 @@ button:disabled {
   background: var(--accent);
   color: white;
   border-color: var(--accent);
+  box-shadow: 0 1px 0 rgba(13, 75, 66, 0.4) inset;
+}
+
+.button.primary:hover {
+  background: #187a6b;
+  border-color: #187a6b;
+}
+
+.button.primary:active {
+  background: var(--accent-strong);
+  border-color: var(--accent-strong);
+}
+
+.button.primary:focus-visible {
+  box-shadow: 0 0 0 3px rgba(20, 108, 95, 0.35);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  button,
+  .button {
+    transition: none;
+  }
+
+  button:active:not(:disabled),
+  .button:active {
+    transform: none;
+  }
 }
 
 .plain {
@@ -72,6 +120,15 @@ button:disabled {
   background: transparent;
   border: 0;
   padding: 0 4px;
+}
+
+.plain:hover:not(:disabled) {
+  background: transparent;
+  color: var(--accent-strong);
+}
+
+.plain:active:not(:disabled) {
+  background: transparent;
 }
 
 .muted {
@@ -219,10 +276,15 @@ aside .nav-link {
   margin-bottom: 8px;
 }
 
-aside button.active {
+aside button.active,
+aside button.active:hover {
   color: white;
   border-color: var(--accent-strong);
   background: var(--accent-strong);
+}
+
+aside button.active:active {
+  transform: scale(0.97);
 }
 
 aside .nav-link {
@@ -679,6 +741,13 @@ main#main-content {
   font-size: 13px;
   font-weight: 700;
   text-decoration: none;
+  border-bottom: 1px solid var(--line);
+  transition: border-color 120ms ease, color 120ms ease;
+}
+
+.live-result a:hover {
+  color: var(--accent-strong);
+  border-bottom-color: var(--accent-strong);
 }
 
 .secret-field {
