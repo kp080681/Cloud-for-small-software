@@ -559,13 +559,16 @@ function AnalysisResult({
         </div>
     </>
   );
+  // Analysed but not started yet: nothing is running, so don't show an
+  // "Analyzing" step that looks stuck. (Found on a real Lovable deploy.)
+  const waitingToStart = currentDeployment.status === "ANALYZING" && !currentDeployment.active && !deploymentPending;
   const progressSections = (
     <>
       <div>
         <strong>Deployment</strong>
-        <small>{currentDeployment.stage}</small>
+        <small>{waitingToStart ? "Ready when you are. Tap Deploy to put it online." : currentDeployment.stage}</small>
       </div>
-      {!failed ? <DeployTracker status={currentDeployment.status} /> : null}
+      {!failed && !waitingToStart ? <DeployTracker status={currentDeployment.status} /> : null}
       {currentDeployment.events?.length ? (
         <div className="deployment-log">
           {currentDeployment.events.slice(-2).map((event) => (
