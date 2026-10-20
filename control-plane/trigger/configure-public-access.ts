@@ -25,7 +25,7 @@ const VERCEL_REQUEST_TIMEOUT_MS=25_000;
 async function vercelRequest(path:string,options:RequestInit={}){if(!process.env.VERCEL_TOKEN)throw new Error("Missing VERCEL_TOKEN");const controller=new AbortController();const timeoutHandle=setTimeout(()=>controller.abort(),VERCEL_REQUEST_TIMEOUT_MS);let response:Response;try{response=await fetch(`${API}${path}`,{...options,headers:{Authorization:`Bearer ${process.env.VERCEL_TOKEN}`,"Content-Type":"application/json",...(options.headers??{})},signal:controller.signal})}catch(error:any){if(error?.name==="AbortError"){const timeoutError:any=new Error(`Vercel API request timed out after ${VERCEL_REQUEST_TIMEOUT_MS}ms: ${path}`);timeoutError.isTimeout=true;throw timeoutError}throw error}finally{clearTimeout(timeoutHandle)}const text=await response.text();let body:any=null;if(text){try{body=JSON.parse(text)}catch{body=null}}if(!response.ok){const error:any=new Error(`Vercel API ${response.status} ${response.statusText}`);error.status=response.status;throw error}return body}
 async function vercelRequestOptional(path:string){try{return await vercelRequest(path)}catch(error:any){if(error?.status===404)return null;throw error}}
 function isVercelAuthRedirect(location:string|null){if(!location)return false;try{const u=new URL(location);return u.hostname==="vercel.com"||u.hostname.endsWith(".vercel.com")}catch{return /vercel\.com/i.test(location)}}
-async function anonymousCheck(url:string){assertSafeWorkloadUrl(url);const started=Date.now();const response=await fetch(url,publicAccessRequestInit({signal:AbortSignal.timeout(8000),userAgent:BROWSER_UA}));const latencyMs=Date.now()-started;const location=response.headers.get("location");let redirectUnsafe=false;if(location){try{assertSafeWorkloadRedirect(location,url)}catch{redirectUnsafe=true}}const vercelAuthRedirect=isVercelAuthRedirect(location);const publiclyReachable=!redirectUnsafe&&!vercelAuthRedirect&&response.status>=200&&response.status<400;try{await response.body?.cancel()}catch{}return{httpStatus:response.status,latencyMs,location,vercelAuthRedirect,redirectUnsafe,publiclyReachable}}
+async function anonymousCheck(url:string,safety:{allowedHostnameSuffixes?:string[]}={}){assertSafeWorkloadUrl(url,safety);const started=Date.now();const response=await fetch(url,publicAccessRequestInit({signal:AbortSignal.timeout(8000),userAgent:BROWSER_UA}));const latencyMs=Date.now()-started;const location=response.headers.get("location");let redirectUnsafe=false;if(location){try{assertSafeWorkloadRedirect(location,url,safety)}catch{redirectUnsafe=true}}const vercelAuthRedirect=isVercelAuthRedirect(location);const publiclyReachable=!redirectUnsafe&&!vercelAuthRedirect&&response.status>=200&&response.status<400;try{await response.body?.cancel()}catch{}return{httpStatus:response.status,latencyMs,location,vercelAuthRedirect,redirectUnsafe,publiclyReachable}}
 
 // Node: branded subdomain overlay. Every production deployment already gets
 // a verified, publicly-reachable provider URL (the checks above) — this is
@@ -61,6 +61,27 @@ async function ensureBrandedDomain(projectId:string,host:string):Promise<{attach
  }
 }
 
+async function brandedReachability(brandedUrl:string){
+ try{
+  const brandedProbe=await anonymousCheck(brandedUrl,{allowedHostnameSuffixes:[BRANDED_DOMAIN_APEX,"vercel.app"]});
+  return{publiclyReachable:brandedProbe.publiclyReachable,httpStatus:brandedProbe.httpStatus,reason:brandedProbe.publiclyReachable?null:"unexpected_response"};
+ }catch(error:any){
+  // DNS failure (ENOTFOUND), TLS not issued yet, timeout: all mean "not usable yet".
+  return{publiclyReachable:false,httpStatus:null,reason:String(error?.cause?.code??error?.code??error?.name??"request_failed")};
+ }
+}
+
+// If an earlier run already swapped live_url to a branded host that turns out
+// not to work, put the verified provider URL (recorded on PUBLIC_ACCESS_VERIFIED)
+// back, so the customer is never shown a link that doesn't open.
+async function restoreProviderUrlIfBranded(db:pg.Client,deploymentId:string,brandedUrl:string){
+ await db.query(`UPDATE deployments d SET live_url=e.check_url,updated_at=now()
+   FROM (SELECT metadata->>'checkUrl' AS check_url FROM deployment_events
+          WHERE deployment_id=$1 AND event_type='PUBLIC_ACCESS_VERIFIED' AND metadata->>'checkUrl' IS NOT NULL
+          ORDER BY created_at DESC LIMIT 1) e
+  WHERE d.id=$1 AND d.status='LIVE' AND d.live_url=$2`,[deploymentId,brandedUrl]);
+}
+
 // Best-effort: never allowed to affect the deployment's real LIVE status or
 // throw into the caller. A branded-domain hiccup (DNS not propagated yet,
 // slug collision, transient Vercel error) must never strand or fail a
@@ -73,11 +94,25 @@ async function attachBrandedDomainBestEffort(db:pg.Client,{deploymentId,provider
    await db.query(`INSERT INTO deployment_events (deployment_id,from_status,to_status,event_type,message,metadata) VALUES ($1,$2,$2,'BRANDED_DOMAIN_CONFLICT','Branded subdomain is already claimed by a different project',$3::jsonb)`,[deploymentId,fromStatus,JSON.stringify({brandedHost,providerProjectId})]);
    return;
   }
+  const brandedUrl=`https://${brandedHost}`;
   if(!outcome.verified){
    await db.query(`INSERT INTO deployment_events (deployment_id,from_status,to_status,event_type,message,metadata) VALUES ($1,$2,$2,'BRANDED_DOMAIN_PENDING','Branded subdomain attached but not yet verified',$3::jsonb)`,[deploymentId,fromStatus,JSON.stringify({brandedHost,providerProjectId})]);
+   await restoreProviderUrlIfBranded(db,deploymentId,brandedUrl);
    return;
   }
-  const brandedUrl=`https://${brandedHost}`;
+  // Vercel's `verified` only means domain OWNERSHIP is proven (utplava.dev is
+  // in the team) -- it says nothing about whether DNS actually routes the
+  // subdomain to Vercel. On 2026-10-20 every app showed <slug>.utplava.dev on
+  // the dashboard while every one of those hosts failed to resolve
+  // (NXDOMAIN): utplava.dev's DNS isn't delegated to Vercel, so the
+  // "verified" subdomains were never reachable. Only promote the branded URL
+  // once a real anonymous request to it actually succeeds.
+  const probe=await brandedReachability(brandedUrl);
+  if(!probe.publiclyReachable){
+   await db.query(`INSERT INTO deployment_events (deployment_id,from_status,to_status,event_type,message,metadata) VALUES ($1,$2,$2,'BRANDED_DOMAIN_PENDING','Branded subdomain is attached but not reachable yet (check utplava.dev DNS)',$3::jsonb)`,[deploymentId,fromStatus,JSON.stringify({brandedHost,providerProjectId,...probe})]);
+   await restoreProviderUrlIfBranded(db,deploymentId,brandedUrl);
+   return;
+  }
   await db.query(`UPDATE deployments SET live_url=$1,updated_at=now() WHERE id=$2 AND status='LIVE'`,[brandedUrl,deploymentId]);
   await db.query(`INSERT INTO deployment_events (deployment_id,from_status,to_status,event_type,message,metadata) VALUES ($1,$2,$2,'BRANDED_DOMAIN_ATTACHED','Branded subdomain verified and set as the live URL',$3::jsonb)`,[deploymentId,fromStatus,JSON.stringify({brandedHost,providerProjectId,brandedUrl})]);
  }catch(error:any){
