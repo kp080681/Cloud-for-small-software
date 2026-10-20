@@ -1,41 +1,10 @@
+import Link from "next/link";
 import { redirect } from "next/navigation";
 import { getCustomerShell } from "@/src/server/customer-shell.mjs";
 import { githubInstallCallbackRedirectPath } from "@/src/server/github-install-state.mjs";
-import { selectedWorkspaceCookieName } from "@/src/server/session.mjs";
-import { WorkspaceSelectForm, WorkspaceRenameForm } from "./workspace-forms.js";
-import { GitHubPanel } from "./github-panel.js";
-import { McpGrantsPanel } from "./mcp-grants-panel.js";
-import { AutoDeployToggle } from "./auto-deploy-toggle.js";
+import { Brand, Chrome, Status, appStatus, timeAgo, workspaceHref } from "./ui.js";
 
 export const dynamic = "force-dynamic";
-
-function Mark() {
-  return (
-    <svg className="mark" viewBox="0 0 24 24" aria-hidden="true">
-      <rect className="mark-tile" x="0.5" y="0.5" width="23" height="23" rx="5.4" />
-      <line className="mark-horizon" x1="3.75" y1="16.4" x2="20.25" y2="16.4" />
-      <path className="mark-sun" d="M 5,16.4 A 7,7 0 0 1 19,16.4 Z" />
-    </svg>
-  );
-}
-
-function Brand() {
-  return (
-    <div className="brand">
-      <Mark />
-      utplava
-    </div>
-  );
-}
-
-function Status({ children, tone = "neutral" }) {
-  return (
-    <span className={`status ${tone}`}>
-      <span className="dot" aria-hidden="true" />
-      {children}
-    </span>
-  );
-}
 
 function SignIn() {
   return (
@@ -53,64 +22,40 @@ function SignIn() {
   );
 }
 
-function Applications({ apps, workspaceId }) {
-  if (!apps.length) {
-    return (
-      <>
-        <div className="heading">
-          <div>
-            <h1>Applications</h1>
-            <p className="muted">Everything you build starts somewhere.</p>
-          </div>
-          <a className="button" href="#github-connection">Deploy an application</a>
-        </div>
-        <section className="panel empty">
-          <div className="symbol" aria-hidden="true">+</div>
-          <h2>Your workspace is ready.</h2>
-          <p className="muted">Connect a GitHub repository below to deploy your first app.</p>
-          <div className="empty-footer">
-            <span>GitHub source</span>
-            <span>Next.js + Node.js</span>
-            <span>PostgreSQL, when needed</span>
-          </div>
-        </section>
-      </>
-    );
+function appMeta(app, status) {
+  if (status.tone === "working") {
+    return app.latestDeploymentReason === "push" ? "New push · deploying now" : "Deploying now";
   }
+  if (status.tone === "failed") return "Last deployment failed";
+  if (app.liveUrl) {
+    const when = timeAgo(app.liveDeployedAt);
+    const branch = app.defaultBranch ? ` from ${app.defaultBranch}` : "";
+    return when ? `Deployed ${when}${branch}` : "Live";
+  }
+  return "Not deployed yet";
+}
 
+function AppList({ apps, workspaceId }) {
   return (
-    <>
-      <div className="heading">
-        <div>
-          <h1>Applications</h1>
-          <p className="muted">Your software, all in one place.</p>
-        </div>
-        <a className="button" href="#github-connection">Deploy an application</a>
-      </div>
-      <section className="panel application-list">
-        {apps.map((app) => (
-          <div className="repo" key={app.id}>
-            <span className="repo-left">
-              <span className="repo-icon">{app.name.slice(0, 1).toUpperCase()}</span>
-              <span>
-                <strong>{app.name}</strong>
-                <small className="mono">{app.slug}</small>
-                <small>{app.latestDeploymentStatus ? `Latest deployment ${app.latestDeploymentStatus}` : "No deployments yet"}</small>
-              </span>
+    <section className="panel app-list">
+      {apps.map((app) => {
+        const status = appStatus(app);
+        return (
+          <Link className="app-row" key={app.id} href={workspaceHref(`/apps/${app.id}`, workspaceId)}>
+            <span className="repo-icon">{app.name.slice(0, 1).toUpperCase()}</span>
+            <span className="app-row-name">
+              <strong>{app.name}</strong>
+              <small>{app.repositoryFullName || app.slug}</small>
             </span>
-            <span className="repo-right">
-              <AutoDeployToggle workspaceId={workspaceId} appId={app.id} initialEnabled={app.autoDeployOnPush} />
-              {app.liveUrl ? (
-                <a className="app-link mono" href={app.liveUrl} target="_blank" rel="noreferrer">
-                  {app.liveUrl.replace(/^https?:\/\//, "")}
-                </a>
-              ) : null}
-              <Status tone={app.liveUrl ? "live" : "neutral"}>{app.liveUrl ? "Live" : "Not live"}</Status>
+            <span className="app-row-url">
+              {app.liveUrl ? <span>{app.liveUrl.replace(/^https?:\/\//, "")}</span> : <span className="muted">Not live yet</span>}
+              <small>{appMeta(app, status)}</small>
             </span>
-          </div>
-        ))}
-      </section>
-    </>
+            <Status tone={status.tone}>{status.label}</Status>
+          </Link>
+        );
+      })}
+    </section>
   );
 }
 
@@ -128,45 +73,31 @@ export default async function Home({ searchParams }) {
   }
 
   const active = shell.currentWorkspace;
+  const newAppHref = workspaceHref("/new", active.id);
   return (
-    <>
-      <header>
-        <div className="header-left">
-          <Brand />
-          <WorkspaceSelectForm workspaces={shell.workspaces} selectedWorkspaceId={active.id} cookieName={selectedWorkspaceCookieName} />
+    <Chrome shell={shell} active="apps">
+      <div className="heading">
+        <div>
+          <h1>Apps</h1>
+          <p className="muted">Everything you&apos;ve put on the internet.</p>
         </div>
-        <div className="header-right">
-          <span className="prototype">V1</span>
-          <span className="avatar" aria-label="Signed in account">{shell.user.login.slice(0, 2).toUpperCase()}</span>
-          <form action="/api/auth/sign-out" method="post">
-            <button className="plain">Sign out</button>
-          </form>
-        </div>
-      </header>
-      <div className="shell">
-        <aside>
-          <button className="active">Applications</button>
-          <div className="nav-caption">Workspace</div>
-          <a className="nav-link" href="#github-connection">GitHub connection</a>
-          <a className="nav-link" href="#mcp-connections">Connected apps</a>
-        </aside>
-        <main id="main-content">
-          <div className="crumb"><span>Applications</span></div>
-          <Applications apps={shell.apps} workspaceId={active.id} />
-          <section className="panel section-gap">
-            <div className="row">
-              <div>
-                <h2>Workspace</h2>
-                <small>{active.name}</small>
-              </div>
-              <Status>Authorized</Status>
-            </div>
-            <WorkspaceRenameForm workspace={active} />
-          </section>
-          <GitHubPanel workspaceId={active.id} github={shell.github} />
-          <McpGrantsPanel workspaceId={active.id} />
-        </main>
+        <Link className="button" href={newAppHref}>New app</Link>
       </div>
-    </>
+      {shell.apps.length ? (
+        <AppList apps={shell.apps} workspaceId={active.id} />
+      ) : (
+        <section className="panel empty">
+          <div className="symbol" aria-hidden="true">+</div>
+          <h2>Your workspace is ready.</h2>
+          <p className="muted">Pick a GitHub repository and Utplava will put it on the internet.</p>
+          <Link className="button" href={newAppHref}>Deploy your first app</Link>
+          <div className="empty-footer">
+            <span>GitHub source</span>
+            <span>Next.js + Node.js</span>
+            <span>PostgreSQL, when needed</span>
+          </div>
+        </section>
+      )}
+    </Chrome>
   );
 }

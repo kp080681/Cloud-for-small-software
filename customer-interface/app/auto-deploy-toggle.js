@@ -3,7 +3,9 @@
 import { useState } from "react";
 
 // Per-app switch for push-to-deploy. On by default for every app.
-export function AutoDeployToggle({ workspaceId, appId, initialEnabled }) {
+// labelMode "name" shows "Deploy on push"; "state" shows On / Off (used
+// where the setting is already named next to it, e.g. the app page).
+export function AutoDeployToggle({ workspaceId, appId, initialEnabled, labelMode = "name" }) {
   const [enabled, setEnabled] = useState(initialEnabled);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState(false);
@@ -38,7 +40,7 @@ export function AutoDeployToggle({ workspaceId, appId, initialEnabled }) {
       title={enabled ? "Pushing to the main branch redeploys this app" : "Pushes to GitHub won't redeploy this app"}
     >
       <span className="auto-deploy-track" aria-hidden="true"><span className="auto-deploy-thumb" /></span>
-      <span>{error ? "Couldn't save" : "Deploy on push"}</span>
+      <span>{error ? "Couldn't save" : labelMode === "state" ? (enabled ? "On" : "Off") : "Deploy on push"}</span>
     </button>
   );
 }

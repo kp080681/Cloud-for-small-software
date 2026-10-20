@@ -32,7 +32,20 @@ export function safeApplication(row) {
     latestDeploymentStatus: row.latest_deployment_status ?? null,
     liveUrl: row.live_url ?? null,
     autoDeployOnPush: row.auto_deploy_on_push !== false,
+    repositoryId: row.repository_id ?? null,
+    repositoryFullName: row.repository_full_name ?? null,
+    defaultBranch: row.default_branch ?? null,
+    latestDeploymentReason: row.latest_deployment_reason ?? null,
+    latestDeploymentStarted: Boolean(row.latest_deployment_started),
+    liveCommitSha: row.live_commit_sha ?? null,
+    liveDeployedAt: toIso(row.live_deployed_at),
   };
+}
+
+function toIso(value) {
+  if (!value) return null;
+  const date = value instanceof Date ? value : new Date(value);
+  return Number.isNaN(date.getTime()) ? null : date.toISOString();
 }
 
 export async function upsertCustomerIdentity(db, identity) {
@@ -201,12 +214,20 @@ export async function listWorkspaceApplications(db, { customerId, workspaceId })
         a.runtime,
         a.database_required,
         a.auto_deploy_on_push,
+        a.repository_id,
+        r.full_name AS repository_full_name,
+        r.default_branch,
         latest.status AS latest_deployment_status,
-        live.live_url
+        latest.deployment_reason AS latest_deployment_reason,
+        latest.started AS latest_deployment_started,
+        live.live_url,
+        live.source_commit_sha AS live_commit_sha,
+        live.deployed_at AS live_deployed_at
       FROM customer_workspace_memberships cwm
       JOIN apps a ON a.workspace_id = cwm.workspace_id
+      LEFT JOIN github_repositories r ON r.id = a.repository_id
       LEFT JOIN LATERAL (
-        SELECT d.status
+        SELECT d.status, d.deployment_reason, (d.orchestrator_run_id IS NOT NULL) AS started
         FROM deployments d
         WHERE d.app_id = a.id
         ORDER BY d.created_at DESC
@@ -216,7 +237,7 @@ export async function listWorkspaceApplications(db, { customerId, workspaceId })
       -- deployment: while a redeploy (e.g. from a push) is running, the
       -- previous version is still serving and still has a working link.
       LEFT JOIN LATERAL (
-        SELECT d.live_url
+        SELECT d.live_url, d.source_commit_sha, COALESCE(d.finished_at, d.updated_at) AS deployed_at
         FROM deployments d
         WHERE d.app_id = a.id
           AND d.status = 'LIVE'
@@ -255,4 +276,40 @@ export async function setAppAutoDeployOnPush(db, { customerId, workspaceId, appI
     throw Object.assign(new Error("Application not found in this workspace."), { status: 404, code: "APP_NOT_FOUND" });
   }
   return { appId: result.rows[0].id, autoDeployOnPush: result.rows[0].auto_deploy_on_push };
+}
+
+// Recent deployments of one app, newest first, for its history list. Only
+// customer-safe fields; scoped by workspace membership like everything else.
+export async function listAppDeployments(db, { customerId, workspaceId, appId, limit = 15 }) {
+  const result = await db.query(
+    `SELECT d.id,
+            d.status,
+            d.deployment_reason,
+            d.source_commit_sha,
+            d.source_branch,
+            d.error_code,
+            d.created_at,
+            d.finished_at
+       FROM customer_workspace_memberships m
+       JOIN apps a ON a.workspace_id = m.workspace_id
+       JOIN deployments d ON d.app_id = a.id
+      WHERE m.customer_identity_id = $1
+        AND m.workspace_id = $2
+        AND a.id = $3
+        AND a.deleted_at IS NULL
+      ORDER BY d.created_at DESC
+      LIMIT $4`,
+    [customerId, workspaceId, appId, limit],
+  );
+  return result.rows.map((row) => ({
+    id: row.id,
+    status: row.status,
+    reason: row.deployment_reason ?? "initial",
+    commitSha: row.source_commit_sha ?? null,
+    shortCommitSha: row.source_commit_sha ? String(row.source_commit_sha).slice(0, 7) : null,
+    branch: row.source_branch ?? null,
+    errorCode: row.error_code ?? null,
+    createdAt: toIso(row.created_at),
+    finishedAt: toIso(row.finished_at),
+  }));
 }

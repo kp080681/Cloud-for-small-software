@@ -276,6 +276,13 @@ test("application listing is workspace-scoped and returns only customer-safe fie
       latestDeploymentStatus: "LIVE",
       liveUrl: "https://example.test",
       autoDeployOnPush: true,
+      repositoryId: null,
+      repositoryFullName: null,
+      defaultBranch: null,
+      latestDeploymentReason: null,
+      latestDeploymentStarted: false,
+      liveCommitSha: null,
+      liveDeployedAt: null,
     },
   ]);
   assert.equal(JSON.stringify(apps).includes("must-not-leak"), false);

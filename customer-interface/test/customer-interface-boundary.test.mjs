@@ -116,13 +116,27 @@ test("workspace and session APIs use the authenticated customer-session guard", 
   }
 });
 
-test("sidebar GitHub connection control targets the rendered GitHub panel", async () => {
-  const page = await readFile(path.join(root, "app", "page.js"), "utf8");
-  const panel = await readFile(path.join(root, "app", "github-panel.js"), "utf8");
+test("navigation reaches every dashboard surface: apps, app page, new app, settings", async () => {
+  const ui = await readFile(path.join(root, "app", "ui.js"), "utf8");
+  const home = await readFile(path.join(root, "app", "page.js"), "utf8");
+  const appPage = await readFile(path.join(root, "app", "apps", "[appId]", "page.js"), "utf8");
+  const newPage = await readFile(path.join(root, "app", "new", "page.js"), "utf8");
+  const settings = await readFile(path.join(root, "app", "settings", "page.js"), "utf8");
 
-  assert.equal(page.includes('href="#github-connection"'), true);
-  assert.equal(page.includes("<button disabled>GitHub connection</button>"), false);
-  assert.equal(panel.includes('id="github-connection"'), true);
+  // sidebar + account menu
+  assert.equal(ui.includes('workspaceHref("/", workspaceId)'), true, "sidebar links to Apps");
+  assert.equal(ui.includes('workspaceHref("/settings", workspaceId)'), true, "sidebar links to Settings");
+  assert.equal(ui.includes('action="/api/auth/sign-out"'), true, "sign out is reachable");
+  // home links each app to its page and offers New app
+  assert.equal(home.includes("/apps/${app.id}"), true);
+  assert.equal(home.includes('workspaceHref("/new", active.id)'), true);
+  // the deploy/analyse/secret logic is reused, not duplicated
+  assert.equal(appPage.includes('mode="app"'), true);
+  assert.equal(newPage.includes('mode="new"'), true);
+  // settings keeps workspace rename, GitHub install and connected AI tools
+  assert.equal(settings.includes("WorkspaceRenameForm"), true);
+  assert.equal(settings.includes('action="/api/github/install/start"'), true);
+  assert.equal(settings.includes("McpGrantsPanel"), true);
 });
 
 test("PostgreSQL client is bundled for Vercel server runtime resolution", async () => {

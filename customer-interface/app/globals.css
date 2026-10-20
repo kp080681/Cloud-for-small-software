@@ -1156,14 +1156,19 @@ main#main-content {
   header {
     height: auto;
     min-height: 60px;
-    flex-wrap: wrap;
-    padding: 12px 16px;
+    padding: 10px 16px;
+    gap: 12px;
   }
 
-  .header-left,
+  .header-left {
+    flex: 1;
+    min-width: 0;
+    gap: 10px;
+  }
+
   .header-right {
-    width: 100%;
-    justify-content: space-between;
+    width: auto;
+    flex-shrink: 0;
   }
 
   .workspace-select {
@@ -1337,4 +1342,391 @@ main#main-content {
   .deployment-details > summary::before {
     transition: none;
   }
+}
+
+/* ======================================================================
+   Simplified structure (2026-10-20): home = apps only; each app has its
+   own page; adding an app and workspace settings live on their own pages.
+   ====================================================================== */
+
+/* user menu (initials) replaces the loose Sign out button */
+.user-menu {
+  position: relative;
+}
+
+.user-menu > summary {
+  list-style: none;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border-radius: 999px;
+}
+
+.user-menu > summary::-webkit-details-marker {
+  display: none;
+}
+
+.user-menu > summary:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 3px var(--brand-ring);
+}
+
+.user-menu-panel {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 8px);
+  min-width: 200px;
+  padding: 6px;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius);
+  background: var(--panel-raised);
+  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.55);
+  display: grid;
+  gap: 2px;
+  z-index: 20;
+}
+
+.user-menu-panel .who {
+  padding: 8px 10px 10px;
+  border-bottom: 1px solid var(--line);
+  margin-bottom: 4px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.user-menu-panel .who strong {
+  display: block;
+  color: var(--ink);
+  font-size: 13px;
+}
+
+.menu-item,
+.user-menu-panel button {
+  width: 100%;
+  min-height: 34px;
+  justify-content: flex-start;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--ink-soft);
+  padding: 0 10px;
+  font-size: 13px;
+  display: flex;
+  align-items: center;
+  text-decoration: none;
+}
+
+.menu-item:hover,
+.user-menu-panel button:hover:not(:disabled) {
+  background: var(--panel);
+  color: var(--ink);
+}
+
+/* sidebar links behave like the active button */
+aside .nav-link.active {
+  color: var(--ink);
+  border-color: var(--line);
+  background: var(--panel-raised);
+}
+
+/* ---- home: app list ---------------------------------------------------- */
+
+.app-list {
+  padding: 6px;
+  display: grid;
+}
+
+.app-row {
+  display: grid;
+  grid-template-columns: 32px minmax(0, 1.2fr) minmax(0, 1.4fr) 104px;
+  align-items: center;
+  gap: 16px;
+  padding: 14px;
+  border-radius: 8px;
+  color: inherit;
+  text-decoration: none;
+  border-bottom: 1px solid var(--line);
+  transition: background-color 120ms ease;
+}
+
+.app-row:last-child {
+  border-bottom: 0;
+}
+
+.app-row:hover {
+  background: var(--panel-raised);
+}
+
+.app-row:focus-visible {
+  outline: none;
+  box-shadow: inset 0 0 0 2px var(--brand-ring);
+}
+
+.app-row-name {
+  min-width: 0;
+}
+
+.app-row > .status {
+  justify-self: end;
+}
+
+.app-row-name strong {
+  display: block;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.app-row-name small,
+.app-row-url small {
+  display: block;
+  color: var(--faint);
+  font-size: 12px;
+  margin-top: 2px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.app-row-url {
+  min-width: 0;
+  font-family: var(--font-mono);
+  font-size: 13px;
+  color: var(--ink-soft);
+}
+
+.app-row-url span {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.app-row-url small {
+  font-family: var(--font-sans);
+}
+
+.status.working {
+  color: var(--brand);
+  border-color: rgba(240, 184, 96, 0.35);
+  background: var(--brand-tint);
+}
+
+.status.working .dot {
+  animation: live-breathe-amber 1.4s ease-in-out infinite;
+}
+
+.status.failed {
+  color: var(--warn);
+  border-color: var(--warn-line);
+  background: var(--warn-tint);
+}
+
+@keyframes live-breathe-amber {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.35; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .status.working .dot {
+    animation: none;
+  }
+}
+
+/* ---- app page ---------------------------------------------------------- */
+
+.crumb a {
+  color: var(--muted);
+  text-decoration: none;
+}
+
+.crumb a:hover {
+  color: var(--ink);
+}
+
+.crumb .sep {
+  margin: 0 8px;
+  color: var(--faint);
+}
+
+.title-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 6px;
+}
+
+.title-row h1 {
+  margin: 0;
+  font-size: 30px;
+  font-weight: 650;
+  letter-spacing: -0.035em;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
+.title-actions {
+  display: flex;
+  gap: 10px;
+}
+
+.title-sub {
+  margin: 0 0 22px;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.card {
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--panel);
+  padding: 20px 22px;
+  margin-top: 16px;
+}
+
+.card > h2 {
+  margin: 0 0 4px;
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.card > .card-sub {
+  margin: 0 0 14px;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.setting-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+}
+
+.setting-row strong {
+  display: block;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.setting-row small {
+  color: var(--muted);
+}
+
+.history {
+  display: grid;
+}
+
+.history-row {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 14px;
+  padding: 11px 0;
+  border-bottom: 1px solid var(--line);
+  font-size: 13px;
+}
+
+.history-row:last-child {
+  border-bottom: 0;
+}
+
+.history-row .what {
+  min-width: 0;
+  color: var(--ink-soft);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.history-row .what .mono {
+  color: var(--ink);
+}
+
+.history-row .when {
+  color: var(--faint);
+  white-space: nowrap;
+}
+
+.history-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--faint);
+}
+
+.history-dot.live { background: var(--good); }
+.history-dot.working { background: var(--brand); }
+.history-dot.failed { background: var(--warn); }
+
+/* the reused deploy panel, embedded on an app page without its own chrome */
+.github-panel.embedded {
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+  padding: 0;
+  margin: 0;
+}
+
+.github-panel.embedded .analysis-item {
+  border: 0;
+  padding: 0;
+  background: transparent;
+}
+
+.card .analysis-columns strong {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+@media (max-width: 760px) {
+  .app-row {
+    grid-template-columns: 32px minmax(0, 1fr) auto;
+  }
+
+  .app-row-url {
+    grid-column: 2 / -1;
+    grid-row: 2;
+  }
+
+  .title-row {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+}
+
+.settled-check {
+  margin-left: auto;
+  font-size: 13px;
+}
+
+.workspace-form.settings {
+  margin-top: 0;
+}
+
+.card .helptext a,
+.empty a.button {
+  color: var(--ink);
+}
+
+.empty .button {
+  margin-top: 6px;
+}
+
+.title-actions form {
+  margin: 0;
+}
+
+.github-panel.embedded .analysis-list {
+  gap: 0;
+}
+
+/* the MCP panel keeps its own markup; make it read as a settings card */
+#mcp-connections {
+  margin-top: 16px;
 }

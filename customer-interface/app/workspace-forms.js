@@ -44,7 +44,7 @@ export function WorkspaceRenameForm({ workspace }) {
   }
 
   return (
-    <form className="workspace-form" onSubmit={submit}>
+    <form className="workspace-form settings" onSubmit={submit}>
       <label htmlFor="workspace-name">Workspace name</label>
       <div className="inline-form">
         <input

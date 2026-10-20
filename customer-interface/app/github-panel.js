@@ -14,7 +14,14 @@ import {
   stageLabelForStatus,
 } from "@/src/shared/deployment-ui-state.mjs";
 
-export function GitHubPanel({ workspaceId, github }) {
+// mode "full": the original all-in-one panel.
+// mode "app": embedded on an app's own page; shows only that app's
+//   repository (live link, redeploy, progress, secrets, details).
+// mode "new": the New app page; GitHub connection + repository picker +
+//   analyse/deploy for repositories that weren't live when the page opened
+//   (captured once, so an app that goes live here doesn't vanish mid-reveal).
+export function GitHubPanel({ workspaceId, github, mode = "full", repositoryId = null, hideRepositoryIds = [] }) {
+  const [hiddenAtOpen] = useState(() => new Set(hideRepositoryIds));
   const router = useRouter();
   const [isPending, startTransition] = useTransition();
   const [repositoryState, setRepositoryState] = useState(null);
@@ -236,8 +243,17 @@ export function GitHubPanel({ workspaceId, github }) {
     (github.configurationStatuses ?? []).map((configuration) => [configuration.appId, configuration]),
   );
 
+  const embedded = mode === "app";
+  const visibleRepositories = github.selectedRepositories.filter((repository) =>
+    mode === "app" ? repository.id === repositoryId
+      : mode === "new" ? !hiddenAtOpen.has(repository.id)
+      : true,
+  );
+
   return (
-    <section id="github-connection" className="panel section-gap github-panel">
+    <section id="github-connection" className={`panel section-gap github-panel${embedded ? " embedded" : ""}`}>
+      {embedded ? null : (
+      <>
       <div className="row">
         <div>
           <h2>GitHub</h2>
@@ -252,30 +268,34 @@ export function GitHubPanel({ workspaceId, github }) {
       <div className="github-actions">
         <form action="/api/github/install/start" method="post">
           <input type="hidden" name="workspaceId" value={workspaceId} />
-          <button type="submit">Connect GitHub</button>
+          <button type="submit">{github.connected ? "Manage GitHub access" : "Connect GitHub"}</button>
         </form>
         <button type="button" onClick={loadRepositories} disabled={!github.connected || isPending}>
-          List repositories
+          {mode === "new" ? "Choose a repository" : "List repositories"}
         </button>
       </div>
+      </>
+      )}
 
-      {github.selectedRepositories.length ? (
+      {visibleRepositories.length ? (
         <div className="analysis-list">
-          {github.selectedRepositories.map((repository) => {
+          {visibleRepositories.map((repository) => {
             const transient = analysisState[repository.id];
             const analysis = transient?.analysis ?? analysesByRepository.get(repository.id);
             const isAnalysing = Boolean(transient?.pending);
             return (
               <div className="analysis-item" key={repository.id}>
-                <div className="row">
-                  <div>
-                    <h3>{repository.name}</h3>
-                    <small>{repository.fullName} - {repository.defaultBranch}</small>
+                {embedded ? null : (
+                  <div className="row">
+                    <div>
+                      <h3>{repository.name}</h3>
+                      <small>{repository.fullName} - {repository.defaultBranch}</small>
+                    </div>
+                    <button type="button" onClick={() => analyseRepository(repository.id)} disabled={isPending || isAnalysing}>
+                      {analysis ? "Analyse again" : "Analyse project"}
+                    </button>
                   </div>
-                  <button type="button" onClick={() => analyseRepository(repository.id)} disabled={isPending || isAnalysing}>
-                    {analysis ? "Analyse again" : "Analyse project"}
-                  </button>
-                </div>
+                )}
 
                 {isAnalysing ? (
                   <div className="analysis-progress" role="status">
@@ -311,6 +331,8 @@ export function GitHubPanel({ workspaceId, github }) {
                     redeployApp={redeployApp}
                     loadDeploymentProgress={loadDeploymentProgress}
                     isPending={isPending}
+                    checkForNewCode={embedded ? () => analyseRepository(repository.id) : null}
+                    checkingForNewCode={isAnalysing}
                   />
                 ) : null}
               </div>
@@ -325,7 +347,7 @@ export function GitHubPanel({ workspaceId, github }) {
         <p className="helptext">Choose which repositories Utplava can access in GitHub, then return here.</p>
       ) : null}
 
-      {groups.length ? (
+      {!embedded && groups.length ? (
         <div className="repository-list">
           {groups.map((group) => (
             <div key={group.installation.githubInstallationId} className="repository-group">
@@ -414,6 +436,8 @@ function AnalysisResult({
   redeployApp,
   loadDeploymentProgress,
   isPending,
+  checkForNewCode = null,
+  checkingForNewCode = false,
 }) {
   const displayName = {
     nextjs: "Next.js",
@@ -567,6 +591,11 @@ function AnalysisResult({
           <small className="muted">
             {analysis.branch} · {analysis.shortCommitSha || "pending"}
           </small>
+          {checkForNewCode ? (
+            <button type="button" className="plain settled-check" onClick={checkForNewCode} disabled={isPending || checkingForNewCode}>
+              {checkingForNewCode ? "Checking GitHub…" : "Check GitHub for new code"}
+            </button>
+          ) : null}
         </div>
         {deploymentError ? <small role="status">{deploymentError}</small> : null}
         <details className="deployment-details">
