@@ -1,4 +1,4 @@
-import { task } from "@trigger.dev/sdk";
+import { task, tasks } from "@trigger.dev/sdk";
 import pg from "pg";
 import { publicAccessRecoveryAction } from "../src/deployment-recovery-rules.mjs";
 import { assertSafeWorkloadRedirect, assertSafeWorkloadUrl, publicAccessRequestInit } from "../src/workload-http.mjs";
@@ -86,19 +86,19 @@ async function restoreProviderUrlIfBranded(db:pg.Client,deploymentId:string,bran
 // throw into the caller. A branded-domain hiccup (DNS not propagated yet,
 // slug collision, transient Vercel error) must never strand or fail a
 // deployment that is otherwise genuinely live on its real provider URL.
-async function attachBrandedDomainBestEffort(db:pg.Client,{deploymentId,providerProjectId,slug,fromStatus}:{deploymentId:string;providerProjectId:string;slug:string;fromStatus:string}){
+async function attachBrandedDomainBestEffort(db:pg.Client,{deploymentId,providerProjectId,slug,fromStatus}:{deploymentId:string;providerProjectId:string;slug:string;fromStatus:string}):Promise<"attached"|"pending"|"conflict"|"error">{
  const brandedHost=brandedHostForSlug(slug);
  try{
   const outcome=await ensureBrandedDomain(providerProjectId,brandedHost);
   if(outcome.conflict){
    await db.query(`INSERT INTO deployment_events (deployment_id,from_status,to_status,event_type,message,metadata) VALUES ($1,$2,$2,'BRANDED_DOMAIN_CONFLICT','Branded subdomain is already claimed by a different project',$3::jsonb)`,[deploymentId,fromStatus,JSON.stringify({brandedHost,providerProjectId})]);
-   return;
+   return "conflict";
   }
   const brandedUrl=`https://${brandedHost}`;
   if(!outcome.verified){
    await db.query(`INSERT INTO deployment_events (deployment_id,from_status,to_status,event_type,message,metadata) VALUES ($1,$2,$2,'BRANDED_DOMAIN_PENDING','Branded subdomain attached but not yet verified',$3::jsonb)`,[deploymentId,fromStatus,JSON.stringify({brandedHost,providerProjectId})]);
    await restoreProviderUrlIfBranded(db,deploymentId,brandedUrl);
-   return;
+   return "pending";
   }
   // Vercel's `verified` only means domain OWNERSHIP is proven (utplava.dev is
   // in the team) -- it says nothing about whether DNS actually routes the
@@ -111,20 +111,37 @@ async function attachBrandedDomainBestEffort(db:pg.Client,{deploymentId,provider
   if(!probe.publiclyReachable){
    await db.query(`INSERT INTO deployment_events (deployment_id,from_status,to_status,event_type,message,metadata) VALUES ($1,$2,$2,'BRANDED_DOMAIN_PENDING','Branded subdomain is attached but not reachable yet (check utplava.dev DNS)',$3::jsonb)`,[deploymentId,fromStatus,JSON.stringify({brandedHost,providerProjectId,...probe})]);
    await restoreProviderUrlIfBranded(db,deploymentId,brandedUrl);
-   return;
+   return "pending";
   }
   await db.query(`UPDATE deployments SET live_url=$1,updated_at=now() WHERE id=$2 AND status='LIVE'`,[brandedUrl,deploymentId]);
   await db.query(`INSERT INTO deployment_events (deployment_id,from_status,to_status,event_type,message,metadata) VALUES ($1,$2,$2,'BRANDED_DOMAIN_ATTACHED','Branded subdomain verified and set as the live URL',$3::jsonb)`,[deploymentId,fromStatus,JSON.stringify({brandedHost,providerProjectId,brandedUrl})]);
+  return "attached";
  }catch(error:any){
   await db.query(`INSERT INTO deployment_events (deployment_id,from_status,to_status,event_type,message,metadata) VALUES ($1,$2,$2,'BRANDED_DOMAIN_ERROR','Attaching the branded subdomain hit an unexpected error',$3::jsonb)`,[deploymentId,fromStatus,JSON.stringify({brandedHost,providerProjectId,errorMessage:String(error?.message??error),errorName:error?.name??null})]).catch(()=>{});
+  return "error";
  }
 }
 
-export const configurePublicAccess=task({id:"ssc-control-plane-configure-public-access",retry:{maxAttempts:2,minTimeoutInMs:2000,maxTimeoutInMs:8000,factor:2,randomize:false},run:async(payload:{deploymentId:string})=>{
+// Vercel issues a subdomain's TLS certificate on its own schedule after DNS
+// resolves -- minutes usually, occasionally hours (2026-10-20: ~2h). The
+// branded URL is only promoted once it really opens, so without a re-check
+// an app would keep its provider URL until its next deploy. Re-run this same
+// task (its LIVE-replay path only re-attempts the branded overlay) on a
+// widening schedule, ~2.5h in total, then stop. Idempotency keys per attempt
+// keep repeated replays from stacking duplicate chains.
+const BRANDED_RECHECK_DELAYS=["2m","5m","15m","30m","1h"];
+async function scheduleBrandedRecheck(deploymentId:string,attempt:number){
+ if(attempt>=BRANDED_RECHECK_DELAYS.length)return;
+ try{
+  await tasks.trigger("ssc-control-plane-configure-public-access",{deploymentId,brandedRecheck:attempt+1},{delay:BRANDED_RECHECK_DELAYS[attempt],idempotencyKey:`branded-recheck-${deploymentId}-${attempt+1}`});
+ }catch{/* best-effort: never let scheduling a re-check affect a live deployment */}
+}
+
+export const configurePublicAccess=task({id:"ssc-control-plane-configure-public-access",retry:{maxAttempts:2,minTimeoutInMs:2000,maxTimeoutInMs:8000,factor:2,randomize:false},run:async(payload:{deploymentId:string;brandedRecheck?:number})=>{
  if(!process.env.DATABASE_URL)throw new Error("Missing DATABASE_URL");const db=new Client({connectionString:process.env.DATABASE_URL});await db.connect();
  try{
   const result=await db.query(`SELECT d.id,d.status,d.live_url,d.source_commit_sha,a.slug,rt.provider,rt.provider_project_id,b.provider_deployment_id,b.provider_deployment_url,b.status AS build_status FROM deployments d JOIN apps a ON a.id=d.app_id JOIN app_runtimes rt ON rt.app_id=d.app_id JOIN deployment_builds b ON b.deployment_id=d.id WHERE d.id=$1`,[payload.deploymentId]);
-  if(result.rowCount===0)throw new Error(`Deployment/runtime/build not found: ${payload.deploymentId}`);const row=result.rows[0];if(row.provider!=="vercel")throw new Error(`Unsupported runtime provider: ${row.provider}`);const action=publicAccessRecoveryAction(row.status);if(action.action==="terminal-noop")return{result:"NODE_04_18_TERMINAL_NOOP",deploymentId:payload.deploymentId,status:row.status,publiclyReachable:false,responseBodyStored:false,target:"production"};if(action.action==="live-replay-noop"){await attachBrandedDomainBestEffort(db,{deploymentId:payload.deploymentId,providerProjectId:row.provider_project_id,slug:row.slug,fromStatus:"LIVE"});return{result:"NODE_04_18_PUBLIC_ACCESS_REPLAY_NOOP",deploymentId:payload.deploymentId,providerProjectId:row.provider_project_id,providerDeploymentId:row.provider_deployment_id,checkUrl:row.live_url,publiclyReachable:true,status:"LIVE",responseBodyStored:false,target:"production"}}if(action.action!=="verify-public-access")throw new Error(`Production public verification requires HEALTH_CHECKING or LIVE; current status is ${row.status}`);
+  if(result.rowCount===0)throw new Error(`Deployment/runtime/build not found: ${payload.deploymentId}`);const row=result.rows[0];if(row.provider!=="vercel")throw new Error(`Unsupported runtime provider: ${row.provider}`);const action=publicAccessRecoveryAction(row.status);if(action.action==="terminal-noop")return{result:"NODE_04_18_TERMINAL_NOOP",deploymentId:payload.deploymentId,status:row.status,publiclyReachable:false,responseBodyStored:false,target:"production"};if(action.action==="live-replay-noop"){const branded=await attachBrandedDomainBestEffort(db,{deploymentId:payload.deploymentId,providerProjectId:row.provider_project_id,slug:row.slug,fromStatus:"LIVE"});if(branded==="pending"||branded==="error")await scheduleBrandedRecheck(payload.deploymentId,payload.brandedRecheck??0);return{result:"NODE_04_18_PUBLIC_ACCESS_REPLAY_NOOP",deploymentId:payload.deploymentId,providerProjectId:row.provider_project_id,providerDeploymentId:row.provider_deployment_id,checkUrl:row.live_url,publiclyReachable:true,status:"LIVE",responseBodyStored:false,target:"production"}}if(action.action!=="verify-public-access")throw new Error(`Production public verification requires HEALTH_CHECKING or LIVE; current status is ${row.status}`);
   const providerDeployment=await vercelRequest(`/v13/deployments/${encodeURIComponent(row.provider_deployment_id)}${teamQuery()}`);
   const deploymentIdentity=verifyProviderDeploymentIdentity(providerDeployment,{deploymentId:row.id,providerDeploymentId:row.provider_deployment_id,providerProjectId:row.provider_project_id});
   if(deploymentIdentity.status!==ProviderDeploymentIdentityStatus.MATCH)throw new Error(`Provider deployment identity could not be verified: ${deploymentIdentity.status}`);
@@ -150,7 +167,7 @@ export const configurePublicAccess=task({id:"ssc-control-plane-configure-public-
   const checkUrl=`https://${productionHost}`;
   if(publicBinding.status!==PublicBindingStatus.MATCH){await db.query(`INSERT INTO deployment_events (deployment_id,from_status,to_status,event_type,message,metadata) VALUES ($1,$2,$2,'PUBLIC_BINDING_UNVERIFIED','Production URL is not proven to point at the verified provider deployment',$3::jsonb)`,[payload.deploymentId,row.status,JSON.stringify({checkUrl,providerDeploymentId:row.provider_deployment_id,providerProjectId:row.provider_project_id,publicBindingStatus:publicBinding.status,aliasDeploymentId:publicBinding.aliasDeploymentId??null,aliasProjectId:publicBinding.aliasProjectId??null,listedOnDeployment:publicBinding.listedOnDeployment??false,responseBodyStored:false,target:"production"})]);return{result:"NODE_15R_7_PUBLIC_BINDING_UNVERIFIED",deploymentId:payload.deploymentId,providerProjectId:row.provider_project_id,providerDeploymentId:row.provider_deployment_id,checkUrl,publicBindingStatus:publicBinding.status,publiclyReachable:false,status:row.status,responseBodyStored:false,target:"production"}}
   const checked=await anonymousCheck(checkUrl);const redirectLocationHost=checked.location?(()=>{try{return new URL(checked.location,checkUrl).hostname}catch{return null}})():null;
-  if(checked.publiclyReachable){await db.query("BEGIN");try{await db.query(`UPDATE deployments SET status='LIVE',live_url=$1,error_code=NULL,error_message=NULL,finished_at=now(),updated_at=now() WHERE id=$2 AND status='HEALTH_CHECKING'`,[checkUrl,payload.deploymentId]);await db.query(`INSERT INTO deployment_events (deployment_id,from_status,to_status,event_type,message,metadata) VALUES ($1,'HEALTH_CHECKING','LIVE','PUBLIC_ACCESS_VERIFIED','Healthy production deployment is publicly reachable',$2::jsonb)`,[payload.deploymentId,JSON.stringify({checkUrl,httpStatus:checked.httpStatus,latencyMs:checked.latencyMs,redirectLocationHost,vercelAuthRedirect:checked.vercelAuthRedirect,redirectUnsafe:checked.redirectUnsafe,responseBodyStored:false,providerDeploymentId:row.provider_deployment_id,providerProjectId:row.provider_project_id,sourceIdentityStatus:sourceIdentity.status,publicBindingStatus:publicBinding.status,target:"production"})]);await db.query("COMMIT")}catch(error){await db.query("ROLLBACK");throw error}await attachBrandedDomainBestEffort(db,{deploymentId:payload.deploymentId,providerProjectId:row.provider_project_id,slug:row.slug,fromStatus:"LIVE"})}
+  if(checked.publiclyReachable){await db.query("BEGIN");try{await db.query(`UPDATE deployments SET status='LIVE',live_url=$1,error_code=NULL,error_message=NULL,finished_at=now(),updated_at=now() WHERE id=$2 AND status='HEALTH_CHECKING'`,[checkUrl,payload.deploymentId]);await db.query(`INSERT INTO deployment_events (deployment_id,from_status,to_status,event_type,message,metadata) VALUES ($1,'HEALTH_CHECKING','LIVE','PUBLIC_ACCESS_VERIFIED','Healthy production deployment is publicly reachable',$2::jsonb)`,[payload.deploymentId,JSON.stringify({checkUrl,httpStatus:checked.httpStatus,latencyMs:checked.latencyMs,redirectLocationHost,vercelAuthRedirect:checked.vercelAuthRedirect,redirectUnsafe:checked.redirectUnsafe,responseBodyStored:false,providerDeploymentId:row.provider_deployment_id,providerProjectId:row.provider_project_id,sourceIdentityStatus:sourceIdentity.status,publicBindingStatus:publicBinding.status,target:"production"})]);await db.query("COMMIT")}catch(error){await db.query("ROLLBACK");throw error}const branded=await attachBrandedDomainBestEffort(db,{deploymentId:payload.deploymentId,providerProjectId:row.provider_project_id,slug:row.slug,fromStatus:"LIVE"});if(branded==="pending"||branded==="error")await scheduleBrandedRecheck(payload.deploymentId,0)}
   else{await db.query(`INSERT INTO deployment_events (deployment_id,from_status,to_status,event_type,message,metadata) VALUES ($1,$2,$2,'PUBLIC_ACCESS_BLOCKED','Production deployment is not publicly reachable without provider authentication',$3::jsonb)`,[payload.deploymentId,row.status,JSON.stringify({checkUrl,httpStatus:checked.httpStatus,latencyMs:checked.latencyMs,redirectLocationHost,vercelAuthRedirect:checked.vercelAuthRedirect,redirectUnsafe:checked.redirectUnsafe,responseBodyStored:false})])}
   return{result:checked.publiclyReachable?"NODE_04_11_PUBLIC_ACCESS_VERIFIED":"NODE_04_11_PUBLIC_ACCESS_BLOCKED",deploymentId:payload.deploymentId,providerProjectId:row.provider_project_id,providerDeploymentId:row.provider_deployment_id,checkUrl,httpStatus:checked.httpStatus,latencyMs:checked.latencyMs,redirectLocationHost,vercelAuthRedirect:checked.vercelAuthRedirect,redirectUnsafe:checked.redirectUnsafe,publiclyReachable:checked.publiclyReachable,status:checked.publiclyReachable?"LIVE":row.status,responseBodyStored:false,sourceIdentityStatus:sourceIdentity.status,publicBindingStatus:publicBinding.status,target:"production"};
  }catch(error:any){
