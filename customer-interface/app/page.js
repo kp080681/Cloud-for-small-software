@@ -2,7 +2,7 @@ import Link from "next/link";
 import { redirect } from "next/navigation";
 import { getCustomerShell } from "@/src/server/customer-shell.mjs";
 import { githubInstallCallbackRedirectPath } from "@/src/server/github-install-state.mjs";
-import { Brand, Chrome, Status, appStatus, timeAgo, workspaceHref } from "./ui.js";
+import { Brand, Chrome, Status, appStatus, isProviderUrl, timeAgo, workspaceHref } from "./ui.js";
 
 export const dynamic = "force-dynamic";
 
@@ -48,7 +48,13 @@ function AppList({ apps, workspaceId }) {
               <small>{app.repositoryFullName || app.slug}</small>
             </span>
             <span className="app-row-url">
-              {app.liveUrl ? <span>{app.liveUrl.replace(/^https?:\/\//, "")}</span> : <span className="muted">Not live yet</span>}
+              {app.liveUrl && !isProviderUrl(app.liveUrl) ? (
+                <span>{app.liveUrl.replace(/^https?:\/\//, "")}</span>
+              ) : app.liveUrl ? (
+                <span className="muted">Setting up utplava.dev link</span>
+              ) : (
+                <span className="muted">Not live yet</span>
+              )}
               <small>{appMeta(app, status)}</small>
             </span>
             <Status tone={status.tone}>{status.label}</Status>

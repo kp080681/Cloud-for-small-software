@@ -92,6 +92,9 @@ async function restoreProviderUrlIfBranded(db:pg.Client,deploymentId:string,bran
   WHERE d.id=$1 AND d.status='LIVE' AND d.live_url=$2`,[deploymentId,brandedUrl]);
 }
 
+const BRANDED_PRE_LIVE_ATTEMPTS=7;
+const BRANDED_PRE_LIVE_INTERVAL_MS=10_000;
+
 // Pre-LIVE branded resolution: attach (idempotent) + ownership verified +
 // a real anonymous request succeeds -> return the branded URL. Never throws.
 async function resolveBrandedUrlBeforeLive({providerProjectId,slug}:{providerProjectId:string;slug:string}):Promise<{url:string|null;host:string}>{
@@ -100,8 +103,16 @@ async function resolveBrandedUrlBeforeLive({providerProjectId,slug}:{providerPro
   const outcome=await ensureBrandedDomain(providerProjectId,host);
   if(!outcome.attached||outcome.conflict||!outcome.verified)return{url:null,host};
   const url=`https://${host}`;
-  const probe=await brandedReachability(url);
-  return{url:probe.publiclyReachable?url:null,host};
+  // The certificate for a brand-new subdomain can still be issuing at this
+  // point (it is requested at provisioning, usually done during the build).
+  // Wait up to ~60s for it rather than showing the customer a vercel.app
+  // address; the scheduled re-checks still cover anything slower.
+  for(let attempt=0;attempt<BRANDED_PRE_LIVE_ATTEMPTS;attempt++){
+   const probe=await brandedReachability(url);
+   if(probe.publiclyReachable)return{url,host};
+   if(attempt<BRANDED_PRE_LIVE_ATTEMPTS-1)await new Promise((resolve)=>setTimeout(resolve,BRANDED_PRE_LIVE_INTERVAL_MS));
+  }
+  return{url:null,host};
  }catch{return{url:null,host}}
 }
 

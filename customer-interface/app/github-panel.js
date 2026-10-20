@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useTransition } from "react";
+import { useEffect, useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import {
   deploymentStageIndex,
@@ -389,9 +389,37 @@ export function GitHubPanel({ workspaceId, github, mode = "full", repositoryId =
 // internet. A plain line of text buried it. Give it real presence instead:
 // a checkmark that draws itself in, and the URL as the headline, not an
 // afterthought link below some smaller text.
-function LiveReveal({ url }) {
+// The provider's own address (…vercel.app) is only a stand-in while the
+// app's utplava.dev certificate finishes issuing; customers should never see
+// it as "their link". Until the branded link is ready we say so, keep the app
+// one tap away, and re-check quietly until the real link arrives.
+function isProviderUrl(url) {
+  try {
+    return new URL(url).hostname.endsWith(".vercel.app");
+  } catch {
+    return false;
+  }
+}
+
+function LiveReveal({ url, onRefresh = null }) {
   const [copied, setCopied] = useState(false);
+  const temporary = isProviderUrl(url);
   const displayUrl = url.replace(/^https?:\/\//, "");
+
+  // Latest callback in a ref: the parent passes a new function every render,
+  // which must not restart the timer (or its ~10 minute cap).
+  const refreshRef = useRef(onRefresh);
+  refreshRef.current = onRefresh;
+  useEffect(() => {
+    if (!temporary) return undefined;
+    let tries = 0;
+    const timer = setInterval(() => {
+      tries += 1;
+      refreshRef.current?.();
+      if (tries >= 40) clearInterval(timer);
+    }, 15000);
+    return () => clearInterval(timer);
+  }, [temporary]);
 
   async function copyUrl() {
     try {
@@ -411,12 +439,19 @@ function LiveReveal({ url }) {
       </svg>
       <div className="live-reveal-body">
         <strong>Your app is live</strong>
-        <div className="live-reveal-url-row">
-          <a className="live-reveal-url mono" href={url} target="_blank" rel="noreferrer">{displayUrl}</a>
-          <button type="button" className="plain live-reveal-copy" onClick={copyUrl}>
-            {copied ? "Copied" : "Copy"}
-          </button>
-        </div>
+        {temporary ? (
+          <div className="live-reveal-url-row">
+            <span className="live-reveal-pending" role="status">Setting up your utplava.dev link. Usually a minute or two.</span>
+            <a className="plain live-reveal-copy" href={url} target="_blank" rel="noreferrer">Open app</a>
+          </div>
+        ) : (
+          <div className="live-reveal-url-row">
+            <a className="live-reveal-url mono" href={url} target="_blank" rel="noreferrer">{displayUrl}</a>
+            <button type="button" className="plain live-reveal-copy" onClick={copyUrl}>
+              {copied ? "Copied" : "Copy"}
+            </button>
+          </div>
+        )}
       </div>
     </div>
   );
@@ -582,7 +617,7 @@ function AnalysisResult({
   if (settled) {
     return (
       <div className="analysis-result settled">
-        {currentDeployment.liveUrl ? <LiveReveal url={currentDeployment.liveUrl} /> : null}
+        {currentDeployment.liveUrl ? <LiveReveal url={currentDeployment.liveUrl} onRefresh={() => loadDeploymentProgress(currentDeployment.appId, currentDeployment.deploymentId, { silent: true })} /> : null}
         <div className="settled-actions">
           <button
             type="button"
@@ -637,7 +672,7 @@ function AnalysisResult({
             ))}
           </div>
         ) : null}
-        {live && currentDeployment.liveUrl ? <LiveReveal url={currentDeployment.liveUrl} /> : null}
+        {live && currentDeployment.liveUrl ? <LiveReveal url={currentDeployment.liveUrl} onRefresh={() => loadDeploymentProgress(currentDeployment.appId, currentDeployment.deploymentId, { silent: true })} /> : null}
         {failed && retryLimitReached ? (
           <small role="status">This deployment has been retried enough times without success. Review what went wrong before trying again.</small>
         ) : null}

@@ -1758,3 +1758,9 @@ button.danger:disabled {
   border-color: var(--line);
   color: var(--faint);
 }
+
+/* live card while the utplava.dev link is still being set up */
+.live-reveal-pending {
+  color: var(--ink-soft);
+  font-size: 14px;
+}

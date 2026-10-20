@@ -59,6 +59,16 @@ export function appStatus(app) {
   return { tone: "neutral", label: "Not live" };
 }
 
+// True for the hosting provider's own address (…vercel.app), which is only a
+// stand-in until the app's utplava.dev link is ready. Never show it as text.
+export function isProviderUrl(url) {
+  try {
+    return new URL(url).hostname.endsWith(".vercel.app");
+  } catch {
+    return false;
+  }
+}
+
 export function timeAgo(iso, now = Date.now()) {
   if (!iso) return null;
   const seconds = Math.max(0, Math.round((now - new Date(iso).getTime()) / 1000));

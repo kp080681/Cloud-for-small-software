@@ -9,6 +9,7 @@ import { vercelRootDirectory } from "../src/source-boundary.mjs";
 import {
   assertProviderProjectNotOwnedByAnotherApp,
   assertRemoteProjectMatchesSscApp,
+  sanitizedProjectSlug,
   sscProviderProjectName,
 } from "../src/provider-project-identity.mjs";
 import { assertRuntimeMatchesDeployment } from "../src/tenant-boundary.mjs";
@@ -53,6 +54,19 @@ async function request(path:string,options:RequestInit={}){
 async function getRuntime(name:string){try{return await request(`/v9/projects/${encodeURIComponent(name)}${teamQuery()}`)}catch(error:any){if(error.status===404)return null;throw error}}
 async function enforceRuntimeGitAutoDeployments(project:any){const result=await ensureGitAutoDeploymentsDisabled({project,projectId:project?.id,trustedVercelProjectResponse:true});if(!result.ok)throw new Error(`Vercel Git auto-deploy containment failed: ${result.result}`);return result}
 async function ensureRuntime({name,rootDirectory,workspaceId,appId,slug}:{name:string;repository:string;rootDirectory:string;workspaceId:string;appId:string;slug:string}){const existing=await getRuntime(name);const action=runtimeRecoveryAction({localRuntime:null,remoteProject:existing});if(action.action==="reconcile-remote-project"){assertRemoteProjectMatchesSscApp(existing,{workspaceId,appId,slug});const gitAutoDeploy=await enforceRuntimeGitAutoDeployments(existing);return{resource:existing,created:false,reconciled:true,gitAutoDeploy};}const normalizedRootDirectory=vercelRootDirectory(rootDirectory);try{const created=await request(`/v11/projects${teamQuery()}`,{method:"POST",body:JSON.stringify({name,framework:"nextjs",...(normalizedRootDirectory?{rootDirectory:normalizedRootDirectory}:{}),...sscManagedProjectGitSettings()})});assertRemoteProjectMatchesSscApp(created,{workspaceId,appId,slug});const gitAutoDeploy=await enforceRuntimeGitAutoDeployments(created);return{resource:created,created:true,reconciled:false,gitAutoDeploy}}catch(error:any){if([400,409].includes(error.status)){const reconciled=await getRuntime(name);if(reconciled){assertRemoteProjectMatchesSscApp(reconciled,{workspaceId,appId,slug});const gitAutoDeploy=await enforceRuntimeGitAutoDeployments(reconciled);return{resource:reconciled,created:false,reconciled:true,gitAutoDeploy}}}throw error}}
+
+
+// Attach <slug>.utplava.dev as soon as the project exists, so Vercel issues
+// its HTTPS certificate while the app is still building, not after it goes
+// LIVE with the customer already looking at the link (2026-10-20: a first
+// deploy showed the ssc-….vercel.app address because the certificate was
+// still being issued at LIVE time). Best effort and silent: an "already
+// attached" 400 or a slug-collision 409 is fine here, because
+// configure-public-access re-attaches, checks ownership and verifies.
+const BRANDED_DOMAIN_APEX=process.env.BRANDED_DOMAIN_APEX||"utplava.dev";
+async function attachBrandedDomainEarly(projectId:string,slug:string){
+ try{await request(`/v10/projects/${encodeURIComponent(projectId)}/domains${teamQuery()}`,{method:"POST",body:JSON.stringify({name:`${sanitizedProjectSlug(slug)}.${BRANDED_DOMAIN_APEX}`})})}catch{}
+}
 
 export const provisionRuntime=task({
  id:"ssc-control-plane-provision-runtime", retry:{maxAttempts:3,minTimeoutInMs:2000,maxTimeoutInMs:10000,factor:2,randomize:false},
@@ -118,5 +132,6 @@ async function runProvisionRuntime(db:pg.Client,payload:{deploymentId:string}){
    await db.query(`UPDATE deployments SET runtime_project_id=$1,status='BUILDING',updated_at=now() WHERE id=$2 AND status='PROVISIONING'`,[project.id,payload.deploymentId]);
    await db.query(`INSERT INTO deployment_events (deployment_id,from_status,to_status,event_type,message,metadata) VALUES ($1,'PROVISIONING','BUILDING','RUNTIME_PROVISIONED','Application runtime provisioned or reconciled',$2::jsonb)`,[payload.deploymentId,JSON.stringify({provider:"vercel",providerProjectId:project.id,providerProjectName:project.name??projectName,reconciliationKey,created:provisioned.created,reconciled:provisioned.reconciled,skipGitConnectDuringLink:true,gitAutoDeploy:provisioned.gitAutoDeploy})]);await db.query("COMMIT");
   }catch(error){await db.query("ROLLBACK");throw error}
+  await attachBrandedDomainEarly(project.id,deployment.slug);
   return{result:"NODE_04_8_RUNTIME_PROVISIONED",deploymentId:payload.deploymentId,status:"BUILDING",provider:"vercel",providerProjectId:project.id,providerProjectName:project.name??projectName,reconciliationKey,created:provisioned.created,reconciled:provisioned.reconciled,skipGitConnectDuringLink:true,gitAutoDeploy:provisioned.gitAutoDeploy};
 }
