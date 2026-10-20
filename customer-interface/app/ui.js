@@ -50,6 +50,7 @@ const RUNNING = new Set(["ANALYZING", "QUEUED", "PROVISIONING", "BUILDING", "DEP
 // "Not live": the previous version is still serving.
 export function appStatus(app) {
   const latest = app.latestDeploymentStatus;
+  if (latest === "DELETING") return { tone: "working", label: "Deleting" };
   // An ANALYZING deployment only counts once it has actually been started
   // (an analysed-but-never-deployed commit is not "deploying").
   if (latest && RUNNING.has(latest) && (latest !== "ANALYZING" || app.latestDeploymentStarted)) return { tone: "working", label: "Deploying" };

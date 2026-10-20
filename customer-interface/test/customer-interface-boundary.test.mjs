@@ -38,7 +38,9 @@ test("customer interface does not import provider lifecycle operations", async (
     "execute-build",
     "provision-runtime",
     "provision-database",
-    "delete-app",
+    // The engine's delete task source. Starting it by id over the Trigger
+    // API (customer-deployments.mjs) is allowed, like orchestrate-deployment.
+    "trigger/delete-app",
     "deployment_provider_operations",
     "app_runtimes",
     "deployment_builds",

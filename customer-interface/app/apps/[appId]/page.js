@@ -6,6 +6,7 @@ import { listAppDeployments } from "@/src/server/customer-workspaces.mjs";
 import { friendlyErrorMessage } from "@/src/shared/deployment-ui-state.mjs";
 import { GitHubPanel } from "../../github-panel.js";
 import { AutoDeployToggle } from "../../auto-deploy-toggle.js";
+import { DeleteAppCard } from "../../delete-app-card.js";
 import { Chrome, Status, appStatus, timeAgo, workspaceHref } from "../../ui.js";
 
 export const dynamic = "force-dynamic";
@@ -122,6 +123,8 @@ export default async function AppPage({ params, searchParams }) {
           <p className="muted fine">No deployments yet.</p>
         )}
       </section>
+
+      <DeleteAppCard workspaceId={active.id} appId={app.id} appName={app.name} homeHref={workspaceHref("/", active.id)} />
     </Chrome>
   );
 }

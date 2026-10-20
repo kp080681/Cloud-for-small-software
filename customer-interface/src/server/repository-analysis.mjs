@@ -502,10 +502,22 @@ async function createOrReuseApp(db, { workspaceId, repository, source }) {
       FOR UPDATE`,
     [workspaceId, slug],
   );
-  if (existingSlug.rows[0]) {
+  if (existingSlug.rows[0]?.deleted_at) {
+    // A fully deleted app (its hosting is already gone) keeps its row for
+    // history but releases its name, so the person can add the same repo,
+    // or another with the same name, again.
+    await db.query(
+      `UPDATE apps
+          SET slug = slug || '--deleted-' || substr(replace(id::text, '-', ''), 1, 8),
+              updated_at = now()
+        WHERE id = $1
+          AND deleted_at IS NOT NULL`,
+      [existingSlug.rows[0].id],
+    );
+  } else if (existingSlug.rows[0]) {
     throw Object.assign(new Error("Application slug already belongs to another repository."), {
       status: 409,
-      code: existingSlug.rows[0].deleted_at ? "APP_SLUG_DELETED_REQUIRES_RECOVERY" : "APP_SLUG_CONFLICT",
+      code: "APP_SLUG_CONFLICT",
     });
   }
 

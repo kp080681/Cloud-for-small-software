@@ -1730,3 +1730,31 @@ aside .nav-link.active {
 #mcp-connections {
   margin-top: 16px;
 }
+
+/* ---- delete app ------------------------------------------------------ */
+.danger-card {
+  border-color: rgba(242, 85, 90, 0.28);
+}
+
+.danger-card .card-sub strong {
+  color: var(--ink);
+  font-weight: 600;
+}
+
+button.danger {
+  background: rgba(242, 85, 90, 0.12);
+  border-color: rgba(242, 85, 90, 0.45);
+  color: #ff8b8f;
+}
+
+button.danger:hover:not(:disabled) {
+  background: rgba(242, 85, 90, 0.2);
+  border-color: rgba(242, 85, 90, 0.7);
+  color: #ffb1b3;
+}
+
+button.danger:disabled {
+  background: var(--panel);
+  border-color: var(--line);
+  color: var(--faint);
+}

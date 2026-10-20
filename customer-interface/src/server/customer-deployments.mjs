@@ -561,6 +561,41 @@ function triggerBaseUrl(env) {
   return (env.TRIGGER_API_URL || "https://api.trigger.dev").replace(/\/$/, "");
 }
 
+// Starts the engine task that removes an app (see customer-app-deletion.mjs
+// for who may ask). Lives here because this module is the only one allowed
+// to hold the Trigger secret.
+const DELETE_TASK_ID = "ssc-control-plane-delete-app";
+
+export async function triggerAppDeletionTask({ appId, workspaceId, deletionKey, env = process.env, fetchImpl = fetch, now = Date.now() }) {
+  const secret = env.TRIGGER_SECRET_KEY;
+  if (!secret) {
+    throw Object.assign(new Error("TRIGGER_SECRET_KEY is required."), { status: 500, code: "TRIGGER_SECRET_KEY_REQUIRED" });
+  }
+  const response = await fetchImpl(`${triggerBaseUrl(env)}/api/v1/tasks/${encodeURIComponent(DELETE_TASK_ID)}/trigger`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${secret}`,
+      "Content-Type": "application/json",
+      "x-trigger-api-version": "2025-07-16",
+      "x-trigger-source": "utplava-customer-interface",
+    },
+    body: JSON.stringify({
+      payload: { appId, workspaceId, deletionKey },
+      options: {
+        payloadType: "application/json",
+        // Collapses double-clicks within a minute; a later retry of a
+        // failed deletion gets a fresh run with the same deletion key.
+        idempotencyKey: `${deletionKey}:${Math.floor(now / 60_000)}`,
+        tags: [`app:${appId}`, "customer-delete"],
+      },
+    }),
+  });
+  if (!response.ok) {
+    throw Object.assign(new Error("App deletion could not be started."), { status: 502, code: "APP_DELETION_START_FAILED" });
+  }
+  return response.json().catch(() => ({}));
+}
+
 export async function triggerDeploymentOrchestrator({
   deploymentId,
   idempotencyKey = deploymentStartIdempotencyKey(deploymentId),
