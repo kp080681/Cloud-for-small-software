@@ -287,8 +287,9 @@ test("managed database naming uses workspace/app identity and not slug alone", (
 });
 
 test("workspace managed database limit is conservative and enforced before intent insert", async () => {
-  assert.equal(DEFAULT_WORKSPACE_RESOURCE_POLICY.maxManagedDatabases, 3);
-  assert.equal(managedDatabaseLimitDecision({ managedDatabaseCount: 3, policy: DEFAULT_WORKSPACE_RESOURCE_POLICY }).code, "WORKSPACE_MANAGED_DATABASE_LIMIT_REACHED");
+  assert.equal(DEFAULT_WORKSPACE_RESOURCE_POLICY.maxManagedDatabases, 1);
+  assert.equal(managedDatabaseLimitDecision({ managedDatabaseCount: 1, policy: DEFAULT_WORKSPACE_RESOURCE_POLICY }).code, "WORKSPACE_MANAGED_DATABASE_LIMIT_REACHED");
+  assert.equal(managedDatabaseLimitDecision({ managedDatabaseCount: 0, policy: DEFAULT_WORKSPACE_RESOURCE_POLICY }).allowed, true);
   const db = intentDb({ activeManagedDatabases: 3, maxManagedDatabases: 3 });
   const result = await ensureManagedDatabaseIntent(db, deployment);
   assert.equal(result.action, "blocked");

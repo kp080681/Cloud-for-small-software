@@ -4,12 +4,14 @@
 // copy was left at the old V1 ceiling (3) when the engine was raised to 25,
 // which meant workspaces first created from the dashboard were silently
 // capped at 3 apps. Fixed 2026-10-20; see control-plane/db/023.
+// Free limits for new workspaces since public launch (2026-10-20): see the
+// engine's copy for the reasoning. Existing workspaces keep their stored row.
 export const DEFAULT_WORKSPACE_RESOURCE_POLICY = Object.freeze({
-  maxActiveApps: 25,
-  maxActiveDeployments: 25,
+  maxActiveApps: 3,
+  maxActiveDeployments: 5,
   maxActiveDeploymentsPerApp: 1,
   maxConcurrentProviderOperations: 2,
-  maxManagedDatabases: 3,
+  maxManagedDatabases: 1,
 });
 
 export class WorkspaceResourcePolicyError extends Error {

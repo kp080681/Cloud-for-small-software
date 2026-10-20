@@ -23,12 +23,21 @@ export const ACTIVE_PROVIDER_OPERATION_STATUSES = Object.freeze([
 // separate, still-unraised axis — this was purely an arbitrary headcount
 // cap). 25 gives real headroom for a small agency's own client roster
 // without being effectively unbounded.
+//
+// Lowered for NEW workspaces on 2026-10-20 when Utplava opened to the
+// public (utplava.dev: "Deploy your app now"): every app is a real Vercel
+// project and every managed database a real Neon project on the founder's
+// accounts, so a stranger's free workspace gets 3 apps and 1 database
+// (Kiran's choice). Existing workspaces keep whatever is stored in
+// workspace_resource_policies (the founder's own are at 25); raise a
+// specific workspace by updating its row. maxActiveDeployments is about
+// concurrency, not cost, so it stays a little above the app limit.
 export const DEFAULT_WORKSPACE_RESOURCE_POLICY = Object.freeze({
-  maxActiveApps: 25,
-  maxActiveDeployments: 25,
+  maxActiveApps: 3,
+  maxActiveDeployments: 5,
   maxActiveDeploymentsPerApp: 1,
   maxConcurrentProviderOperations: 2,
-  maxManagedDatabases: 3,
+  maxManagedDatabases: 1,
 });
 
 export class WorkspaceResourcePolicyError extends Error {

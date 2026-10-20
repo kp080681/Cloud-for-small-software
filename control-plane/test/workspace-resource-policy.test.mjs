@@ -72,13 +72,13 @@ function buildOperationDb({ existingOperation = null, activeOperations = 0, work
 
 const policy = DEFAULT_WORKSPACE_RESOURCE_POLICY;
 
-test("workspace defaults are explicit and give real headroom for a small agency's own client roster", () => {
+test("new-workspace defaults are the public free limits (3 apps, 1 database)", () => {
   assert.deepEqual(policy, {
-    maxActiveApps: 25,
-    maxActiveDeployments: 25,
+    maxActiveApps: 3,
+    maxActiveDeployments: 5,
     maxActiveDeploymentsPerApp: 1,
     maxConcurrentProviderOperations: 2,
-    maxManagedDatabases: 3,
+    maxManagedDatabases: 1,
   });
   assert.deepEqual(ACTIVE_DEPLOYMENT_STATES, [
     "DRAFT",
@@ -94,14 +94,14 @@ test("workspace defaults are explicit and give real headroom for a small agency'
 });
 
 test("workspace at active-app limit is refused and deleted apps are excluded by production count", () => {
-  assert.deepEqual(activeAppLimitDecision({ activeAppCount: 25, policy }), {
+  assert.deepEqual(activeAppLimitDecision({ activeAppCount: 3, policy }), {
     allowed: false,
     code: "WORKSPACE_APP_LIMIT_REACHED",
-    observed: 25,
-    limit: 25,
-    message: "Workspace active app limit reached: 25/25.",
+    observed: 3,
+    limit: 3,
+    message: "Workspace active app limit reached: 3/3.",
   });
-  assert.deepEqual(activeAppLimitDecision({ activeAppCount: 24, policy }), { allowed: true });
+  assert.deepEqual(activeAppLimitDecision({ activeAppCount: 2, policy }), { allowed: true });
 
   const createAppDeployment = readControlPlaneFile("scripts/create-app-deployment.mjs");
   const workspacePolicy = readControlPlaneFile("src/workspace-resource-policy.mjs");
@@ -120,13 +120,13 @@ test("app and workspace active deployment limits refuse new deployment admission
 
   assert.deepEqual(activeDeploymentLimitDecision({
     appActiveDeploymentCount: 0,
-    workspaceActiveDeploymentCount: 25,
+    workspaceActiveDeploymentCount: 5,
     policy,
   }).code, "WORKSPACE_DEPLOYMENT_LIMIT_REACHED");
 
   assert.deepEqual(activeDeploymentLimitDecision({
     appActiveDeploymentCount: 0,
-    workspaceActiveDeploymentCount: 24,
+    workspaceActiveDeploymentCount: 4,
     policy,
   }), { allowed: true });
 });

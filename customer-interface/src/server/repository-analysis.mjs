@@ -804,6 +804,7 @@ function customerMessageForCode(code) {
     UNSUPPORTED_PROJECT: "This repository is not a supported V1 Next.js or Node.js project.",
     APP_SLUG_CONFLICT: "This application name is already used by another repository in the workspace.",
     WORKSPACE_RATE_LIMIT_REACHED: "You've hit the limit for this action right now — please wait a bit and try again.",
+    WORKSPACE_APP_LIMIT_REACHED: "The free plan includes up to 3 apps. Need more? Email contact@dealup.co.in.",
   };
   return messages[code] || "Repository analysis could not be completed safely.";
 }

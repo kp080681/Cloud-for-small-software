@@ -5,6 +5,8 @@
 
 const FRIENDLY_ERROR_MESSAGES = {
   WORKSPACE_RATE_LIMIT_REACHED: "You're doing that a bit too fast — please wait a few minutes and try again.",
+  WORKSPACE_APP_LIMIT_REACHED: "The free plan includes up to 3 apps. Need more? Email contact@dealup.co.in.",
+  WORKSPACE_MANAGED_DATABASE_LIMIT_REACHED: "The free plan includes 1 managed database. Need more? Email contact@dealup.co.in.",
   APP_PAUSED: "This app was paused after several failed deployments in a row. Check what went wrong, then ask for it to be resumed before trying again.",
   GITHUB_REPOSITORIES_UNAVAILABLE: "Utplava couldn't load your GitHub repositories. Try refreshing the page.",
   REPOSITORY_NOT_AVAILABLE: "That repository isn't available to select right now.",
