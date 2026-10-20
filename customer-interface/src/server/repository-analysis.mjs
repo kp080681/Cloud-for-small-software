@@ -230,6 +230,9 @@ export async function analyzeSelectedRepository(
     repositoryId,
     createInstallationClient = createInstallationOctokit,
     deploymentKeyFactory = () => `dep_${crypto.randomUUID().replaceAll("-", "")}`,
+    // 'initial' for a person clicking Analyse; 'push' when a verified GitHub
+    // push to the app's main branch started it (see github-push-deploy.mjs).
+    deploymentReason = "initial",
   },
 ) {
   await getAuthorizedWorkspace(db, { customerId, workspaceId });
@@ -258,6 +261,7 @@ export async function analyzeSelectedRepository(
     repository,
     source,
     deploymentKeyFactory,
+    deploymentReason,
   });
 }
 
@@ -427,7 +431,7 @@ async function detectEnvironmentReferences({ octokit, owner, repo, gitTreeSha, r
   };
 }
 
-async function persistRepositoryAnalysis(db, { workspaceId, repository, source, deploymentKeyFactory }) {
+async function persistRepositoryAnalysis(db, { workspaceId, repository, source, deploymentKeyFactory, deploymentReason = "initial" }) {
   await db.query("BEGIN");
   try {
     await loadSelectedRepository(db, { workspaceId, repositoryId: repository.id, forUpdate: true });
@@ -438,6 +442,7 @@ async function persistRepositoryAnalysis(db, { workspaceId, repository, source, 
       repository,
       source,
       deploymentKeyFactory,
+      deploymentReason,
     });
 
     if (source.detection.supported && source.buildCommand) {
@@ -515,7 +520,7 @@ async function createOrReuseApp(db, { workspaceId, repository, source }) {
   return created.rows[0];
 }
 
-async function createOrReuseDeployment(db, { workspaceId, app, repository, source, deploymentKeyFactory }) {
+async function createOrReuseDeployment(db, { workspaceId, app, repository, source, deploymentKeyFactory, deploymentReason = "initial" }) {
   const existing = await db.query(
     `SELECT id, deployment_key, source_commit_sha, source_branch, status, error_code, created_at
        FROM deployments
@@ -530,10 +535,10 @@ async function createOrReuseDeployment(db, { workspaceId, app, repository, sourc
 
   const created = await db.query(
     `INSERT INTO deployments
-       (deployment_key, workspace_id, app_id, source_commit_sha, source_branch, status)
-     VALUES ($1,$2,$3,$4,$5,'ANALYZING')
+       (deployment_key, workspace_id, app_id, source_commit_sha, source_branch, status, deployment_reason)
+     VALUES ($1,$2,$3,$4,$5,'ANALYZING',$6)
      RETURNING id, deployment_key, source_commit_sha, source_branch, status, error_code, created_at`,
-    [deploymentKeyFactory(), workspaceId, app.id, source.commitSha, source.branch],
+    [deploymentKeyFactory(), workspaceId, app.id, source.commitSha, source.branch, deploymentReason],
   );
   const deployment = created.rows[0];
   await db.query(

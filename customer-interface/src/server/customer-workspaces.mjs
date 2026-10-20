@@ -31,6 +31,7 @@ export function safeApplication(row) {
     databaseRequired: row.database_required,
     latestDeploymentStatus: row.latest_deployment_status ?? null,
     liveUrl: row.live_url ?? null,
+    autoDeployOnPush: row.auto_deploy_on_push !== false,
   };
 }
 
@@ -199,17 +200,30 @@ export async function listWorkspaceApplications(db, { customerId, workspaceId })
         a.framework,
         a.runtime,
         a.database_required,
+        a.auto_deploy_on_push,
         latest.status AS latest_deployment_status,
-        latest.live_url
+        live.live_url
       FROM customer_workspace_memberships cwm
       JOIN apps a ON a.workspace_id = cwm.workspace_id
       LEFT JOIN LATERAL (
-        SELECT d.status, d.live_url
+        SELECT d.status
         FROM deployments d
         WHERE d.app_id = a.id
         ORDER BY d.created_at DESC
         LIMIT 1
       ) latest ON true
+      -- The link comes from the newest LIVE deployment, not the newest
+      -- deployment: while a redeploy (e.g. from a push) is running, the
+      -- previous version is still serving and still has a working link.
+      LEFT JOIN LATERAL (
+        SELECT d.live_url
+        FROM deployments d
+        WHERE d.app_id = a.id
+          AND d.status = 'LIVE'
+          AND d.live_url IS NOT NULL
+        ORDER BY d.created_at DESC
+        LIMIT 1
+      ) live ON true
       WHERE cwm.customer_identity_id = $1
         AND cwm.workspace_id = $2
         AND a.deleted_at IS NULL
@@ -218,4 +232,27 @@ export async function listWorkspaceApplications(db, { customerId, workspaceId })
     [customerId, workspaceId],
   );
   return result.rows.map(safeApplication);
+}
+
+export async function setAppAutoDeployOnPush(db, { customerId, workspaceId, appId, enabled }) {
+  if (typeof enabled !== "boolean") {
+    throw Object.assign(new Error("enabled must be true or false."), { status: 400, code: "INVALID_INPUT" });
+  }
+  const result = await db.query(
+    `UPDATE apps a
+        SET auto_deploy_on_push = $4,
+            updated_at = now()
+       FROM customer_workspace_memberships m
+      WHERE a.id = $3
+        AND a.workspace_id = $2
+        AND a.deleted_at IS NULL
+        AND m.workspace_id = a.workspace_id
+        AND m.customer_identity_id = $1
+      RETURNING a.id, a.auto_deploy_on_push`,
+    [customerId, workspaceId, appId, enabled],
+  );
+  if (result.rowCount !== 1) {
+    throw Object.assign(new Error("Application not found in this workspace."), { status: 404, code: "APP_NOT_FOUND" });
+  }
+  return { appId: result.rows[0].id, autoDeployOnPush: result.rows[0].auto_deploy_on_push };
 }

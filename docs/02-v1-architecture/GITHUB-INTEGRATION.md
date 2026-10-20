@@ -367,6 +367,10 @@ Auto-deploy pushes to main
 
 Automatic deployment should be explicit per application.
 
+> **Decision 2026-10-20 (Kiran):** auto-deploy on push is ON by default for every
+> application, with a per-application switch to turn it off (`apps.auto_deploy_on_push`).
+> The first deployment of an application remains manual. See AGENTS.md "Push-to-deploy".
+
 ## Installation uninstall flow
 
 When GitHub reports installation deletion/uninstall:

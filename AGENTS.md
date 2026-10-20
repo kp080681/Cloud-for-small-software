@@ -33,7 +33,6 @@ Core capabilities:
 - Basic resource limits
 
 Later, only after the core is reliable:
-- Auto-redeploy on GitHub push (webhook-triggered, no manual "Redeploy" click) — queued by Kiran on 2026-10-12 as the next feature once current hardening is confirmed solid. Do not start this during the hardening phase below.
 - Custom domains
 - Rollback
 - Backups
@@ -43,6 +42,9 @@ Later, only after the core is reliable:
 - Billing
 
 Do not add new runtimes/frameworks without genuine user demand.
+
+## Push-to-deploy (built 2026-10-20)
+A verified GitHub push to an app's main (default) branch redeploys it with no click. On by default for every app, per Kiran; each app has a "Deploy on push" switch on the dashboard. Code: `customer-interface/app/api/github/webhook/route.js`, `customer-interface/src/server/github-push-deploy.mjs`, migration `024_push_deploys.sql`. Rules: signature-verified before parsing; deduplicated by GitHub delivery id; app resolved by repository id + installation id (never name); first deploy stays manual; waits for a running deployment before starting the next; bursts deploy only the newest commit; reuses the dashboard's analyse -> start path so pause/rate-limit/readiness guards all apply.
 
 ## Product principle
 The platform should feel simple, technical, calm, premium and trustworthy.

@@ -5,6 +5,7 @@ import { selectedWorkspaceCookieName } from "@/src/server/session.mjs";
 import { WorkspaceSelectForm, WorkspaceRenameForm } from "./workspace-forms.js";
 import { GitHubPanel } from "./github-panel.js";
 import { McpGrantsPanel } from "./mcp-grants-panel.js";
+import { AutoDeployToggle } from "./auto-deploy-toggle.js";
 
 export const dynamic = "force-dynamic";
 
@@ -52,7 +53,7 @@ function SignIn() {
   );
 }
 
-function Applications({ apps }) {
+function Applications({ apps, workspaceId }) {
   if (!apps.length) {
     return (
       <>
@@ -98,6 +99,7 @@ function Applications({ apps }) {
               </span>
             </span>
             <span className="repo-right">
+              <AutoDeployToggle workspaceId={workspaceId} appId={app.id} initialEnabled={app.autoDeployOnPush} />
               {app.liveUrl ? (
                 <a className="app-link mono" href={app.liveUrl} target="_blank" rel="noreferrer">
                   {app.liveUrl.replace(/^https?:\/\//, "")}
@@ -150,7 +152,7 @@ export default async function Home({ searchParams }) {
         </aside>
         <main id="main-content">
           <div className="crumb"><span>Applications</span></div>
-          <Applications apps={shell.apps} />
+          <Applications apps={shell.apps} workspaceId={active.id} />
           <section className="panel section-gap">
             <div className="row">
               <div>

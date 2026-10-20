@@ -133,13 +133,15 @@ class FakeDb {
         rows: this.apps
           .filter((app) => app.workspace_id === workspaceId && !app.deleted_at)
           .map((app) => {
-            const latest = this.deployments
+            const forApp = this.deployments
               .filter((deployment) => deployment.app_id === app.id)
-              .sort((a, b) => b.created_at - a.created_at)[0];
+              .sort((a, b) => b.created_at - a.created_at);
+            const latest = forApp[0];
+            const newestLive = forApp.find((deployment) => deployment.status === "LIVE" && deployment.live_url);
             return {
               ...app,
               latest_deployment_status: latest?.status ?? null,
-              live_url: latest?.live_url ?? null,
+              live_url: newestLive?.live_url ?? null,
             };
           }),
       };
@@ -273,7 +275,22 @@ test("application listing is workspace-scoped and returns only customer-safe fie
       databaseRequired: false,
       latestDeploymentStatus: "LIVE",
       liveUrl: "https://example.test",
+      autoDeployOnPush: true,
     },
   ]);
   assert.equal(JSON.stringify(apps).includes("must-not-leak"), false);
+});
+
+test("an app keeps its working link while a newer deployment is still running", async () => {
+  const db = new FakeDb();
+  db.workspaces.push({ id: "workspace-a", name: "A" });
+  db.memberships.push({ customerId: "identity-a", workspaceId: "workspace-a" });
+  db.apps.push({ id: "app-a", workspace_id: "workspace-a", name: "Vantage", slug: "vantage", framework: "nextjs", runtime: "nodejs", database_required: false, deleted_at: null });
+  db.deployments.push(
+    { app_id: "app-a", status: "LIVE", live_url: "https://vantage.utplava.dev", created_at: 1 },
+    { app_id: "app-a", status: "BUILDING", live_url: null, created_at: 2 },
+  );
+  const [app] = await listWorkspaceApplications(db, { customerId: "identity-a", workspaceId: "workspace-a" });
+  assert.equal(app.latestDeploymentStatus, "BUILDING");
+  assert.equal(app.liveUrl, "https://vantage.utplava.dev");
 });
