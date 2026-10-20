@@ -61,10 +61,20 @@ async function ensureBrandedDomain(projectId:string,host:string):Promise<{attach
  }
 }
 
+function safeHost(location:string|null){if(!location)return null;try{return new URL(location,"https://placeholder.invalid").hostname}catch{return null}}
 async function brandedReachability(brandedUrl:string){
  try{
   const brandedProbe=await anonymousCheck(brandedUrl,{allowedHostnameSuffixes:[BRANDED_DOMAIN_APEX,"vercel.app"]});
-  return{publiclyReachable:brandedProbe.publiclyReachable,httpStatus:brandedProbe.httpStatus,reason:brandedProbe.publiclyReachable?null:"unexpected_response"};
+  // The question here is only "does this address reach the app over HTTPS?"
+  // DNS resolving, a valid certificate and any non-error HTTP answer prove
+  // that. Where the app then chooses to redirect visitors (its own sign-in
+  // page, an external auth provider) is the app's business: requiring that
+  // target to be on an allowlisted host kept apps like Vantage, which
+  // redirect to sign-in elsewhere, from ever getting their branded URL
+  // (2026-10-20). Redirects are never followed here, so this widens nothing.
+  // A redirect to Vercel's own login still means the app is not public.
+  const reachable=!brandedProbe.vercelAuthRedirect&&brandedProbe.httpStatus>=200&&brandedProbe.httpStatus<400;
+  return{publiclyReachable:reachable,httpStatus:brandedProbe.httpStatus,redirectHost:safeHost(brandedProbe.location),reason:reachable?null:(brandedProbe.vercelAuthRedirect?"vercel_auth_redirect":"http_"+brandedProbe.httpStatus)};
  }catch(error:any){
   // DNS failure (ENOTFOUND), TLS not issued yet, timeout: all mean "not usable yet".
   return{publiclyReachable:false,httpStatus:null,reason:String(error?.cause?.code??error?.code??error?.name??"request_failed")};
