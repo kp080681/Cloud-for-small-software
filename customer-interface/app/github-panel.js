@@ -482,52 +482,107 @@ function AnalysisResult({
     };
   }, [active, currentDeployment.appId, currentDeployment.deploymentId, deployment?.status]);
 
+  // Once an app is live and nothing is running, the analysis notes and the
+  // step tracker are history: show only the live link and Redeploy, with
+  // the rest one click away under "Deployment details" (Kiran, 2026-10-20:
+  // "once a project is deployed, we don't need to show what happened").
+  const settled = live && !active;
+  const summarySections = (
+    <>
+        <div>
+          <strong>Source identified</strong>
+          <small>{analysis.branch} - {analysis.shortCommitSha || "pending"}</small>
+        </div>
+        <div className="analysis-columns">
+          <div>
+            <strong>Handled by Utplava</strong>
+            {handled.length ? handled.map((item) => <small key={item}>{item}</small>) : <small>Analysis is pending.</small>}
+            {managed.map((item) => <small key={item.envKey}>{item.envKey} handled by Utplava</small>)}
+          </div>
+          <div>
+            <strong>Your attention</strong>
+            {analysis.errorCode ? <small>{friendlyErrorMessage(analysis.errorCode, "This repository isn't supported yet.")}</small> : null}
+            {requiredMissing.map((item) => {
+              const inputKey = `${analysis.appId}:${item.envKey}`;
+              return (
+                <label className="secret-field" key={item.envKey}>
+                  <span>{item.envKey} Required</span>
+                  <span className="secret-entry">
+                    <input
+                      type="password"
+                      value={secretInputs[inputKey] || ""}
+                      onChange={(event) =>
+                        setSecretInputs((current) => ({ ...current, [inputKey]: event.target.value }))
+                      }
+                      autoComplete="off"
+                    />
+                    <button type="button" onClick={() => saveSecret(analysis.appId, item.envKey)} disabled={isPending}>
+                      Save
+                    </button>
+                  </span>
+                </label>
+              );
+            })}
+            {configured.map((item) => <small key={item.envKey}>{item.envKey} Configured</small>)}
+            {!analysis.errorCode && !requiredMissing.length && !configured.length ? <small>No required action detected.</small> : null}
+          </div>
+        </div>
+        <div className="configuration-state">
+          <strong>Configuration</strong>
+          {requirements.length || stillAnalyzing ? null : <small>No configuration required.</small>}
+          {optional.map((item) => <small key={item.envKey}>{item.envKey} detected, optional / not blocking</small>)}
+          <small>{ready ? "Ready to deploy" : stillAnalyzing ? "Still analysing — requirements aren't known yet" : readinessLabel(configuration?.readiness)}</small>
+        </div>
+    </>
+  );
+  const progressSections = (
+    <>
+      <div>
+        <strong>Deployment</strong>
+        <small>{currentDeployment.stage}</small>
+      </div>
+      {!failed ? <DeployTracker status={currentDeployment.status} /> : null}
+      {currentDeployment.events?.length ? (
+        <div className="deployment-log">
+          {currentDeployment.events.slice(-2).map((event) => (
+            <small key={event.id}>{event.title}</small>
+          ))}
+        </div>
+      ) : null}
+    </>
+  );
+
+  if (settled) {
+    return (
+      <div className="analysis-result settled">
+        {currentDeployment.liveUrl ? <LiveReveal url={currentDeployment.liveUrl} /> : null}
+        <div className="settled-actions">
+          <button
+            type="button"
+            onClick={() => redeployApp(currentDeployment.appId, analysis.deploymentId)}
+            disabled={isPending || deploymentPending}
+          >
+            {deploymentPending ? "Starting..." : "Redeploy"}
+          </button>
+          <small className="muted">
+            {analysis.branch} · {analysis.shortCommitSha || "pending"}
+          </small>
+        </div>
+        {deploymentError ? <small role="status">{deploymentError}</small> : null}
+        <details className="deployment-details">
+          <summary>Deployment details</summary>
+          <div className="deployment-details-body">
+            {summarySections}
+            <div className="deployment-state">{progressSections}</div>
+          </div>
+        </details>
+      </div>
+    );
+  }
+
   return (
     <div className="analysis-result">
-      <div>
-        <strong>Source identified</strong>
-        <small>{analysis.branch} - {analysis.shortCommitSha || "pending"}</small>
-      </div>
-      <div className="analysis-columns">
-        <div>
-          <strong>Handled by Utplava</strong>
-          {handled.length ? handled.map((item) => <small key={item}>{item}</small>) : <small>Analysis is pending.</small>}
-          {managed.map((item) => <small key={item.envKey}>{item.envKey} handled by Utplava</small>)}
-        </div>
-        <div>
-          <strong>Your attention</strong>
-          {analysis.errorCode ? <small>{friendlyErrorMessage(analysis.errorCode, "This repository isn't supported yet.")}</small> : null}
-          {requiredMissing.map((item) => {
-            const inputKey = `${analysis.appId}:${item.envKey}`;
-            return (
-              <label className="secret-field" key={item.envKey}>
-                <span>{item.envKey} Required</span>
-                <span className="secret-entry">
-                  <input
-                    type="password"
-                    value={secretInputs[inputKey] || ""}
-                    onChange={(event) =>
-                      setSecretInputs((current) => ({ ...current, [inputKey]: event.target.value }))
-                    }
-                    autoComplete="off"
-                  />
-                  <button type="button" onClick={() => saveSecret(analysis.appId, item.envKey)} disabled={isPending}>
-                    Save
-                  </button>
-                </span>
-              </label>
-            );
-          })}
-          {configured.map((item) => <small key={item.envKey}>{item.envKey} Configured</small>)}
-          {!analysis.errorCode && !requiredMissing.length && !configured.length ? <small>No required action detected.</small> : null}
-        </div>
-      </div>
-      <div className="configuration-state">
-        <strong>Configuration</strong>
-        {requirements.length || stillAnalyzing ? null : <small>No configuration required.</small>}
-        {optional.map((item) => <small key={item.envKey}>{item.envKey} detected, optional / not blocking</small>)}
-        <small>{ready ? "Ready to deploy" : stillAnalyzing ? "Still analysing — requirements aren't known yet" : readinessLabel(configuration?.readiness)}</small>
-      </div>
+      {summarySections}
       <div className="deployment-state">
         <div>
           <strong>Deployment</strong>

@@ -1268,3 +1268,73 @@ main#main-content {
     height: 14px;
   }
 }
+
+/* ---- live app: settled view ------------------------------------------- */
+/* Once an app is live and idle, only the link and Redeploy stay visible;
+   analysis notes and the step tracker move behind "Deployment details". */
+.analysis-result.settled {
+  gap: 12px;
+}
+
+.settled-actions {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  flex-wrap: wrap;
+}
+
+.settled-actions small {
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+
+.deployment-details {
+  border-top: 1px solid var(--line);
+  padding-top: 10px;
+}
+
+.deployment-details > summary {
+  cursor: pointer;
+  list-style: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--muted);
+  font-size: 13px;
+  user-select: none;
+  transition: color 120ms ease;
+}
+
+.deployment-details > summary::-webkit-details-marker {
+  display: none;
+}
+
+.deployment-details > summary::before {
+  content: "";
+  width: 6px;
+  height: 6px;
+  border-right: 1.5px solid currentColor;
+  border-bottom: 1.5px solid currentColor;
+  transform: rotate(-45deg);
+  transition: transform 160ms ease;
+}
+
+.deployment-details[open] > summary::before {
+  transform: rotate(45deg);
+}
+
+.deployment-details > summary:hover {
+  color: var(--ink);
+}
+
+.deployment-details-body {
+  display: grid;
+  gap: 10px;
+  margin-top: 12px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .deployment-details > summary::before {
+    transition: none;
+  }
+}
