@@ -1,3 +1,5 @@
+import { alertNewSignup } from "./owner-alerts.mjs";
+
 export function defaultWorkspaceName(identity) {
   const login = String(identity?.login || "Personal").trim().slice(0, 48);
   return `${login} workspace`;
@@ -121,6 +123,9 @@ export async function ensureInitialWorkspace(db, { customerId, workspaceName }) 
       [customerId, workspace.id],
     );
     await db.query("COMMIT");
+    // Reaching here means this person had no workspace: a new sign-up.
+    // Every entry point (web sign-in, MCP connect) comes through here.
+    await alertNewSignup(db, { customerId });
     return safeWorkspace(workspace);
   } catch (error) {
     await db.query("ROLLBACK").catch(() => {});

@@ -3,6 +3,7 @@ import { getAuthorizedWorkspace } from "./customer-workspaces.mjs";
 import { enforceRateLimit } from "../shared/control-plane/rate-limit.mjs";
 import { enforceFailureCooldown } from "../shared/control-plane/deployment-failure-cooldown.mjs";
 import crypto from "node:crypto";
+import { alertFirstDeployStarted } from "./owner-alerts.mjs";
 
 const ORCHESTRATOR_TASK_ID = "ssc-control-plane-orchestrate-deployment";
 const START_MARKER_PREFIX = "UI06_START_REQUESTED";
@@ -975,6 +976,7 @@ export async function startCustomerDeployment(
     appId,
     deploymentId,
     triggerOrchestrator = triggerDeploymentOrchestrator,
+    notifyFirstDeploy = alertFirstDeployStarted,
   },
 ) {
   // A second independent-review pass (Opus 5.5) found this function never
@@ -1082,6 +1084,8 @@ export async function startCustomerDeployment(
       throw error;
     }
   }
+
+  if (shouldTrigger) await notifyFirstDeploy(db, { customerId, workspaceId, appId, deploymentId });
 
   const deployment = await getCustomerDeploymentProgress(db, { customerId, workspaceId, appId, deploymentId });
   return {

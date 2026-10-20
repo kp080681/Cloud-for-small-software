@@ -43,6 +43,14 @@ Later, only after the core is reliable:
 
 Do not add new runtimes/frameworks without genuine user demand.
 
+## Owner alerts (built 2026-10-20)
+
+`customer-interface/src/server/owner-alerts.mjs` emails the founder on a new
+sign-up (fired from `ensureInitialWorkspace`, so web and MCP sign-ups both
+count) and when a workspace starts its first-ever deploy. Sent via Resend;
+off unless `RESEND_API_KEY` and `OWNER_ALERT_EMAIL` are set on the `utplava`
+Vercel project. Alerts never throw and time out after 4s.
+
 ## Push-to-deploy (built 2026-10-20)
 A verified GitHub push to an app's main (default) branch redeploys it with no click. On by default for every app, per Kiran; each app has a "Deploy on push" switch on the dashboard. Code: `customer-interface/app/api/github/webhook/route.js`, `customer-interface/src/server/github-push-deploy.mjs`, migration `024_push_deploys.sql`. Rules: signature-verified before parsing; deduplicated by GitHub delivery id; app resolved by repository id + installation id (never name); first deploy stays manual; waits for a running deployment before starting the next; bursts deploy only the newest commit; reuses the dashboard's analyse -> start path so pause/rate-limit/readiness guards all apply.
 
