@@ -62,6 +62,7 @@ Current provider pattern:
 - GitHub App for repository access
 - PostgreSQL for control-plane state
 - Neon may be used for managed PostgreSQL workloads
+- The live control-plane database is the Neon project named `ssc-spike-d-state` (it began as an architecture spike and became production). The Neon project named "Cloud for small Software" is NOT it: its branch is archived and it has no control-plane tables. `ssc-<id>-db` projects are customer-managed databases. Confirmed 2026-10-20.
 
 Keep the control plane separate from customer workloads.
 
