@@ -1,17 +1,42 @@
+/* Utplava dashboard — dark theme (2026-10-20).
+   Direction from Kiran: "dark themed but it looks alive", Vercel as the
+   reference for precision and responsiveness, not decoration. Neutral
+   near-black surfaces, a single warm brand accent (the sunrise amber from
+   the Utplava mark) used sparingly for focus, progress and the live
+   moment, and green reserved for one meaning only: live. */
 :root {
-  --bg: #f7f4ef;
-  --ink: #111314;
-  --muted: #6b6258;
-  --line: #ded7cd;
-  --panel: #fffdf9;
-  --accent: #146c5f;
-  --accent-strong: #0d4b42;
-  --warn: #9a5a12;
-  --good: #126b3f;
-  --shadow: 0 14px 40px rgba(34, 28, 20, 0.08);
+  --bg: #0a0a0b;
+  --bg-elevated: #0e0e10;
+  --panel: #111113;
+  --panel-raised: #18181b;
+  --line: #232327;
+  --line-strong: #34343a;
+  --ink: #ededef;
+  --ink-soft: #c9c9cf;
+  --muted: #8b8b93;
+  --faint: #5c5c64;
+
+  --brand: #f0b860;
+  --brand-strong: #ffcf86;
+  --brand-tint: rgba(240, 184, 96, 0.12);
+  --brand-ring: rgba(240, 184, 96, 0.35);
+
+  --good: #3ecf8e;
+  --good-tint: rgba(62, 207, 142, 0.1);
+  --good-line: rgba(62, 207, 142, 0.32);
+  --warn: #f5a524;
+  --warn-tint: rgba(245, 165, 36, 0.08);
+  --warn-line: rgba(245, 165, 36, 0.35);
+
+  /* kept for any component still referring to the old names */
+  --accent: var(--brand);
+  --accent-strong: var(--brand-strong);
+
+  --radius: 10px;
+  --shadow: 0 0 0 1px rgba(255, 255, 255, 0.02), 0 12px 32px rgba(0, 0, 0, 0.45);
   --font-sans: var(--font-geist-sans), ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
   --font-mono: var(--font-geist-mono), ui-monospace, "SF Mono", Menlo, monospace;
-  color-scheme: light;
+  color-scheme: dark;
 }
 
 * {
@@ -32,6 +57,11 @@ body {
   margin: 0;
 }
 
+::selection {
+  background: var(--brand-tint);
+  color: var(--brand-strong);
+}
+
 a {
   color: inherit;
 }
@@ -42,27 +72,59 @@ select {
   font: inherit;
 }
 
+input,
+select {
+  color: var(--ink);
+  background: var(--bg-elevated);
+  transition: border-color 120ms ease, box-shadow 120ms ease;
+}
+
+input::placeholder {
+  color: var(--faint);
+}
+
+input:hover,
+select:hover {
+  border-color: var(--line-strong) !important;
+}
+
+input:focus,
+select:focus {
+  outline: none;
+  border-color: var(--brand) !important;
+  box-shadow: 0 0 0 3px var(--brand-tint);
+}
+
+option {
+  background: var(--panel-raised);
+  color: var(--ink);
+}
+
+/* ---- buttons ---------------------------------------------------------- */
+
 button,
 .button {
-  min-height: 40px;
-  border: 1px solid var(--line);
+  min-height: 38px;
+  border: 1px solid var(--line-strong);
   border-radius: 8px;
-  background: #fffaf2;
+  background: var(--panel-raised);
   color: var(--ink);
   padding: 0 14px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
   gap: 8px;
+  font-size: 14px;
+  font-weight: 500;
   text-decoration: none;
   cursor: pointer;
-  transition: background-color 120ms ease, border-color 120ms ease, transform 80ms ease, box-shadow 120ms ease;
+  transition: background-color 120ms ease, border-color 120ms ease, color 120ms ease, transform 80ms ease, box-shadow 120ms ease;
 }
 
 button:hover:not(:disabled),
 .button:hover {
-  border-color: #c7bca9;
-  background: #fff5e4;
+  border-color: #4a4a52;
+  background: #202024;
 }
 
 button:active:not(:disabled),
@@ -74,37 +136,41 @@ button:active:not(:disabled),
 button:focus-visible,
 .button:focus-visible {
   outline: none;
-  box-shadow: 0 0 0 3px rgba(20, 108, 95, 0.25);
-  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--brand-ring);
+  border-color: var(--brand);
 }
 
 button:disabled {
   cursor: not-allowed;
-  color: #948b81;
-  background: #f1ece4;
+  color: var(--faint);
+  background: var(--panel);
+  border-color: var(--line);
   transform: none;
 }
 
+/* Primary: light on dark, the way the reference does it — the one
+   brightest thing on the screen, so the next action is never in doubt. */
 .button.primary {
   width: 100%;
-  background: var(--accent);
-  color: white;
-  border-color: var(--accent);
-  box-shadow: 0 1px 0 rgba(13, 75, 66, 0.4) inset;
+  background: var(--ink);
+  color: #0a0a0b;
+  border-color: var(--ink);
+  font-weight: 600;
 }
 
 .button.primary:hover {
-  background: #187a6b;
-  border-color: #187a6b;
+  background: #ffffff;
+  border-color: #ffffff;
+  box-shadow: 0 0 0 4px rgba(255, 255, 255, 0.06);
 }
 
 .button.primary:active {
-  background: var(--accent-strong);
-  border-color: var(--accent-strong);
+  background: #d6d6db;
+  border-color: #d6d6db;
 }
 
 .button.primary:focus-visible {
-  box-shadow: 0 0 0 3px rgba(20, 108, 95, 0.35);
+  box-shadow: 0 0 0 3px var(--brand-ring);
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -124,16 +190,19 @@ button:disabled {
   background: transparent;
   border: 0;
   padding: 0 4px;
+  color: var(--muted);
 }
 
 .plain:hover:not(:disabled) {
   background: transparent;
-  color: var(--accent-strong);
+  color: var(--ink);
 }
 
 .plain:active:not(:disabled) {
   background: transparent;
 }
+
+/* ---- type helpers ----------------------------------------------------- */
 
 .mono {
   font-family: var(--font-mono);
@@ -157,19 +226,38 @@ small,
   color: var(--muted);
 }
 
+/* ---- brand ------------------------------------------------------------ */
+
+/* the Utplava sunrise mark, same as utplava.dev and the brand assets */
 .mark {
   width: 24px;
   height: 24px;
-  fill: var(--accent);
+}
+
+.mark-tile {
+  fill: var(--panel-raised);
+  stroke: var(--line-strong);
+}
+
+.mark-horizon {
+  stroke: var(--brand);
+  stroke-width: 1.1;
+  stroke-linecap: round;
+}
+
+.mark-sun {
+  fill: var(--brand);
 }
 
 .brand {
   display: inline-flex;
   align-items: center;
   gap: 10px;
-  font-weight: 800;
-  letter-spacing: 0;
+  font-weight: 700;
+  letter-spacing: -0.01em;
 }
+
+/* ---- sign in ---------------------------------------------------------- */
 
 .sign-in {
   min-height: 100vh;
@@ -178,22 +266,31 @@ small,
   justify-items: center;
   gap: 22px;
   padding: 32px 18px;
+  background:
+    radial-gradient(ellipse 60% 40% at 50% 0%, rgba(240, 184, 96, 0.10), transparent 70%),
+    var(--bg);
 }
 
 .sign-in h1 {
-  max-width: 520px;
+  max-width: 560px;
   margin: 0;
   text-align: center;
-  font-size: clamp(42px, 8vw, 78px);
-  line-height: 0.95;
-  letter-spacing: -0.03em;
+  font-size: clamp(42px, 8vw, 76px);
+  line-height: 0.98;
+  letter-spacing: -0.045em;
   font-weight: 650;
+  background: linear-gradient(180deg, #ffffff 30%, #8b8b93 120%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
 }
+
+/* ---- panels ----------------------------------------------------------- */
 
 .panel {
   width: 100%;
   border: 1px solid var(--line);
-  border-radius: 8px;
+  border-radius: var(--radius);
   background: var(--panel);
   box-shadow: var(--shadow);
 }
@@ -214,19 +311,38 @@ small,
   margin-top: 0;
 }
 
+.panel h2 {
+  font-size: 17px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
+/* ---- header ----------------------------------------------------------- */
+
 header {
-  height: 64px;
+  height: 60px;
   border-bottom: 1px solid var(--line);
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 16px;
   padding: 0 22px;
-  background: rgba(255, 253, 249, 0.9);
-  backdrop-filter: blur(14px);
+  background: rgba(10, 10, 11, 0.78);
+  backdrop-filter: blur(14px) saturate(140%);
   position: sticky;
   top: 0;
   z-index: 10;
+}
+
+/* a single warm hairline along the top edge: the sunrise, at 1px */
+header::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 0;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, rgba(240, 184, 96, 0.55) 50%, transparent);
 }
 
 .header-left,
@@ -239,59 +355,72 @@ header {
 
 .workspace-select {
   min-width: min(260px, 44vw);
-  height: 38px;
+  height: 36px;
   border: 1px solid var(--line);
   border-radius: 8px;
-  background: white;
   padding: 0 34px 0 12px;
 }
 
 .prototype {
   border: 1px solid var(--line);
   border-radius: 999px;
-  padding: 5px 10px;
+  padding: 4px 9px;
   color: var(--muted);
-  font-size: 12px;
-  font-weight: 700;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
 }
 
 .avatar,
 .repo-icon {
-  width: 34px;
-  height: 34px;
+  width: 32px;
+  height: 32px;
   border-radius: 50%;
   display: inline-grid;
   place-items: center;
-  background: #173b36;
-  color: white;
-  font-weight: 800;
+  background: linear-gradient(180deg, #24242a, #18181b);
+  border: 1px solid var(--line-strong);
+  color: var(--ink-soft);
+  font-weight: 700;
   font-size: 12px;
 }
 
+.repo-icon {
+  border-radius: 8px;
+}
+
+/* ---- shell + nav ------------------------------------------------------ */
+
 .shell {
   display: grid;
-  grid-template-columns: 240px minmax(0, 1fr);
-  min-height: calc(100vh - 64px);
+  grid-template-columns: 232px minmax(0, 1fr);
+  min-height: calc(100vh - 60px);
 }
 
 aside {
   border-right: 1px solid var(--line);
-  padding: 20px 14px;
-  background: #f2ede5;
+  padding: 18px 12px;
+  background: var(--bg);
 }
 
 aside button,
 aside .nav-link {
   width: 100%;
   justify-content: flex-start;
-  margin-bottom: 8px;
+  margin-bottom: 4px;
+}
+
+aside button {
+  border-color: transparent;
+  background: transparent;
+  color: var(--muted);
 }
 
 aside button.active,
 aside button.active:hover {
-  color: white;
-  border-color: var(--accent-strong);
-  background: var(--accent-strong);
+  color: var(--ink);
+  border-color: var(--line);
+  background: var(--panel-raised);
 }
 
 aside button.active:active {
@@ -299,36 +428,44 @@ aside button.active:active {
 }
 
 aside .nav-link {
-  min-height: 40px;
-  border: 1px solid var(--line);
+  min-height: 36px;
+  border: 1px solid transparent;
   border-radius: 8px;
-  background: #fffaf2;
-  color: var(--ink);
+  background: transparent;
+  color: var(--muted);
   padding: 0 14px;
   display: inline-flex;
   align-items: center;
   gap: 8px;
+  font-size: 14px;
   text-decoration: none;
+  transition: background-color 120ms ease, color 120ms ease;
+}
+
+aside .nav-link:hover {
+  background: var(--panel);
+  color: var(--ink);
 }
 
 .nav-caption {
-  margin: 24px 10px 8px;
-  color: var(--muted);
+  margin: 22px 14px 8px;
+  color: var(--faint);
   font-size: 12px;
-  font-weight: 800;
-  text-transform: uppercase;
+  font-weight: 500;
 }
 
+/* ---- main ------------------------------------------------------------- */
+
 main#main-content {
-  padding: 28px;
+  padding: 32px;
   max-width: 1180px;
   width: 100%;
 }
 
 .crumb {
-  color: var(--muted);
+  color: var(--faint);
   font-size: 13px;
-  margin-bottom: 18px;
+  margin-bottom: 16px;
 }
 
 .heading {
@@ -336,20 +473,22 @@ main#main-content {
   align-items: flex-start;
   justify-content: space-between;
   gap: 18px;
-  margin-bottom: 18px;
+  margin-bottom: 20px;
 }
 
 .heading h1 {
   margin: 0 0 6px;
-  font-size: 34px;
+  font-size: 30px;
   line-height: 1.1;
   font-weight: 650;
-  letter-spacing: -0.02em;
+  letter-spacing: -0.035em;
 }
 
 .heading p {
   margin: 0;
 }
+
+/* ---- empty state ------------------------------------------------------ */
 
 .empty {
   min-height: 330px;
@@ -358,49 +497,60 @@ main#main-content {
   align-content: center;
   text-align: center;
   padding: 34px;
+  background:
+    radial-gradient(ellipse 50% 60% at 50% 0%, rgba(240, 184, 96, 0.06), transparent 70%),
+    var(--panel);
 }
 
 .empty .symbol {
-  width: 52px;
-  height: 52px;
-  border: 1px solid var(--line);
-  border-radius: 50%;
+  width: 48px;
+  height: 48px;
+  border: 1px dashed var(--line-strong);
+  border-radius: 12px;
   display: grid;
   place-items: center;
-  font-size: 28px;
-  color: var(--accent);
-  background: #f7f1e6;
-  margin-bottom: 10px;
+  font-size: 24px;
+  color: var(--brand);
+  background: var(--bg-elevated);
+  margin-bottom: 12px;
 }
 
 .empty-footer {
   margin-top: 24px;
   display: flex;
   flex-wrap: wrap;
-  gap: 10px;
+  gap: 8px;
   justify-content: center;
   color: var(--muted);
-  font-size: 13px;
+  font-size: 12px;
 }
 
 .empty-footer span {
   border: 1px solid var(--line);
   border-radius: 999px;
-  padding: 7px 10px;
+  padding: 6px 10px;
 }
 
+/* ---- application list ------------------------------------------------- */
+
 .application-list {
-  padding: 8px;
+  padding: 6px;
 }
 
 .repo {
-  min-height: 76px;
+  min-height: 72px;
   border-bottom: 1px solid var(--line);
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 16px;
-  padding: 12px;
+  padding: 12px 14px;
+  border-radius: 8px;
+  transition: background-color 120ms ease;
+}
+
+.application-list .repo:hover {
+  background: var(--panel-raised);
 }
 
 .repo:last-child {
@@ -413,10 +563,19 @@ main#main-content {
   gap: 12px;
 }
 
+.repo-icon {
+  flex-shrink: 0;
+}
+
+.repo-left strong {
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
 .repo-right {
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: 14px;
 }
 
 .app-link {
@@ -425,11 +584,12 @@ main#main-content {
   text-decoration: none;
   border-bottom: 1px solid transparent;
   white-space: nowrap;
+  transition: color 120ms ease, border-color 120ms ease;
 }
 
 .app-link:hover {
   color: var(--ink);
-  border-bottom-color: var(--line);
+  border-bottom-color: var(--line-strong);
 }
 
 .repo small {
@@ -438,16 +598,20 @@ main#main-content {
   margin-top: 2px;
 }
 
+/* ---- status pills ----------------------------------------------------- */
+
 .status {
   display: inline-flex;
   align-items: center;
   gap: 7px;
   border: 1px solid var(--line);
   border-radius: 999px;
-  padding: 6px 10px;
+  padding: 4px 10px;
   color: var(--muted);
-  font-size: 13px;
+  font-size: 12px;
+  font-weight: 500;
   white-space: nowrap;
+  background: var(--bg-elevated);
 }
 
 .status .dot {
@@ -459,11 +623,24 @@ main#main-content {
 
 .status.live {
   color: var(--good);
+  border-color: var(--good-line);
+  background: var(--good-tint);
+}
+
+/* the one ambient motion on the page: live apps breathe */
+.status.live .dot {
+  box-shadow: 0 0 0 0 rgba(62, 207, 142, 0.6);
+  animation: live-breathe 2.4s ease-in-out infinite;
+}
+
+@keyframes live-breathe {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(62, 207, 142, 0.5); }
+  50% { box-shadow: 0 0 0 4px rgba(62, 207, 142, 0); }
 }
 
 .section-gap {
-  margin-top: 18px;
-  padding: 20px;
+  margin-top: 16px;
+  padding: 22px;
 }
 
 .row {
@@ -474,6 +651,8 @@ main#main-content {
   margin-bottom: 4px;
 }
 
+/* ---- forms ------------------------------------------------------------ */
+
 .workspace-form {
   margin-top: 18px;
   max-width: 520px;
@@ -482,7 +661,8 @@ main#main-content {
 .workspace-form label {
   display: block;
   font-size: 13px;
-  font-weight: 700;
+  font-weight: 500;
+  color: var(--ink-soft);
   margin-bottom: 8px;
 }
 
@@ -494,11 +674,13 @@ main#main-content {
 .inline-form input {
   flex: 1;
   min-width: 0;
-  min-height: 40px;
+  min-height: 38px;
   border: 1px solid var(--line);
   border-radius: 8px;
   padding: 0 12px;
 }
+
+/* ---- github panel ----------------------------------------------------- */
 
 .github-panel {
   display: grid;
@@ -521,9 +703,9 @@ main#main-content {
 .repo-group-title {
   border: 1px solid var(--line);
   border-radius: 999px;
-  padding: 7px 10px;
+  padding: 6px 10px;
   color: var(--muted);
-  font-size: 13px;
+  font-size: 12px;
 }
 
 .repository-list {
@@ -543,15 +725,17 @@ main#main-content {
 
 .analysis-item {
   border: 1px solid var(--line);
-  border-radius: 8px;
-  padding: 14px;
+  border-radius: var(--radius);
+  padding: 16px;
   display: grid;
-  gap: 12px;
+  gap: 14px;
+  background: var(--bg-elevated);
 }
 
 .analysis-item h3 {
   margin: 0 0 4px;
-  font-size: 16px;
+  font-size: 15px;
+  font-weight: 600;
 }
 
 .analysis-progress,
@@ -572,9 +756,10 @@ main#main-content {
 .analysis-result {
   border: 1px solid var(--line);
   border-radius: 8px;
-  padding: 10px;
+  padding: 12px;
   color: var(--muted);
   font-size: 13px;
+  background: var(--panel);
 }
 
 .analysis-progress {
@@ -591,10 +776,10 @@ main#main-content {
 }
 
 .thinking-dots span {
-  width: 7px;
-  height: 7px;
+  width: 6px;
+  height: 6px;
   border-radius: 50%;
-  background: var(--accent);
+  background: var(--brand);
   animation: thinking-bounce 1s ease-in-out infinite;
 }
 
@@ -602,7 +787,7 @@ main#main-content {
 .thinking-dots span:nth-child(3) { animation-delay: 0.3s; }
 
 @keyframes thinking-bounce {
-  0%, 60%, 100% { opacity: 0.35; transform: translateY(0) scale(0.85); }
+  0%, 60%, 100% { opacity: 0.3; transform: translateY(0) scale(0.85); }
   30% { opacity: 1; transform: translateY(-4px) scale(1); }
 }
 
@@ -611,20 +796,21 @@ main#main-content {
   color: var(--muted);
 }
 
+/* ---- deploy tracker ---------------------------------------------------- */
 /* The real deployment pipeline, shown as an honest step tracker — each
    marker reflects the deployment's actual current status, never a guess. */
 .deploy-tracker {
   display: grid;
   grid-template-columns: repeat(6, 1fr);
   gap: 4px;
-  margin: 4px 0;
+  margin: 6px 0;
 }
 
 .deploy-step {
   position: relative;
   display: grid;
   justify-items: center;
-  gap: 6px;
+  gap: 8px;
   text-align: center;
 }
 
@@ -634,8 +820,8 @@ main#main-content {
   top: 9px;
   right: 50%;
   width: 100%;
-  height: 2px;
-  background: var(--line);
+  height: 1px;
+  background: var(--line-strong);
   z-index: 0;
 }
 
@@ -644,7 +830,11 @@ main#main-content {
 }
 
 .deploy-step.done + .deploy-step::before {
-  background: var(--accent);
+  background: var(--brand);
+}
+
+.deploy-step.done + .deploy-step.current::before {
+  background: linear-gradient(90deg, var(--brand), var(--line-strong));
 }
 
 .deploy-marker {
@@ -653,53 +843,65 @@ main#main-content {
   width: 20px;
   height: 20px;
   border-radius: 50%;
-  border: 2px solid var(--line);
+  border: 1.5px solid var(--line-strong);
   background: var(--panel);
   display: grid;
   place-items: center;
   font-size: 11px;
-  font-weight: 800;
+  font-weight: 700;
   color: var(--muted);
 }
 
 .deploy-step.done .deploy-marker {
-  border-color: var(--accent);
-  background: var(--accent);
-  color: white;
+  border-color: var(--brand);
+  background: var(--brand);
+  color: #1a1206;
 }
 
 .deploy-step.current .deploy-marker {
-  border-color: var(--accent);
+  border-color: var(--brand);
   background: var(--panel);
-  color: var(--accent);
+  color: var(--brand);
   animation: marker-pulse 1.6s ease-in-out infinite;
 }
 
+.deploy-step.current .deploy-marker::after {
+  content: "";
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--brand);
+}
+
 @keyframes marker-pulse {
-  0%, 100% { box-shadow: 0 0 0 0 rgba(20, 108, 95, 0.3); }
-  50% { box-shadow: 0 0 0 5px rgba(20, 108, 95, 0); }
+  0%, 100% { box-shadow: 0 0 0 0 rgba(240, 184, 96, 0.45); }
+  50% { box-shadow: 0 0 0 6px rgba(240, 184, 96, 0); }
 }
 
 .deploy-step-label {
   font-size: 12px;
-  color: var(--muted);
+  color: var(--faint);
   line-height: 1.3;
 }
 
-.deploy-step.done .deploy-step-label,
+.deploy-step.done .deploy-step-label {
+  color: var(--ink-soft);
+  font-weight: 500;
+}
+
 .deploy-step.current .deploy-step-label {
   color: var(--ink);
-  font-weight: 700;
+  font-weight: 600;
 }
 
 .deploy-failure {
   display: flex;
   align-items: flex-start;
   gap: 10px;
-  border: 1px solid var(--warn);
+  border: 1px solid var(--warn-line);
   border-radius: 8px;
   padding: 12px;
-  background: #fdf6ec;
+  background: var(--warn-tint);
 }
 
 .deploy-failure-icon {
@@ -707,7 +909,7 @@ main#main-content {
   height: 20px;
   border-radius: 50%;
   background: var(--warn);
-  color: white;
+  color: #1a1206;
   display: grid;
   place-items: center;
   font-size: 12px;
@@ -731,7 +933,8 @@ main#main-content {
 
 @media (prefers-reduced-motion: reduce) {
   .thinking-dots span,
-  .deploy-step.current .deploy-marker {
+  .deploy-step.current .deploy-marker,
+  .status.live .dot {
     animation: none;
   }
 }
@@ -750,21 +953,27 @@ main#main-content {
 
 .deployment-state {
   border-top: 1px solid var(--line);
-  padding-top: 10px;
+  padding-top: 12px;
 }
 
 .deployment-state button {
   justify-self: start;
 }
 
+/* ---- the live moment -------------------------------------------------- */
+
 .live-reveal {
+  position: relative;
   display: flex;
   align-items: center;
   gap: 14px;
-  border: 1px solid #bfe0d6;
-  background: #effaf4;
-  border-radius: 10px;
-  padding: 14px 16px;
+  border: 1px solid var(--good-line);
+  background:
+    radial-gradient(ellipse 70% 120% at 0% 50%, rgba(62, 207, 142, 0.14), transparent 70%),
+    var(--panel);
+  border-radius: var(--radius);
+  padding: 16px 18px;
+  box-shadow: 0 0 0 1px rgba(62, 207, 142, 0.05), 0 10px 40px rgba(62, 207, 142, 0.08);
   animation: live-reveal-in 420ms cubic-bezier(0.22, 1, 0.36, 1) both;
 }
 
@@ -773,6 +982,7 @@ main#main-content {
   height: 30px;
   flex-shrink: 0;
   color: var(--good);
+  filter: drop-shadow(0 0 8px rgba(62, 207, 142, 0.45));
 }
 
 .live-reveal-check circle {
@@ -794,8 +1004,9 @@ main#main-content {
 }
 
 .live-reveal-body strong {
-  color: var(--accent-strong);
-  font-size: 14px;
+  color: var(--good);
+  font-size: 13px;
+  font-weight: 600;
 }
 
 .live-reveal-url-row {
@@ -807,10 +1018,10 @@ main#main-content {
 
 .live-reveal-url {
   color: var(--ink);
-  font-size: 14px;
-  font-weight: 600;
+  font-size: 15px;
+  font-weight: 500;
   text-decoration: none;
-  border-bottom: 1px solid var(--line);
+  border-bottom: 1px solid var(--line-strong);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -818,8 +1029,8 @@ main#main-content {
 }
 
 .live-reveal-url:hover {
-  color: var(--accent-strong);
-  border-bottom-color: var(--accent-strong);
+  color: #ffffff;
+  border-bottom-color: var(--good);
 }
 
 .live-reveal-copy {
@@ -854,6 +1065,8 @@ main#main-content {
   }
 }
 
+/* ---- secrets ---------------------------------------------------------- */
+
 .secret-field {
   display: grid;
   gap: 8px;
@@ -869,17 +1082,20 @@ main#main-content {
 
 .secret-entry input {
   min-width: 0;
-  min-height: 40px;
+  min-height: 38px;
   flex: 1;
   border: 1px solid var(--line);
   border-radius: 8px;
   padding: 0 12px;
+  font-family: var(--font-mono);
 }
+
+/* ---- small screens ---------------------------------------------------- */
 
 @media (max-width: 760px) {
   header {
     height: auto;
-    min-height: 64px;
+    min-height: 60px;
     flex-wrap: wrap;
     padding: 12px 16px;
   }
@@ -903,7 +1119,7 @@ main#main-content {
     border-right: 0;
     border-bottom: 1px solid var(--line);
     display: flex;
-    gap: 8px;
+    gap: 6px;
     overflow-x: auto;
     padding: 10px 14px;
   }
@@ -921,6 +1137,42 @@ main#main-content {
 
   main#main-content {
     padding: 20px 16px;
+    min-width: 0;
+  }
+
+  /* app rows: name on top, link + status underneath, never wider than
+     the screen (they used to push the whole page sideways on phones) */
+  .repo {
+    flex-wrap: wrap;
+    align-items: flex-start;
+    gap: 10px;
+  }
+
+  .repo-left {
+    min-width: 0;
+    flex: 1 1 100%;
+  }
+
+  .repo-left > span:last-child {
+    min-width: 0;
+  }
+
+  .repo-left strong,
+  .repo-left small {
+    overflow-wrap: anywhere;
+  }
+
+  .repo-right {
+    flex: 1 1 100%;
+    justify-content: space-between;
+    min-width: 0;
+    padding-left: 44px;
+  }
+
+  .app-link {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
 
   .heading,
@@ -952,7 +1204,7 @@ main#main-content {
     top: -14px;
     right: auto;
     left: 9px;
-    width: 2px;
+    width: 1px;
     height: 14px;
   }
 }

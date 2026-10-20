@@ -18,8 +18,9 @@ export const dynamic = "force-dynamic";
 function Mark() {
   return (
     <svg className="mark" viewBox="0 0 24 24" aria-hidden="true">
-      <rect x="2" y="8" width="13" height="13" rx="1.5" />
-      <rect x="9" y="1" width="13" height="13" rx="1.5" />
+      <rect className="mark-tile" x="0.5" y="0.5" width="23" height="23" rx="5.4" />
+      <line className="mark-horizon" x1="3.75" y1="16.4" x2="20.25" y2="16.4" />
+      <path className="mark-sun" d="M 5,16.4 A 7,7 0 0 1 19,16.4 Z" />
     </svg>
   );
 }
