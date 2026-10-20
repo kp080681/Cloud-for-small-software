@@ -89,15 +89,15 @@ class FakeDb {
     }
 
     if (text.includes("INSERT INTO workspace_resource_policies")) {
-      const [workspaceId] = params;
+      const [workspaceId, apps, deployments, perApp, providerOps, databases] = params;
       if (!this.policies.some((row) => row.workspace_id === workspaceId)) {
         this.policies.push({
           workspace_id: workspaceId,
-          max_active_apps: 3,
-          max_active_deployments: 3,
-          max_active_deployments_per_app: 1,
-          max_concurrent_provider_operations: 2,
-          max_managed_databases: 3,
+          max_active_apps: apps,
+          max_active_deployments: deployments,
+          max_active_deployments_per_app: perApp,
+          max_concurrent_provider_operations: providerOps,
+          max_managed_databases: databases,
         });
       }
       return { rowCount: 0, rows: [] };

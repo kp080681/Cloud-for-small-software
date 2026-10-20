@@ -1,5 +1,15 @@
+// Must match control-plane/src/workspace-resource-policy.mjs. Both sides seed
+// a workspace's policy row with INSERT ... ON CONFLICT DO NOTHING, so whichever
+// side touches a new workspace first decides its stored limits for good. This
+// copy was left at the old V1 ceiling (3) when the engine was raised to 25,
+// which meant workspaces first created from the dashboard were silently
+// capped at 3 apps. Fixed 2026-10-20; see control-plane/db/023.
 export const DEFAULT_WORKSPACE_RESOURCE_POLICY = Object.freeze({
-  maxActiveApps: 3,
+  maxActiveApps: 25,
+  maxActiveDeployments: 25,
+  maxActiveDeploymentsPerApp: 1,
+  maxConcurrentProviderOperations: 2,
+  maxManagedDatabases: 3,
 });
 
 export class WorkspaceResourcePolicyError extends Error {
@@ -51,10 +61,10 @@ export async function lockWorkspacePolicy(db, workspaceId) {
     [
       workspaceId,
       DEFAULT_WORKSPACE_RESOURCE_POLICY.maxActiveApps,
-      3,
-      1,
-      2,
-      3,
+      DEFAULT_WORKSPACE_RESOURCE_POLICY.maxActiveDeployments,
+      DEFAULT_WORKSPACE_RESOURCE_POLICY.maxActiveDeploymentsPerApp,
+      DEFAULT_WORKSPACE_RESOURCE_POLICY.maxConcurrentProviderOperations,
+      DEFAULT_WORKSPACE_RESOURCE_POLICY.maxManagedDatabases,
     ],
   );
 
