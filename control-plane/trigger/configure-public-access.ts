@@ -92,6 +92,19 @@ async function restoreProviderUrlIfBranded(db:pg.Client,deploymentId:string,bran
   WHERE d.id=$1 AND d.status='LIVE' AND d.live_url=$2`,[deploymentId,brandedUrl]);
 }
 
+// Pre-LIVE branded resolution: attach (idempotent) + ownership verified +
+// a real anonymous request succeeds -> return the branded URL. Never throws.
+async function resolveBrandedUrlBeforeLive({providerProjectId,slug}:{providerProjectId:string;slug:string}):Promise<{url:string|null;host:string}>{
+ const host=brandedHostForSlug(slug);
+ try{
+  const outcome=await ensureBrandedDomain(providerProjectId,host);
+  if(!outcome.attached||outcome.conflict||!outcome.verified)return{url:null,host};
+  const url=`https://${host}`;
+  const probe=await brandedReachability(url);
+  return{url:probe.publiclyReachable?url:null,host};
+ }catch{return{url:null,host}}
+}
+
 // Best-effort: never allowed to affect the deployment's real LIVE status or
 // throw into the caller. A branded-domain hiccup (DNS not propagated yet,
 // slug collision, transient Vercel error) must never strand or fail a
@@ -177,7 +190,19 @@ export const configurePublicAccess=task({id:"ssc-control-plane-configure-public-
   const checkUrl=`https://${productionHost}`;
   if(publicBinding.status!==PublicBindingStatus.MATCH){await db.query(`INSERT INTO deployment_events (deployment_id,from_status,to_status,event_type,message,metadata) VALUES ($1,$2,$2,'PUBLIC_BINDING_UNVERIFIED','Production URL is not proven to point at the verified provider deployment',$3::jsonb)`,[payload.deploymentId,row.status,JSON.stringify({checkUrl,providerDeploymentId:row.provider_deployment_id,providerProjectId:row.provider_project_id,publicBindingStatus:publicBinding.status,aliasDeploymentId:publicBinding.aliasDeploymentId??null,aliasProjectId:publicBinding.aliasProjectId??null,listedOnDeployment:publicBinding.listedOnDeployment??false,responseBodyStored:false,target:"production"})]);return{result:"NODE_15R_7_PUBLIC_BINDING_UNVERIFIED",deploymentId:payload.deploymentId,providerProjectId:row.provider_project_id,providerDeploymentId:row.provider_deployment_id,checkUrl,publicBindingStatus:publicBinding.status,publiclyReachable:false,status:row.status,responseBodyStored:false,target:"production"}}
   const checked=await anonymousCheck(checkUrl);const redirectLocationHost=checked.location?(()=>{try{return new URL(checked.location,checkUrl).hostname}catch{return null}})():null;
-  if(checked.publiclyReachable){await db.query("BEGIN");try{await db.query(`UPDATE deployments SET status='LIVE',live_url=$1,error_code=NULL,error_message=NULL,finished_at=now(),updated_at=now() WHERE id=$2 AND status='HEALTH_CHECKING'`,[checkUrl,payload.deploymentId]);await db.query(`INSERT INTO deployment_events (deployment_id,from_status,to_status,event_type,message,metadata) VALUES ($1,'HEALTH_CHECKING','LIVE','PUBLIC_ACCESS_VERIFIED','Healthy production deployment is publicly reachable',$2::jsonb)`,[payload.deploymentId,JSON.stringify({checkUrl,httpStatus:checked.httpStatus,latencyMs:checked.latencyMs,redirectLocationHost,vercelAuthRedirect:checked.vercelAuthRedirect,redirectUnsafe:checked.redirectUnsafe,responseBodyStored:false,providerDeploymentId:row.provider_deployment_id,providerProjectId:row.provider_project_id,sourceIdentityStatus:sourceIdentity.status,publicBindingStatus:publicBinding.status,target:"production"})]);await db.query("COMMIT")}catch(error){await db.query("ROLLBACK");throw error}const branded=await attachBrandedDomainBestEffort(db,{deploymentId:payload.deploymentId,providerProjectId:row.provider_project_id,slug:row.slug,fromStatus:"LIVE"});if(branded==="pending"||branded==="error")await scheduleBrandedRecheck(payload.deploymentId,0)}
+  if(checked.publiclyReachable){
+   // Resolve the branded URL BEFORE flipping to LIVE, so the LIVE row already
+   // carries <slug>.utplava.dev. Previously LIVE was committed with the
+   // provider URL and the branded swap landed a second later; the dashboard
+   // stops polling the instant it sees LIVE, so it kept showing *.vercel.app
+   // until a manual refresh (2026-10-20, Vantage redeploy). Best-effort and
+   // bounded by the probe's own timeout; on any miss we fall back to the
+   // previous flow (provider URL now, branded overlay + re-checks after).
+   const early=await resolveBrandedUrlBeforeLive({providerProjectId:row.provider_project_id,slug:row.slug});
+   const liveUrl=early.url??checkUrl;
+   await db.query("BEGIN");try{await db.query(`UPDATE deployments SET status='LIVE',live_url=$1,error_code=NULL,error_message=NULL,finished_at=now(),updated_at=now() WHERE id=$2 AND status='HEALTH_CHECKING'`,[liveUrl,payload.deploymentId]);await db.query(`INSERT INTO deployment_events (deployment_id,from_status,to_status,event_type,message,metadata) VALUES ($1,'HEALTH_CHECKING','LIVE','PUBLIC_ACCESS_VERIFIED','Healthy production deployment is publicly reachable',$2::jsonb)`,[payload.deploymentId,JSON.stringify({checkUrl,httpStatus:checked.httpStatus,latencyMs:checked.latencyMs,redirectLocationHost,vercelAuthRedirect:checked.vercelAuthRedirect,redirectUnsafe:checked.redirectUnsafe,responseBodyStored:false,providerDeploymentId:row.provider_deployment_id,providerProjectId:row.provider_project_id,sourceIdentityStatus:sourceIdentity.status,publicBindingStatus:publicBinding.status,target:"production"})]);if(early.url){await db.query(`INSERT INTO deployment_events (deployment_id,from_status,to_status,event_type,message,metadata) VALUES ($1,'LIVE','LIVE','BRANDED_DOMAIN_ATTACHED','Branded subdomain verified and set as the live URL',$2::jsonb)`,[payload.deploymentId,JSON.stringify({brandedHost:early.host,providerProjectId:row.provider_project_id,brandedUrl:early.url,resolvedBeforeLive:true})])}await db.query("COMMIT")}catch(error){await db.query("ROLLBACK");throw error}
+   if(!early.url){const branded=await attachBrandedDomainBestEffort(db,{deploymentId:payload.deploymentId,providerProjectId:row.provider_project_id,slug:row.slug,fromStatus:"LIVE"});if(branded==="pending"||branded==="error")await scheduleBrandedRecheck(payload.deploymentId,0)}
+  }
   else{await db.query(`INSERT INTO deployment_events (deployment_id,from_status,to_status,event_type,message,metadata) VALUES ($1,$2,$2,'PUBLIC_ACCESS_BLOCKED','Production deployment is not publicly reachable without provider authentication',$3::jsonb)`,[payload.deploymentId,row.status,JSON.stringify({checkUrl,httpStatus:checked.httpStatus,latencyMs:checked.latencyMs,redirectLocationHost,vercelAuthRedirect:checked.vercelAuthRedirect,redirectUnsafe:checked.redirectUnsafe,responseBodyStored:false})])}
   return{result:checked.publiclyReachable?"NODE_04_11_PUBLIC_ACCESS_VERIFIED":"NODE_04_11_PUBLIC_ACCESS_BLOCKED",deploymentId:payload.deploymentId,providerProjectId:row.provider_project_id,providerDeploymentId:row.provider_deployment_id,checkUrl,httpStatus:checked.httpStatus,latencyMs:checked.latencyMs,redirectLocationHost,vercelAuthRedirect:checked.vercelAuthRedirect,redirectUnsafe:checked.redirectUnsafe,publiclyReachable:checked.publiclyReachable,status:checked.publiclyReachable?"LIVE":row.status,responseBodyStored:false,sourceIdentityStatus:sourceIdentity.status,publicBindingStatus:publicBinding.status,target:"production"};
  }catch(error:any){
