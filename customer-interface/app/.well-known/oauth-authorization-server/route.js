@@ -36,6 +36,9 @@ export function GET() {
     issuer,
     authorization_endpoint: `${issuer}/api/mcp/authorize`,
     token_endpoint: `${issuer}/api/mcp/token`,
+    // Dynamic client registration (RFC 7591), added 2026-10-23: standard
+    // MCP clients register themselves here before sending the person to sign in.
+    registration_endpoint: `${issuer}/api/mcp/register`,
     response_types_supported: ["code"],
     grant_types_supported: ["authorization_code", "refresh_token"],
     code_challenge_methods_supported: ["S256"],

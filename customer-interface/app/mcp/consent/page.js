@@ -25,6 +25,18 @@ function Mark() {
   );
 }
 
+// The client's name is self-reported at registration, so show the one thing
+// it can't fake: where the browser will be sent back to.
+function returnLabel(redirectUri) {
+  try {
+    const url = new URL(redirectUri);
+    if (url.protocol === "https:" || url.protocol === "http:") return url.host;
+    return `the ${url.protocol.replace(/:$/, "")} app on this device`;
+  } catch {
+    return "the app that asked";
+  }
+}
+
 function ConsentError({ title, message }) {
   return (
     <main className="sign-in">
@@ -58,7 +70,9 @@ export default async function McpConsentPage({ searchParams }) {
     // Mirrors /api/mcp/authorize: sign in first, then retry from the MCP
     // client rather than chaining through the login flow's own redirect
     // handling here too.
-    redirect(`/?mcp_sign_in_required=1`);
+    const back = new URLSearchParams();
+    for (const [key, value] of Object.entries(params ?? {})) if (typeof value === "string") back.set(key, value);
+    redirect(`/api/auth/github/start?return_to=${encodeURIComponent(`/mcp/consent?${back.toString()}`)}`);
   }
 
   let client;
@@ -87,6 +101,10 @@ export default async function McpConsentPage({ searchParams }) {
         <p className="muted">
           {client.name} will be able to see and manage apps in your <strong>{workspace.name}</strong> workspace —
           deploying, checking status, and reading logs — using your Utplava account.
+        </p>
+        <p className="fine muted">
+          After you allow, you&apos;ll be sent back to <strong>{returnLabel(redirectUri)}</strong>. Only allow this if you
+          started connecting {client.name} yourself just now.
         </p>
         <form action="/api/mcp/authorize/decision" method="post" className="consent-form">
           <input type="hidden" name="client_id" value={clientId} />

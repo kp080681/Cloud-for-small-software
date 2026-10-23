@@ -8,11 +8,13 @@ import {
 import {
   clearCookieOptions,
   oauthStateCookieName,
+  returnToCookieName,
   sealSession,
   selectedWorkspaceCookieName,
   sessionCookieName,
   sessionCookieOptions,
 } from "@/src/server/session.mjs";
+import { safeReturnTo } from "@/src/server/mcp-registration.mjs";
 import {
   defaultWorkspaceName,
   ensureInitialWorkspace,
@@ -56,6 +58,11 @@ export async function GET(request) {
     store.set(sessionCookieName, session, sessionCookieOptions());
     store.set(selectedWorkspaceCookieName, workspace.id, sessionCookieOptions());
     store.set(oauthStateCookieName, "", clearCookieOptions());
+    const returnTo = safeReturnTo(store.get(returnToCookieName)?.value);
+    if (returnTo) {
+      store.set(returnToCookieName, "", clearCookieOptions());
+      return Response.redirect(new URL(returnTo, request.url));
+    }
     return Response.redirect(new URL(`/?workspace=${encodeURIComponent(workspace.id)}`, request.url));
   } catch {
     return Response.redirect(new URL("/?auth=failed", request.url));

@@ -3,6 +3,9 @@ import Iron from "@hapi/iron";
 export const sessionCookieName = "utplava_session";
 export const oauthStateCookieName = "utplava_oauth_state";
 export const selectedWorkspaceCookieName = "utplava_workspace";
+// Where to land after GitHub sign-in when sign-in started from an MCP
+// connection (validated with safeReturnTo on both write and read).
+export const returnToCookieName = "utplava_return_to";
 
 // Matches sessionCookieOptions' own maxAge below — the sealed payload and
 // the cookie carrying it should always expire together. An independent

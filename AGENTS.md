@@ -43,6 +43,17 @@ Later, only after the core is reliable:
 
 Do not add new runtimes/frameworks without genuine user demand.
 
+## MCP dynamic client registration (built 2026-10-23)
+
+`/api/mcp/register` (RFC 7591) lets any standard MCP client register itself;
+`registration_endpoint` is advertised in `/.well-known/oauth-authorization-server`.
+This replaces the operator-only allowlist described in `022_mcp_oauth.sql` and
+`control-plane/scripts/register-mcp-client.mjs` (still usable). Registration grants
+nothing by itself: GitHub sign-in plus the consent screen (which now shows the
+redirect host, since names are self-reported) still decide access. Signed-out
+people are sent through GitHub sign-in and returned via `utplava_return_to`,
+validated by `safeReturnTo` (only `/api/mcp/authorize?` or `/mcp/consent?`).
+
 ## Owner alerts (built 2026-10-20)
 
 `customer-interface/src/server/owner-alerts.mjs` emails the founder on a new

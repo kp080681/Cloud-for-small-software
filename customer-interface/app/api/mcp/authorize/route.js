@@ -76,10 +76,13 @@ export async function GET(request) {
       // bolt-on inside this item. For now: a direct, honest error. The
       // real-world flow is "log into Utplava first, then have your MCP
       // client retry" — a one-time inconvenience, not a broken feature.
-      return Response.json(
-        { error: "login_required", message: "Sign in to Utplava first, then retry authorization." },
-        { status: 401 },
-      );
+      // Not signed in yet: send them through GitHub sign-in and bring them
+      // straight back to this same request (2026-10-23). The return path is
+      // checked by safeReturnTo on the way out and again on the way back,
+      // and can only ever be this endpoint or the consent screen.
+      const start = new URL("/api/auth/github/start", request.url);
+      start.searchParams.set("return_to", `${url.pathname}${url.search}`);
+      return Response.redirect(start);
     }
     if (!redirectUriTrusted) {
       // redirect_uri itself could not be confirmed safe (unknown client,
