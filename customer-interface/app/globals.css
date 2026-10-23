@@ -1764,3 +1764,27 @@ button.danger:disabled {
   color: var(--ink-soft);
   font-size: 14px;
 }
+
+/* ---- database export --------------------------------------------------- */
+.db-export {
+  display: grid;
+  gap: 8px;
+}
+
+.db-label {
+  font-size: 13px;
+  color: var(--ink-soft);
+  margin-top: 6px;
+}
+
+.db-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.db-row input {
+  flex: 1;
+  min-width: 0;
+  font-size: 13px;
+}

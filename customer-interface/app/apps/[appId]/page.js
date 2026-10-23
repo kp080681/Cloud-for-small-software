@@ -7,6 +7,8 @@ import { friendlyErrorMessage } from "@/src/shared/deployment-ui-state.mjs";
 import { GitHubPanel } from "../../github-panel.js";
 import { AutoDeployToggle } from "../../auto-deploy-toggle.js";
 import { DeleteAppCard } from "../../delete-app-card.js";
+import { DatabaseCard } from "../../database-card.js";
+import { getAppDatabaseSummary } from "@/src/server/customer-app-database.mjs";
 import { Chrome, Status, appStatus, timeAgo, workspaceHref } from "../../ui.js";
 
 export const dynamic = "force-dynamic";
@@ -59,8 +61,10 @@ export default async function AppPage({ params, searchParams }) {
 
   const db = await connectDatabase();
   let history = [];
+  let database = null;
   try {
     history = await listAppDeployments(db, { customerId: shell.user.id, workspaceId: active.id, appId: app.id });
+    database = await getAppDatabaseSummary(db, { customerId: shell.user.id, workspaceId: active.id, appId: app.id });
   } finally {
     await db.end();
   }
@@ -123,6 +127,8 @@ export default async function AppPage({ params, searchParams }) {
           <p className="muted fine">No deployments yet.</p>
         )}
       </section>
+
+      {database ? <DatabaseCard workspaceId={active.id} appId={app.id} ready={database.ready} /> : null}
 
       <DeleteAppCard workspaceId={active.id} appId={app.id} appName={app.name} homeHref={workspaceHref("/", active.id)} />
     </Chrome>
