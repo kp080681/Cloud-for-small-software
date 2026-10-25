@@ -8,6 +8,7 @@ import { GitHubPanel } from "../../github-panel.js";
 import { AutoDeployToggle } from "../../auto-deploy-toggle.js";
 import { DeleteAppCard } from "../../delete-app-card.js";
 import { DatabaseCard } from "../../database-card.js";
+import { RestoreButton } from "../../restore-button.js";
 import { getAppDatabaseSummary } from "@/src/server/customer-app-database.mjs";
 import { Chrome, Status, appStatus, timeAgo, workspaceHref } from "../../ui.js";
 
@@ -26,6 +27,12 @@ function reasonLabel(deployment) {
 
 // History rows: the newest LIVE deployment is the one serving; older LIVE
 // ones were replaced by it.
+// A version that once went live, with different code from what's serving,
+// can be restored with one click (2026-10-25). Hidden while a deploy runs.
+function canRestore(deployment, servingCommit) {
+  return deployment.status === "LIVE" && Boolean(deployment.shortCommitSha) && deployment.shortCommitSha !== servingCommit;
+}
+
 function historyOutcome(deployment, isServing) {
   if (deployment.status === "LIVE") return isServing ? { tone: "live", text: "Live" } : { tone: "", text: "Replaced" };
   if (deployment.status === "FAILED") {
@@ -69,6 +76,8 @@ export default async function AppPage({ params, searchParams }) {
     await db.end();
   }
   const servingId = history.find((deployment) => deployment.status === "LIVE")?.id ?? null;
+  const servingCommit = history.find((deployment) => deployment.id === servingId)?.shortCommitSha ?? null;
+  const anyRunning = history.some((deployment) => !["LIVE", "FAILED"].includes(deployment.status) && deployment.status !== "DELETED");
   const status = appStatus(app);
 
   return (
@@ -118,7 +127,12 @@ export default async function AppPage({ params, searchParams }) {
                   <span className="what">
                     <span className="mono">{deployment.shortCommitSha || "—"}</span> · {reasonLabel(deployment)} · {outcome.text}
                   </span>
-                  <span className="when">{timeAgo(deployment.finishedAt || deployment.createdAt)}</span>
+                  <span className="when">
+                    {!anyRunning && deployment.id !== servingId && canRestore(deployment, servingCommit) ? (
+                      <RestoreButton workspaceId={active.id} appId={app.id} deploymentId={deployment.id} label={deployment.shortCommitSha || "this version"} />
+                    ) : null}
+                    {timeAgo(deployment.finishedAt || deployment.createdAt)}
+                  </span>
                 </div>
               );
             })}

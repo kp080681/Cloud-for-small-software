@@ -231,10 +231,16 @@ class FakeDb {
       };
     }
 
+    if (text.includes("SELECT id, status, source_commit_sha, source_branch") && text.includes("WHERE id = $1 AND app_id = $2")) {
+      const row = this.deployments.find((d) => d.id === params[0] && d.app_id === params[1]);
+      return { rowCount: row ? 1 : 0, rows: row ? [row] : [] };
+    }
+
     if (text.startsWith("INSERT INTO deployments") && text.includes("parent_deployment_id")) {
-      const [deploymentKey, workspaceId, appId, commitSha, branch, parentDeploymentId] = params;
+      const [deploymentKey, workspaceId, appId, commitSha, branch, parentDeploymentId, reason] = params;
       const deployment = {
         id: `deployment-retry-${this.deployments.length}`,
+        deployment_reason: reason ?? null,
         deployment_key: deploymentKey,
         workspace_id: workspaceId,
         app_id: appId,
@@ -1270,6 +1276,65 @@ test("live app redeploy creates a fresh same-source deployment and leaves live p
   assert.equal(deployment.redeploy.parentDeploymentId, parent.id);
   assert.equal(db.events.some((event) => event.deployment_id === child.id && event.event_type === "REDEPLOY_CREATED"), true);
   assert.equal(JSON.stringify(calls).includes("TRIGGER_SECRET_KEY"), false);
+});
+
+function rollbackFixture() {
+  const db = new FakeDb();
+  const live = db.deployments[0];
+  live.status = "LIVE";
+  live.live_url = "https://app.example";
+  live.orchestrator_run_id = "run-live";
+  // An earlier version that was live before the current one.
+  db.deployments.push({
+    ...live,
+    id: "deployment-old",
+    deployment_key: "dep_old",
+    source_commit_sha: "b".repeat(40),
+    created_at: live.created_at - 1000,
+    orchestrator_run_id: "run-old",
+  });
+  return db;
+}
+
+test("rollback redeploys an earlier live version's code, recorded as a rollback", async () => {
+  const db = rollbackFixture();
+  const calls = [];
+  const deployment = await redeployLiveCustomerApp(db, {
+    ...startArgs({ deploymentId: undefined }),
+    deploymentKeyFactory: () => "dep_rollback",
+    rollbackToDeploymentId: "deployment-old",
+    triggerOrchestrator: async (input) => {
+      calls.push(input);
+      return { id: "run-rollback" };
+    },
+  });
+  const child = db.deployments.find((row) => row.id === deployment.deploymentId);
+  assert.equal(child.source_commit_sha, "b".repeat(40));
+  assert.equal(child.deployment_reason, "rollback");
+  assert.equal(child.parent_deployment_id, "deployment-a");
+  assert.equal(db.deployments.find((row) => row.id === "deployment-a").status, "LIVE");
+  assert.equal(calls.length, 1);
+  const event = db.events.find((row) => row.deployment_id === child.id);
+  assert.equal(event.metadata.rollbackToDeploymentId, "deployment-old");
+  assert.equal(event.message, "Rollback created from an earlier live version");
+});
+
+test("rollback refuses the version that's already serving, unknown versions, and failed ones", async () => {
+  const noop = async () => ({ id: "x" });
+  await assert.rejects(
+    redeployLiveCustomerApp(rollbackFixture(), { ...startArgs({ deploymentId: undefined }), rollbackToDeploymentId: "deployment-a", triggerOrchestrator: noop }),
+    (e) => e.code === "ROLLBACK_ALREADY_SERVING",
+  );
+  await assert.rejects(
+    redeployLiveCustomerApp(rollbackFixture(), { ...startArgs({ deploymentId: undefined }), rollbackToDeploymentId: "nope", triggerOrchestrator: noop }),
+    (e) => e.code === "ROLLBACK_TARGET_NOT_FOUND",
+  );
+  const db = rollbackFixture();
+  db.deployments.find((row) => row.id === "deployment-old").status = "FAILED";
+  await assert.rejects(
+    redeployLiveCustomerApp(db, { ...startArgs({ deploymentId: undefined }), rollbackToDeploymentId: "deployment-old", triggerOrchestrator: noop }),
+    (e) => e.code === "ROLLBACK_TARGET_NOT_FOUND",
+  );
 });
 
 test("live app redeploy reuses active redeployment so duplicate clicks do not fan out", async () => {

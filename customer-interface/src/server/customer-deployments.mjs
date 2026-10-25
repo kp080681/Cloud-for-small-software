@@ -1313,6 +1313,10 @@ export async function redeployLiveCustomerApp(
     appId,
     triggerOrchestrator = triggerDeploymentOrchestrator,
     deploymentKeyFactory = () => `dep_${crypto.randomUUID().replaceAll("-", "")}`,
+    // One-click rollback (2026-10-25): redeploy the code of an earlier
+    // version that was live, instead of the current one. Same checks, rate
+    // limit and cooldown as a redeploy; recorded with reason 'rollback'.
+    rollbackToDeploymentId = null,
   },
 ) {
   let deploymentId = null;
@@ -1367,7 +1371,30 @@ export async function redeployLiveCustomerApp(
     }
     parentDeploymentId = app.live_deployment_id;
 
+    let source = { commitSha: app.live_source_commit_sha, branch: app.live_source_branch };
+    if (rollbackToDeploymentId) {
+      const target = await db.query(
+        `SELECT id, status, source_commit_sha, source_branch
+           FROM deployments
+          WHERE id = $1 AND app_id = $2`,
+        [rollbackToDeploymentId, app.id],
+      );
+      const row = target.rows[0];
+      // Only a version that actually went live can be rolled back to.
+      if (!row || row.status !== "LIVE" || !row.source_commit_sha) {
+        throw Object.assign(new Error("That version can't be restored."), { status: 404, code: "ROLLBACK_TARGET_NOT_FOUND" });
+      }
+      if (row.id === app.live_deployment_id || row.source_commit_sha === app.live_source_commit_sha) {
+        throw Object.assign(new Error("That version is already the one serving."), { status: 409, code: "ROLLBACK_ALREADY_SERVING" });
+      }
+      source = { commitSha: row.source_commit_sha, branch: row.source_branch };
+    }
+
     let deployment = await loadRedeploymentInProgress(db, { appId });
+    if (deployment && rollbackToDeploymentId) {
+      // Never fold a rollback into some other deploy that's running.
+      throw Object.assign(new Error("A deployment is running."), { status: 409, code: "DEPLOYMENT_IN_PROGRESS" });
+    }
     if (deployment) {
       reusedActive = true;
     } else {
@@ -1376,7 +1403,7 @@ export async function redeployLiveCustomerApp(
         `INSERT INTO deployments
            (deployment_key, workspace_id, app_id, source_commit_sha, source_branch,
             status, parent_deployment_id, deployment_reason)
-         VALUES ($1,$2,$3,$4,$5,'ANALYZING',$6,'redeploy')
+         VALUES ($1,$2,$3,$4,$5,'ANALYZING',$6,$7)
          RETURNING id,
                    workspace_id,
                    app_id,
@@ -1392,9 +1419,10 @@ export async function redeployLiveCustomerApp(
           deploymentKeyFactory(),
           app.workspace_id,
           app.id,
-          app.live_source_commit_sha,
-          app.live_source_branch,
+          source.commitSha,
+          source.branch,
           app.live_deployment_id,
+          rollbackToDeploymentId ? "rollback" : "redeploy",
         ],
       );
       deployment = {
@@ -1407,14 +1435,18 @@ export async function redeployLiveCustomerApp(
       await db.query(
         `INSERT INTO deployment_events
            (deployment_id, from_status, to_status, event_type, message, metadata)
-         VALUES ($1,'READY','ANALYZING','REDEPLOY_CREATED',$2,$3::jsonb)`,
+         VALUES ($1,'READY','ANALYZING',
+                 CASE WHEN NOT $2::boolean THEN 'REDEPLOY_CREATED' ELSE 'ROLLBACK_CREATED' END,
+                 $3,$4::jsonb)`,
         [
           deployment.id,
-          "Redeployment created from current immutable source",
+          Boolean(rollbackToDeploymentId),
+          rollbackToDeploymentId ? "Rollback created from an earlier live version" : "Redeployment created from current immutable source",
           JSON.stringify({
             parentDeploymentId: app.live_deployment_id,
-            sourceCommitSha: app.live_source_commit_sha,
-            sourceBranch: app.live_source_branch,
+            sourceCommitSha: source.commitSha,
+            sourceBranch: source.branch,
+            ...(rollbackToDeploymentId ? { rollbackToDeploymentId } : {}),
           }),
         ],
       );

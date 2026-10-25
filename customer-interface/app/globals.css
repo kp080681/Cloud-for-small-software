@@ -1788,3 +1788,32 @@ button.danger:disabled {
   min-width: 0;
   font-size: 13px;
 }
+
+/* ---- restore an earlier version ---------------------------------------- */
+.history-row .when {
+  display: inline-flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.restore {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.restore .plain,
+.restore-note {
+  font-size: 13px;
+  color: var(--ink-soft);
+}
+
+.restore .restore-yes {
+  color: var(--brand);
+  font-weight: 600;
+}
+
+.restore-error {
+  color: #ff8b8f;
+  font-size: 12px;
+}
