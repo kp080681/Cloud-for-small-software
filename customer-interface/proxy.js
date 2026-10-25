@@ -5,7 +5,8 @@ import { legacyRedirectTarget } from "./src/server/app-host.mjs";
 // (CANONICAL_APP_HOST). 308 keeps the method and body, so OAuth and MCP
 // requests survive the move. See src/server/app-host.mjs.
 export function proxy(request) {
-  const target = legacyRedirectTarget(request.url);
+  const host = request.headers.get("x-forwarded-host") || request.headers.get("host");
+  const target = legacyRedirectTarget(request.url, process.env, host);
   if (target) return NextResponse.redirect(target, 308);
   return NextResponse.next();
 }

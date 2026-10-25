@@ -23,7 +23,10 @@ export function mcpIssuerUrl(env = process.env) {
 
 // Where to send a request that arrived on the old address, or null to serve
 // it as-is. Only exact legacy hosts move (preview deployments keep working).
-export function legacyRedirectTarget(requestUrl, env = process.env) {
+// `host` is the Host header the visitor actually used. On Vercel the URL a
+// proxy sees can carry an internal hostname, so the header is the source of
+// truth (found live 2026-10-25: the redirect never fired from the URL alone).
+export function legacyRedirectTarget(requestUrl, env = process.env, host = null) {
   const canonical = canonicalAppHost(env);
   if (!canonical) return null;
   let url;
@@ -32,7 +35,8 @@ export function legacyRedirectTarget(requestUrl, env = process.env) {
   } catch {
     return null;
   }
-  if (!LEGACY_APP_HOSTS.has(url.hostname) || url.hostname === canonical) return null;
+  const visitedHost = String(host || url.host).toLowerCase().split(":")[0];
+  if (!LEGACY_APP_HOSTS.has(visitedHost) || visitedHost === canonical) return null;
   if (NEVER_REDIRECT_PATHS.some((path) => url.pathname === path || url.pathname.startsWith(`${path}/`))) return null;
   url.protocol = "https:";
   url.hostname = canonical;

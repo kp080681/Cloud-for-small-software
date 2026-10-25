@@ -31,3 +31,12 @@ test("the MCP issuer follows the canonical host unless set explicitly", () => {
   assert.equal(mcpIssuerUrl({ ...env, MCP_ISSUER_URL: "https://x.example" }), "https://x.example");
   assert.equal(mcpIssuerUrl({ VERCEL_PROJECT_PRODUCTION_URL: "utplava.vercel.app" }), "https://utplava.vercel.app");
 });
+
+test("the visitor's Host header decides, even if the internal URL differs", () => {
+  assert.equal(
+    legacyRedirectTarget("https://localhost:3000/settings?workspace=w", env, "utplava.vercel.app"),
+    "https://app.utplava.dev/settings?workspace=w",
+  );
+  assert.equal(legacyRedirectTarget("https://localhost:3000/", env, "app.utplava.dev"), null);
+  assert.equal(legacyRedirectTarget("https://localhost:3000/api/github/webhook", env, "utplava.vercel.app"), null);
+});
