@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 
 const MESSAGES = {
@@ -35,7 +35,20 @@ export function RestoreButton({ workspaceId, appId, deploymentId, label }) {
     }
   }
 
-  if (stage === "done") return <span className="restore-note">Restoring…</span>;
+  // After starting, re-read the page every few seconds so the restored
+  // version shows up on its own (about 1-3 minutes), for up to 5 minutes.
+  useEffect(() => {
+    if (stage !== "done") return undefined;
+    let tries = 0;
+    const timer = setInterval(() => {
+      tries += 1;
+      router.refresh();
+      if (tries >= 30) clearInterval(timer);
+    }, 10000);
+    return () => clearInterval(timer);
+  }, [stage, router]);
+
+  if (stage === "done") return <span className="restore-note">Restoring… this page updates when it&apos;s live</span>;
   return (
     <span className="restore">
       {stage === "confirm" ? (
