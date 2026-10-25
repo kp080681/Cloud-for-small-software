@@ -2,7 +2,7 @@ import { task, tasks } from "@trigger.dev/sdk";
 import pg from "pg";
 import { publicAccessRecoveryAction } from "../src/deployment-recovery-rules.mjs";
 import { assertSafeWorkloadRedirect, assertSafeWorkloadUrl, publicAccessRequestInit } from "../src/workload-http.mjs";
-import { sanitizedProjectSlug } from "../src/provider-project-identity.mjs";
+import { brandedSubdomainForSlug } from "../src/provider-project-identity.mjs";
 import {
   ProviderDeploymentIdentityStatus,
   PublicBindingStatus,
@@ -38,7 +38,7 @@ async function anonymousCheck(url:string,safety:{allowedHostnameSuffixes?:string
 // adding a first-level subdomain to a project needs no further manual DNS —
 // see https://docs.vercel.com/docs/domains/working-with-nameservers.
 const BRANDED_DOMAIN_APEX=process.env.BRANDED_DOMAIN_APEX||"utplava.dev";
-function brandedHostForSlug(slug:string){return `${sanitizedProjectSlug(slug)}.${BRANDED_DOMAIN_APEX}`}
+function brandedHostForSlug(slug:string){return `${brandedSubdomainForSlug(slug)}.${BRANDED_DOMAIN_APEX}`}
 
 // Attaches <slug>.utplava.dev to the project if it isn't already there.
 // Idempotent: a GET first (404-tolerant) avoids relying on fragile 400

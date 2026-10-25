@@ -9,7 +9,7 @@ import { vercelRootDirectory } from "../src/source-boundary.mjs";
 import {
   assertProviderProjectNotOwnedByAnotherApp,
   assertRemoteProjectMatchesSscApp,
-  sanitizedProjectSlug,
+  brandedSubdomainForSlug,
   sscProviderProjectName,
 } from "../src/provider-project-identity.mjs";
 import { assertRuntimeMatchesDeployment } from "../src/tenant-boundary.mjs";
@@ -65,7 +65,7 @@ async function ensureRuntime({name,rootDirectory,workspaceId,appId,slug}:{name:s
 // configure-public-access re-attaches, checks ownership and verifies.
 const BRANDED_DOMAIN_APEX=process.env.BRANDED_DOMAIN_APEX||"utplava.dev";
 async function attachBrandedDomainEarly(projectId:string,slug:string){
- try{await request(`/v10/projects/${encodeURIComponent(projectId)}/domains${teamQuery()}`,{method:"POST",body:JSON.stringify({name:`${sanitizedProjectSlug(slug)}.${BRANDED_DOMAIN_APEX}`})})}catch{}
+ try{await request(`/v10/projects/${encodeURIComponent(projectId)}/domains${teamQuery()}`,{method:"POST",body:JSON.stringify({name:`${brandedSubdomainForSlug(slug)}.${BRANDED_DOMAIN_APEX}`})})}catch{}
 }
 
 export const provisionRuntime=task({

@@ -9,6 +9,23 @@ export function sanitizedProjectSlug(slug) {
     || "app";
 }
 
+// Subdomains of utplava.dev that belong to Utplava itself (2026-10-25: the
+// dashboard moves to app.utplava.dev). A customer app whose name would land
+// on one of these gets "<name>-site" instead, so no app can ever take over a
+// platform address. sanitizedProjectSlug("") also yields "app", which this
+// covers too.
+export const RESERVED_BRANDED_SUBDOMAINS = new Set([
+  "app", "www", "api", "admin", "dashboard", "console", "mcp", "auth", "login", "signin",
+  "docs", "guides", "help", "support", "status", "blog", "mail", "email", "smtp", "ftp",
+  "cdn", "static", "assets", "dev", "staging", "preview", "billing", "pay", "account",
+  "accounts", "utplava", "root", "ns1", "ns2", "webhook", "webhooks",
+]);
+
+export function brandedSubdomainForSlug(slug) {
+  const name = sanitizedProjectSlug(slug).slice(0, 58).replace(/-+$/g, "") || "app";
+  return RESERVED_BRANDED_SUBDOMAINS.has(name) ? `${name}-site` : name;
+}
+
 export function compactIdentityId(value, label) {
   const compact = String(value || "").toLowerCase().replace(/[^a-z0-9]/g, "");
   if (!compact) throw new Error(`${label} is required for provider project identity`);

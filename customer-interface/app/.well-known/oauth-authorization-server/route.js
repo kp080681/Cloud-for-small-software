@@ -1,5 +1,7 @@
 import { metadataCorsOptionsRequestHandler } from "mcp-handler";
 
+import { mcpIssuerUrl } from "@/src/server/app-host.mjs";
+
 export const dynamic = "force-dynamic";
 
 // RFC 8414 Authorization Server Metadata. Without this, a spec-compliant
@@ -19,9 +21,8 @@ export const dynamic = "force-dynamic";
 // route's import (and everything else in the same module graph) at build
 // or cold-start time.
 function issuerUrl() {
-  if (process.env.MCP_ISSUER_URL) return process.env.MCP_ISSUER_URL;
-  if (process.env.VERCEL_PROJECT_PRODUCTION_URL) return `https://${process.env.VERCEL_PROJECT_PRODUCTION_URL}`;
-  return null;
+  // MCP_ISSUER_URL, else https://CANONICAL_APP_HOST, else Vercel's production URL.
+  return mcpIssuerUrl();
 }
 
 export function GET() {
