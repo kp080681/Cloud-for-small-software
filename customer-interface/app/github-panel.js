@@ -481,12 +481,15 @@ function AnalysisResult({
     yarn: "Yarn",
     pnpm: "pnpm",
   };
-  const handled = [
-    analysis.framework ? `${displayName[analysis.framework] || analysis.framework} app detected` : null,
-    analysis.packageManager ? `Using ${displayName[analysis.packageManager] || analysis.packageManager}` : null,
-    analysis.buildCommand ? `Build command: ${analysis.buildCommand}` : null,
-    analysis.databaseRequired ? "Needs a database" : "No database needed",
-  ].filter(Boolean);
+  const plainHtml = analysis.packageManager === "none";
+  const handled = plainHtml
+    ? ["Plain HTML website detected", "Nothing to install or build", "No database needed"]
+    : [
+        analysis.framework ? (analysis.framework === "static" ? "Static website detected" : `${displayName[analysis.framework] || analysis.framework} app detected`) : null,
+        analysis.packageManager ? `Using ${displayName[analysis.packageManager] || analysis.packageManager}` : null,
+        analysis.buildCommand ? `Build command: ${analysis.buildCommand}` : null,
+        analysis.databaseRequired ? "Needs a database" : "No database needed",
+      ].filter(Boolean);
   const requirements = configuration?.requirements ?? [];
   const requiredMissing = requirements.filter((item) => item.required && !item.managed && !item.configured);
   const configured = requirements.filter((item) => item.required && !item.managed && item.configured);

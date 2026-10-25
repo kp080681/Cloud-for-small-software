@@ -87,3 +87,41 @@ test("a start script alone, with no build script at all, is still correctly a No
   assert.equal(result.framework, "nodejs");
   assert.equal(result.runtime, "nodejs");
 });
+
+// Plain HTML websites (2026-10-25): the first real outside attempts on
+// Utplava were two repositories like this, and both were turned away.
+test("an index.html with no package.json is a plain HTML website", () => {
+  const detection = detectProject({ packageJson: null, rootFiles: ["index.html", "style.css", "game.js"] });
+  assert.equal(detection.supported, true);
+  assert.equal(detection.plainHtml, true);
+  assert.equal(detection.framework, "static");
+  assert.equal(detection.runtime, "static");
+  assert.equal(detection.databaseRequired, false);
+  assert.equal(detection.reason, null);
+});
+
+test("index.html is matched regardless of case, and .htm works too", () => {
+  assert.equal(detectProject({ packageJson: null, rootFiles: ["Index.HTML"] }).plainHtml, true);
+  assert.equal(detectProject({ packageJson: null, rootFiles: ["index.htm"] }).plainHtml, true);
+});
+
+test("a package.json with no scripts in front of an index.html is still a website", () => {
+  const detection = detectProject({ packageJson: { devDependencies: { prettier: "^3" } }, rootFiles: ["index.html", "package.json"] });
+  assert.equal(detection.plainHtml, true);
+  assert.equal(detection.supported, true);
+});
+
+test("real JavaScript projects are not mistaken for plain HTML", () => {
+  const vite = detectProject({ packageJson: { scripts: { build: "vite build" } }, rootFiles: ["index.html", "package.json"] });
+  assert.equal(vite.plainHtml, undefined);
+  assert.equal(vite.framework, "static");
+  const next = detectProject({ packageJson: { dependencies: { next: "16" }, scripts: { build: "next build" } }, rootFiles: ["package.json"] });
+  assert.equal(next.plainHtml, undefined);
+  assert.equal(next.framework, "nextjs");
+});
+
+test("no package.json and no index.html is still unsupported", () => {
+  const detection = detectProject({ packageJson: null, rootFiles: ["main.py", "requirements.txt"] });
+  assert.equal(detection.supported, false);
+  assert.equal(detection.reason, "PACKAGE_JSON_NOT_FOUND");
+});

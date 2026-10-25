@@ -669,6 +669,32 @@ test("unsupported repository is persisted as safe analysis state", async () => {
   assert.equal(db.deployments[0].error_code, "PACKAGE_JSON_NOT_FOUND");
 });
 
+test("a plain HTML repository is analysed as a ready website with no-op install and build", async () => {
+  const db = new FakeDb();
+  const analysis = await analyzeSelectedRepository(db, {
+    customerId: "identity-a",
+    workspaceId: "workspace-a",
+    repositoryId: "repo-a",
+    deploymentKeyFactory: () => "dep_plain_html",
+    createInstallationClient: async () =>
+      fakeGitHubClient({
+        rootFiles: ["index.html", "style.css", "game.js"],
+        packageJson: null,
+        sourceFiles: { "index.html": "<!doctype html><title>Math game</title>", "game.js": "let score = 0;" },
+      }),
+  });
+
+  assert.equal(analysis.supported, true);
+  assert.equal(analysis.errorCode ?? null, null);
+  assert.equal(analysis.framework, "static");
+  assert.equal(analysis.packageManager, "none");
+  assert.match(analysis.buildCommand, /^echo /);
+  const input = db.buildInputs[0];
+  assert.ok(input, "build input recorded");
+  assert.equal(input.package_manager ?? input.packageManager ?? "none", "none");
+  assert.doesNotMatch(String(input.install_command ?? input.installCommand), /npm|yarn|pnpm/);
+});
+
 test("repository analysis does not invoke provider deployment or provisioning paths", async () => {
   const db = new FakeDb();
   await analyzeSelectedRepository(db, {

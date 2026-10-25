@@ -8,8 +8,37 @@ const DATABASE_DEPENDENCIES = new Set([
   "@supabase/supabase-js",
 ]);
 
+// Plain HTML websites (2026-10-25): an index.html at the top of the
+// repository and nothing to build. Common for apps a chat assistant writes
+// ("make me a simple math game"); the first real attempts on Utplava were
+// two of these and both were turned away. Served as-is, so install and
+// build are harmless no-ops (both columns are required downstream).
+export const PLAIN_HTML_INSTALL_COMMAND = 'echo "Plain HTML site: nothing to install"';
+export const PLAIN_HTML_BUILD_COMMAND = 'echo "Plain HTML site: nothing to build"';
+const PLAIN_HTML_INDEX_FILES = new Set(["index.html", "index.htm"]);
+
+function hasPlainHtmlIndex(rootFiles) {
+  return rootFiles.some((name) => PLAIN_HTML_INDEX_FILES.has(String(name).toLowerCase()));
+}
+
+function plainHtmlDetection(rootFiles) {
+  return {
+    supported: true,
+    framework: "static",
+    runtime: "static",
+    databaseRequired: false,
+    plainHtml: true,
+    packageManager: null,
+    buildCommand: null,
+    startCommand: null,
+    envExamplePresent: rootFiles.some((name) => [".env.example", ".env.sample"].includes(name)),
+    reason: null,
+  };
+}
+
 export function detectProject({ packageJson, rootFiles = [] }) {
   if (!packageJson || typeof packageJson !== "object") {
+    if (hasPlainHtmlIndex(rootFiles)) return plainHtmlDetection(rootFiles);
     return {
       supported: false,
       framework: null,
@@ -59,6 +88,10 @@ export function detectProject({ packageJson, rootFiles = [] }) {
     runtime = "static";
     supported = true;
   }
+
+  // A package.json with no build or start script (only there for a
+  // formatter, say) in front of an index.html is still a plain website.
+  if (!supported && hasPlainHtmlIndex(rootFiles)) return plainHtmlDetection(rootFiles);
 
   const envExamplePresent = rootFiles.some((name) => [".env.example", ".env.sample"].includes(name));
 

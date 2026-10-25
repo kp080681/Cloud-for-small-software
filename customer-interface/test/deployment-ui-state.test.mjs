@@ -59,7 +59,9 @@ test("readinessLabel falls back cleanly for an unknown or missing value", () => 
 });
 
 test("friendlyErrorMessage covers the analysis errorCode set too, not just deployment/config codes — found live showing the raw code as \"Unsupported: PACKAGE_JSON_NOT_FOUND\"", () => {
-  assert.match(friendlyErrorMessage("PACKAGE_JSON_NOT_FOUND"), /package\.json/);
+  // Says what Utplava CAN run, in plain words (2026-10-25), never the raw code.
+  assert.match(friendlyErrorMessage("PACKAGE_JSON_NOT_FOUND"), /index\.html/);
+  assert.doesNotMatch(friendlyErrorMessage("PACKAGE_JSON_NOT_FOUND"), /PACKAGE_JSON_NOT_FOUND/);
   assert.match(friendlyErrorMessage("UNSUPPORTED_PROJECT"), /not a supported/);
   assert.match(friendlyErrorMessage("APP_SLUG_CONFLICT"), /already used/);
 });

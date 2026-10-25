@@ -5,6 +5,7 @@ import { task } from "@trigger.dev/sdk";
 import pg from "pg";
 import { normalizeRootDirectory } from "../src/source-boundary.mjs";
 import { assertRepositoryInWorkspace } from "../src/tenant-boundary.mjs";
+import { PLAIN_HTML_BUILD_COMMAND, PLAIN_HTML_INSTALL_COMMAND, detectProject } from "../src/project-detection.mjs";
 
 const { Client } = pg;
 
@@ -96,16 +97,25 @@ export const prepareBuildInput = task({
       const root = await octokit.repos.getContent({ owner, repo, path: rootPath, ref: deployment.source_commit_sha });
       if (!Array.isArray(root.data)) throw new Error("Configured root directory is not a directory");
       const rootFiles = root.data.map((entry) => entry.name).sort();
-      if (!rootFiles.includes("package.json")) throw new Error("Supported Node.js workload requires package.json in root directory");
-
-      const packagePath = rootPath ? `${rootPath}/package.json` : "package.json";
-      const packageResponse = await octokit.repos.getContent({ owner, repo, path: packagePath, ref: deployment.source_commit_sha });
-      if (Array.isArray(packageResponse.data) || packageResponse.data.type !== "file" || !packageResponse.data.content) throw new Error("Unable to read package.json");
-      const packageJson = JSON.parse(Buffer.from(packageResponse.data.content, "base64").toString("utf8"));
-      const commands = detectPackageManager(rootFiles);
-      const buildCommand = packageJson.scripts?.build ? `${commands.packageManager} run build` : null;
+      let packageJson: any = null;
+      if (rootFiles.includes("package.json")) {
+        const packagePath = rootPath ? `${rootPath}/package.json` : "package.json";
+        const packageResponse = await octokit.repos.getContent({ owner, repo, path: packagePath, ref: deployment.source_commit_sha });
+        if (Array.isArray(packageResponse.data) || packageResponse.data.type !== "file" || !packageResponse.data.content) throw new Error("Unable to read package.json");
+        packageJson = JSON.parse(Buffer.from(packageResponse.data.content, "base64").toString("utf8"));
+      }
+      // Same rule as the dashboard's analysis (project-detection.mjs): a plain
+      // HTML site has nothing to install or build.
+      const plainHtml = detectProject({ packageJson, rootFiles }).plainHtml === true;
+      if (!packageJson && !plainHtml) throw new Error("Supported Node.js workload requires package.json in root directory");
+      const commands = plainHtml
+        ? { packageManager: "none", lockfile: null, installCommand: PLAIN_HTML_INSTALL_COMMAND }
+        : detectPackageManager(rootFiles);
+      const buildCommand = plainHtml
+        ? PLAIN_HTML_BUILD_COMMAND
+        : packageJson.scripts?.build ? `${commands.packageManager} run build` : null;
       if (!buildCommand) throw new Error("Supported workload requires a package.json build script");
-      const startCommand = packageJson.scripts?.start ? `${commands.packageManager} run start` : null;
+      const startCommand = !plainHtml && packageJson.scripts?.start ? `${commands.packageManager} run start` : null;
 
       const manifest = {
         version: 1,
@@ -120,8 +130,8 @@ export const prepareBuildInput = task({
         installCommand: commands.installCommand,
         buildCommand,
         startCommand,
-        packageName: packageJson.name ?? null,
-        packageVersion: packageJson.version ?? null,
+        packageName: packageJson?.name ?? null,
+        packageVersion: packageJson?.version ?? null,
       };
       const manifestSha256 = createHash("sha256").update(stableJson(manifest)).digest("hex");
 
