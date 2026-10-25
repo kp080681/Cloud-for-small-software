@@ -317,7 +317,11 @@ test("a static site's output directory is explicitly set to its own root, and th
   // trivial, was enough to trigger exactly that.
   const source = fs.readFileSync(path.join(root, "trigger", "execute-build.ts"), "utf8");
 
-  assert.match(source, /outputDirectory=resolvedFramework===\s*"static"\s*\?\s*"\."\s*:\s*undefined/);
+  // 2026-10-25: the folder is chosen by staticOutputDirectory ("." by
+  // default, "public" only when the site lives in public/ with nothing at
+  // the root), still only for "static".
+  assert.match(source, /outputDirectory=resolvedFramework===\s*"static"\s*\?\s*await staticOutputDirectory\(deployment\)\s*:\s*undefined/);
+  assert.match(source, /async function staticOutputDirectory\([\s\S]*?if\(hasIndex\(entries\)\)return "\.";[\s\S]*?return "public";[\s\S]*?return "\.";\s*\n\s*\}catch\{return "\."\}/);
   // Must be conditional on "static" specifically — an unconditional "."
   // would break Next.js's own output directory convention (.next),
   // which must be left alone.

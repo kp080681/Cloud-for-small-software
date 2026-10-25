@@ -116,6 +116,33 @@ function toVercelFrameworkValue(framework: string) {
 // completely unchanged.
 const VERCEL_FILE_UPLOAD_TIMEOUT_MS = 25_000;
 
+
+// Where a static site's files actually are (2026-10-25). "." (the repo root)
+// when index.html is there, which is what Lovable/Vite and plain HTML sites
+// use. A site kept in a public/ folder (public/index.html, nothing at the
+// root) is served from "public"; serving "." there returned 404 (found on
+// utplava-waitlist after its files moved into public/). Any lookup problem
+// falls back to ".", the previous behaviour.
+async function staticOutputDirectory(deployment:any):Promise<string>{
+ try{
+  if(!deployment.git_tree_sha||(deployment.root_directory&&deployment.root_directory!=="."))return ".";
+  const [owner,repo]=String(deployment.repository_full_name).split("/");
+  const auth=createAppAuth({appId:process.env.GITHUB_APP_ID!,privateKey:process.env.GITHUB_APP_PRIVATE_KEY!.replace(/\\n/g,"\n")});
+  const installationAuth=await auth({type:"installation",installationId:Number(deployment.github_installation_id)});
+  const octokit=new Octokit({auth:installationAuth.token});
+  const root=await octokit.git.getTree({owner,repo,tree_sha:deployment.git_tree_sha});
+  const entries=root.data.tree??[];
+  const hasIndex=(list:any[])=>list.some((entry:any)=>entry.type==="blob"&&/^index\.html?$/i.test(String(entry.path)));
+  if(hasIndex(entries))return ".";
+  const publicDir=entries.find((entry:any)=>entry.type==="tree"&&entry.path==="public");
+  if(publicDir?.sha){
+   const inner=await octokit.git.getTree({owner,repo,tree_sha:publicDir.sha});
+   if(hasIndex(inner.data.tree??[]))return "public";
+  }
+  return ".";
+ }catch{return "."}
+}
+
 async function uploadFileToVercel(content: Buffer, sha: string) {
   const token = process.env.VERCEL_TOKEN;
   if (!token) throw new Error("Missing VERCEL_TOKEN");
@@ -392,7 +419,7 @@ async function runExecuteBuild(db:any,payload:{deploymentId:string}){
   // producing "No Output Directory named 'public' found"). Only set for
   // "static" specifically — every other framework's own convention
   // (Next.js's .next, etc.) must be left alone.
-  const outputDirectory=resolvedFramework==="static"?".":undefined;
+  const outputDirectory=resolvedFramework==="static"?await staticOutputDirectory(deployment):undefined;
   const gitSourceBody:any={name:deployment.provider_project_name,project:deployment.provider_project_id,target:"production",gitSource:{type:"github",org,repo,ref:deployment.commit_sha},meta:sscDeploymentMeta({deploymentId:payload.deploymentId,sourceCommitSha:deployment.commit_sha,manifestSha256:deployment.manifest_sha256}),projectSettings:{framework:vercelFramework,installCommand:deployment.install_command,buildCommand:deployment.build_command,outputDirectory}};
 
   // A Vercel PROJECT (not just a deployment) has its own persisted
