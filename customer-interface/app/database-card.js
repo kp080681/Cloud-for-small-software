@@ -41,7 +41,7 @@ export function DatabaseCard({ workspaceId, appId, ready }) {
     }
   }
 
-  const backupCommand = connection ? `pg_dump "${connection}" > backup.sql` : "";
+  const backupCommand = connection ? `pg_dump --no-owner --no-privileges --file backup.sql "${connection}"` : "";
 
   return (
     <section className="card">
@@ -75,7 +75,9 @@ export function DatabaseCard({ workspaceId, appId, ready }) {
           </div>
           <small className="muted">
             Treat this like a password: anyone with it can read and change your data. Needs PostgreSQL&apos;s free
-            command-line tools; restore anywhere with <span className="mono">psql &quot;new-connection&quot; &lt; backup.sql</span>.
+            command-line tools, <strong>version 18 or newer</strong> (older versions refuse to back up this database).
+            Restore anywhere with <span className="mono">psql &quot;new-connection&quot; -f backup.sql</span>. Tested: tables,
+            relationships, timestamps and non-English text all come through intact.
           </small>
         </div>
       )}
