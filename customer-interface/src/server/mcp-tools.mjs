@@ -214,8 +214,11 @@ export async function getStatus(
     stage: progress.stage,
     active: progress.active,
     terminal: progress.terminal,
-    url: progress.liveUrl ?? null,
-    message: progress.diagnostic?.title || (progress.terminal ? "This deployment has finished." : "This deployment is in progress."),
+    url: customerFacingUrl(progress.liveUrl),
+    message: progress.diagnostic?.title
+      || (progress.liveUrl && !customerFacingUrl(progress.liveUrl)
+        ? "This app is live; its utplava.dev link is still being set up. Check again in a minute."
+        : progress.terminal ? "This deployment has finished." : "This deployment is in progress."),
     diagnostic: progress.diagnostic ?? null,
   };
 }
@@ -245,6 +248,18 @@ export async function setEnv(db, { customerId, workspaceId, appId, key, value, s
   };
 }
 
+// Agents relay links to people verbatim, so they only ever get the app's
+// utplava.dev link. While that link is still being set up (the provider's
+// own …vercel.app address is serving), they get null and a message saying so.
+function customerFacingUrl(url) {
+  if (!url) return null;
+  try {
+    return new URL(url).hostname.endsWith(".vercel.app") ? null : url;
+  } catch {
+    return null;
+  }
+}
+
 export async function listApps(db, { customerId, workspaceId, loadApplications = listWorkspaceApplications }) {
   const apps = await loadApplications(db, { customerId, workspaceId });
   return {
@@ -253,7 +268,7 @@ export async function listApps(db, { customerId, workspaceId, loadApplications =
       name: app.name,
       slug: app.slug,
       status: app.latestDeploymentStatus ?? null,
-      url: app.liveUrl ?? null,
+      url: customerFacingUrl(app.liveUrl),
     })),
   };
 }

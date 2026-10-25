@@ -10,8 +10,8 @@ function SignIn() {
   return (
     <main className="sign-in">
       <Brand />
-      <h1>Build anywhere.<br />Run here.</h1>
-      <p className="muted">A home for the software you have built.</p>
+      <h1>Built it with AI?<br />Put it online.</h1>
+      <p className="muted">Pick a GitHub repo, get a live link. Database included.</p>
       <section className="panel">
         <h2>Sign in to Utplava</h2>
         <p className="fine muted">Use your GitHub account to continue.</p>
