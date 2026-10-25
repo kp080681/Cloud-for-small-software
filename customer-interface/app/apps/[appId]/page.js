@@ -77,7 +77,10 @@ export default async function AppPage({ params, searchParams }) {
   }
   const servingId = history.find((deployment) => deployment.status === "LIVE")?.id ?? null;
   const servingCommit = history.find((deployment) => deployment.id === servingId)?.shortCommitSha ?? null;
-  const anyRunning = history.some((deployment) => !["LIVE", "FAILED"].includes(deployment.status) && deployment.status !== "DELETED");
+  // Only builds that are truly under way hide Restore. An analysed-but-never-
+  // started deployment (ANALYZING) is idle, and the server refuses a restore
+  // anyway if something is really running.
+  const anyRunning = history.some((deployment) => ["QUEUED", "PROVISIONING", "BUILDING", "DEPLOYING", "HEALTH_CHECKING"].includes(deployment.status));
   const status = appStatus(app);
 
   return (
