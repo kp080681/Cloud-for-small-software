@@ -473,7 +473,8 @@ export async function runAppCheck(input, { requester = createRequester() } = {})
     findings.push(...result.findings);
     if (result.supabaseAnon || /supabase\.co/i.test(source.text)) supabaseSeen = true;
   }
-  if (!anySecret) passed.push(`No secret keys found in the page or its ${scanned.length - 1} script file${scanned.length === 2 ? "" : "s"}`);
+  const scriptCount = scanned.length - 1;
+  if (!anySecret) passed.push(scriptCount ? `No secret keys found in the page or its ${scriptCount} script file${scriptCount === 1 ? "" : "s"}` : "No secret keys found in the page");
 
   // Files that should never be public
   const probes = [
