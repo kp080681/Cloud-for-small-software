@@ -132,3 +132,14 @@ test("an unreachable or erroring site gives a plain error", async () => {
   const requester = fakeRequester({ "https://down.example/": { status: 503, body: "" } });
   await assert.rejects(() => runAppCheck("down.example", { requester }), (e) => e.code === "UNREACHABLE");
 });
+
+test("a CSP that doesn't mention scripts passes framing but gets a small note", async () => {
+  const requester = fakeRequester({
+    "https://framed.example/": { headers: { ...goodHeaders, "content-security-policy": "frame-ancestors 'self'; object-src 'none'; base-uri 'self'" }, body: "<!doctype html>" },
+    "http://framed.example/": { status: 308, headers: { location: "https://framed.example/" }, body: "" },
+  });
+  const result = await runAppCheck("framed.example", { requester });
+  assert.deepEqual(result.findings.map((f) => f.id), ["header-csp-scripts"]);
+  assert.ok(result.passed.includes("Can't be embedded by other sites"));
+  assert.equal(result.score, 10);
+});

@@ -517,7 +517,15 @@ export async function runAppCheck(input, { requester = createRequester() } = {})
 
   // Security headers
   for (const check of HEADER_CHECKS) {
-    if (check.test(headers)) passed.push(check.passedLabel);
+    if (check.id === "csp" && check.test(headers) && !/(?:^|[;,]\s*)(?:script-src|default-src)\b/i.test(String(headers["content-security-policy"]))) {
+      findings.push({
+        id: "header-csp-scripts",
+        severity: "low",
+        title: "Your Content Security Policy doesn't limit scripts yet",
+        explain: "You have a policy (it may stop framing or plugins), but it doesn't say which scripts may run, so it won't block injected scripts.",
+        fix: "\"Extend the Content-Security-Policy with a script-src that only allows my own domain and the services I actually use.\" Try it in report-only mode first so nothing breaks.",
+      });
+    } else if (check.test(headers)) passed.push(check.passedLabel);
     else findings.push({ id: `header-${check.id}`, severity: "low", title: check.title, explain: check.explain, fix: check.fix });
   }
 

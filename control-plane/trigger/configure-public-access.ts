@@ -3,6 +3,7 @@ import pg from "pg";
 import { publicAccessRecoveryAction } from "../src/deployment-recovery-rules.mjs";
 import { assertSafeWorkloadRedirect, assertSafeWorkloadUrl, publicAccessRequestInit } from "../src/workload-http.mjs";
 import { brandedSubdomainForSlug } from "../src/provider-project-identity.mjs";
+import { ensureSecurityHeaders } from "../src/vercel-security-headers.mjs";
 import {
   ProviderDeploymentIdentityStatus,
   PublicBindingStatus,
@@ -116,6 +117,18 @@ async function resolveBrandedUrlBeforeLive({providerProjectId,slug}:{providerPro
  }catch{return{url:null,host}}
 }
 
+// Best-effort, once per deployment going LIVE: safe security headers as a
+// project routing rule (see vercel-security-headers.mjs). A failure is
+// recorded and never affects the deployment.
+async function applySecurityHeadersBestEffort(db:pg.Client,{deploymentId,providerProjectId}:{deploymentId:string;providerProjectId:string}){
+ try{
+  const applied=await ensureSecurityHeaders({projectId:providerProjectId,request:vercelRequest,teamQuery:()=>teamQuery()});
+  await db.query(`INSERT INTO deployment_events (deployment_id,from_status,to_status,event_type,message,metadata) VALUES ($1,'HEALTH_CHECKING','HEALTH_CHECKING','SECURITY_HEADERS_APPLIED','Browser security headers applied',$2::jsonb)`,[deploymentId,JSON.stringify({providerProjectId,versionId:applied.versionId,live:applied.live})]);
+ }catch(error:any){
+  await db.query(`INSERT INTO deployment_events (deployment_id,from_status,to_status,event_type,message,metadata) VALUES ($1,'HEALTH_CHECKING','HEALTH_CHECKING','SECURITY_HEADERS_FAILED','Browser security headers could not be applied',$2::jsonb)`,[deploymentId,JSON.stringify({providerProjectId,status:error?.status??null,error:String(error?.message??error).slice(0,300)})]).catch(()=>{});
+ }
+}
+
 // Best-effort: never allowed to affect the deployment's real LIVE status or
 // throw into the caller. A branded-domain hiccup (DNS not propagated yet,
 // slug collision, transient Vercel error) must never strand or fail a
@@ -209,6 +222,7 @@ export const configurePublicAccess=task({id:"ssc-control-plane-configure-public-
    // until a manual refresh (2026-10-20, Vantage redeploy). Best-effort and
    // bounded by the probe's own timeout; on any miss we fall back to the
    // previous flow (provider URL now, branded overlay + re-checks after).
+   await applySecurityHeadersBestEffort(db,{deploymentId:payload.deploymentId,providerProjectId:row.provider_project_id});
    const early=await resolveBrandedUrlBeforeLive({providerProjectId:row.provider_project_id,slug:row.slug});
    const liveUrl=early.url??checkUrl;
    await db.query("BEGIN");try{await db.query(`UPDATE deployments SET status='LIVE',live_url=$1,error_code=NULL,error_message=NULL,finished_at=now(),updated_at=now() WHERE id=$2 AND status='HEALTH_CHECKING'`,[liveUrl,payload.deploymentId]);await db.query(`INSERT INTO deployment_events (deployment_id,from_status,to_status,event_type,message,metadata) VALUES ($1,'HEALTH_CHECKING','LIVE','PUBLIC_ACCESS_VERIFIED','Healthy production deployment is publicly reachable',$2::jsonb)`,[payload.deploymentId,JSON.stringify({checkUrl,httpStatus:checked.httpStatus,latencyMs:checked.latencyMs,redirectLocationHost,vercelAuthRedirect:checked.vercelAuthRedirect,redirectUnsafe:checked.redirectUnsafe,responseBodyStored:false,providerDeploymentId:row.provider_deployment_id,providerProjectId:row.provider_project_id,sourceIdentityStatus:sourceIdentity.status,publicBindingStatus:publicBinding.status,target:"production"})]);if(early.url){await db.query(`INSERT INTO deployment_events (deployment_id,from_status,to_status,event_type,message,metadata) VALUES ($1,'LIVE','LIVE','BRANDED_DOMAIN_ATTACHED','Branded subdomain verified and set as the live URL',$2::jsonb)`,[payload.deploymentId,JSON.stringify({brandedHost:early.host,providerProjectId:row.provider_project_id,brandedUrl:early.url,resolvedBeforeLive:true})])}await db.query("COMMIT")}catch(error){await db.query("ROLLBACK");throw error}
