@@ -434,14 +434,14 @@ async function checkSupabaseBackend(host, { requester, lookupHost }) {
     await lookupHost(host);
   } catch (error) {
     if (["ENOTFOUND", "ENODATA", "EAI_NONAME"].includes(error?.code)) return "gone";
-    return "unknown";
+    return `unknown:dns:${error?.code || "error"}`;
   }
   try {
     const response = await requester.fetch(new URL(`https://${host}/auth/v1/health`), { maxBytes: 4096, followRedirects: false });
     if (response.status === 540 || (response.status === 503 && /paus/i.test(response.body))) return "paused";
     return "ok";
-  } catch {
-    return "unknown";
+  } catch (error) {
+    return `unknown:http:${error?.code || error?.name || "error"}`;
   }
 }
 
