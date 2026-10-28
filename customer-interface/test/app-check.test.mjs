@@ -143,3 +143,39 @@ test("a CSP that doesn't mention scripts passes framing but gets a small note", 
   assert.ok(result.passed.includes("Can't be embedded by other sites"));
   assert.equal(result.score, 10);
 });
+
+test("a Supabase backend that no longer resolves is reported as down", async () => {
+  const requester = fakeRequester({
+    "https://gone.example/": { headers: goodHeaders, body: '<!doctype html><script>createClient("https://abcdefghijklmnopqrst.supabase.co","x")</script>' },
+    "http://gone.example/": { status: 308, headers: { location: "https://gone.example/" }, body: "" },
+  });
+  const lookupHost = async () => { throw Object.assign(new Error("nope"), { code: "ENOTFOUND" }); };
+  const result = await runAppCheck("gone.example", { requester, lookupHost });
+  const down = result.findings.find((f) => f.id === "supabase-backend-down");
+  assert.ok(down);
+  assert.equal(down.severity, "high");
+  assert.match(down.evidence, /abcdefghijklmnopqrst\.supabase\.co/);
+  assert.ok(!result.findings.some((f) => f.id === "supabase-rls"), "no RLS reminder when there's no backend to protect");
+});
+
+test("a live Supabase backend passes, and only the app's own project host is contacted", async () => {
+  const requester = fakeRequester({
+    "https://alive.example/": { headers: goodHeaders, body: '<!doctype html><script>const u="https://abcdefghijklmnopqrst.supabase.co"</script>' },
+    "http://alive.example/": { status: 308, headers: { location: "https://alive.example/" }, body: "" },
+    "https://abcdefghijklmnopqrst.supabase.co/auth/v1/health": { status: 401, body: "{}" },
+  });
+  const result = await runAppCheck("alive.example", { requester, lookupHost: async () => ({ address: "1.2.3.4" }) });
+  assert.ok(result.passed.includes("Your Supabase backend is answering"));
+  assert.ok(result.findings.some((f) => f.id === "supabase-rls"));
+  assert.equal(requester.calls.filter((c) => c.includes("supabase.co")).length, 1);
+});
+
+test("a paused Supabase project (HTTP 540) is reported as paused", async () => {
+  const requester = fakeRequester({
+    "https://paused.example/": { headers: goodHeaders, body: '<!doctype html><script>"abcdefghijklmnopqrst.supabase.co"</script>' },
+    "http://paused.example/": { status: 308, headers: { location: "https://paused.example/" }, body: "" },
+    "https://abcdefghijklmnopqrst.supabase.co/auth/v1/health": { status: 540, body: "Project paused" },
+  });
+  const result = await runAppCheck("paused.example", { requester, lookupHost: async () => ({}) });
+  assert.match(result.findings.find((f) => f.id === "supabase-backend-down").evidence, /paused/);
+});

@@ -11,11 +11,12 @@
 //   and the module stores nothing.
 
 import dns from "node:dns";
+import { lookup as dnsLookup } from "node:dns/promises";
 import http from "node:http";
 import https from "node:https";
 import net from "node:net";
 
-export const MAX_REQUESTS = 14;
+export const MAX_REQUESTS = 16;
 const MAX_PAGE_BYTES = 1_500_000;
 const MAX_SCRIPT_BYTES = 2_500_000;
 const MAX_PROBE_BYTES = 65_536;
@@ -406,7 +407,36 @@ function inlineScripts(html) {
 
 // ---------------------------------------------------------------- the scan
 
-export async function runAppCheck(input, { requester = createRequester() } = {}) {
+// Supabase project addresses found in an app's own code. Only these exact
+// <ref>.supabase.co hosts are ever contacted, one request each.
+export function supabaseProjectHosts(texts) {
+  const hosts = new Set();
+  for (const text of texts) {
+    for (const match of String(text).matchAll(/\b([a-z0-9]{20})\.supabase\.co\b/gi)) hosts.add(`${match[1].toLowerCase()}.supabase.co`);
+  }
+  return [...hosts].slice(0, 2);
+}
+
+// Is the backend behind this app still there? A paused or deleted Supabase
+// project usually stops resolving in DNS (and a paused one can answer 540),
+// while the app's own page keeps loading normally, so owners don't notice.
+async function checkSupabaseBackend(host, { requester, lookupHost }) {
+  try {
+    await lookupHost(host);
+  } catch (error) {
+    if (["ENOTFOUND", "ENODATA", "EAI_NONAME"].includes(error?.code)) return "gone";
+    return "unknown";
+  }
+  try {
+    const response = await requester.fetch(new URL(`https://${host}/auth/v1/health`), { maxBytes: 4096, followRedirects: false });
+    if (response.status === 540 || (response.status === 503 && /paus/i.test(response.body))) return "paused";
+    return "ok";
+  } catch {
+    return "unknown";
+  }
+}
+
+export async function runAppCheck(input, { requester = createRequester(), lookupHost = dnsLookup } = {}) {
   const target = normalizeTarget(input);
   const findings = [];
   const passed = [];
@@ -529,8 +559,29 @@ export async function runAppCheck(input, { requester = createRequester() } = {})
     else findings.push({ id: `header-${check.id}`, severity: "low", title: check.title, explain: check.explain, fix: check.fix });
   }
 
+  // Supabase backend still answering?
+  let backendDown = false;
+  for (const host of supabaseProjectHosts(scanned.map((source) => source.text))) {
+    const state = await checkSupabaseBackend(host, { requester, lookupHost });
+    if (state === "gone" || state === "paused") {
+      backendDown = true;
+      findings.push({
+        id: "supabase-backend-down",
+        severity: "high",
+        title: "Your app's Supabase backend isn't answering",
+        explain: state === "paused"
+          ? "The Supabase project behind your app is paused. Your homepage still loads, but signing in, saving or loading data will fail for every visitor."
+          : "The Supabase project your app points to can't be found: it's paused or deleted. Your homepage still loads, but signing in, saving or loading data will fail for every visitor.",
+        fix: "Open supabase.com/dashboard. If the project is paused, click Restore (free projects pause after about a week without activity; a paid plan or regular use keeps it awake). If it's gone, create a new project and ask your AI tool: \"Point the app at my new Supabase project URL and anon key, and recreate the tables it needs.\"",
+        evidence: `${host} (${state === "paused" ? "paused" : "not found"})`,
+      });
+    } else if (state === "ok") {
+      passed.push("Your Supabase backend is answering");
+    }
+  }
+
   // Supabase: the most common real leak can't be tested from outside
-  if (supabaseSeen) {
+  if (supabaseSeen && !backendDown) {
     findings.push({
       id: "supabase-rls",
       severity: "info",
