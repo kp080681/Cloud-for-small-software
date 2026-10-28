@@ -59,8 +59,21 @@ export function GitHubPanel({ workspaceId, github, mode = "full", repositoryId =
       setMessage(friendlyErrorMessage(body.error, "That repository isn't available to select right now."));
       return;
     }
-    setMessage(`${body.repository.fullName} selected.`);
     startTransition(() => router.refresh());
+    if (mode === "new" && body.repository?.id) {
+      // One tap, not three (2026-10-28): picking a repository while adding a
+      // new app is a clear intent to analyse it. Fold the long list away,
+      // bring the analysis into view and start it, instead of leaving the
+      // person to scroll back up and find "Analyse project".
+      setRepositoryState(null);
+      setMessage("");
+      requestAnimationFrame(() =>
+        document.getElementById("github-connection")?.scrollIntoView({ behavior: "smooth", block: "start" }),
+      );
+      await analyseRepository(body.repository.id);
+      return;
+    }
+    setMessage(`${body.repository.fullName} selected.`);
     await loadRepositories();
   }
 
