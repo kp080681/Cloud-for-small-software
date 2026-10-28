@@ -412,7 +412,16 @@ function inlineScripts(html) {
 export function supabaseProjectHosts(texts) {
   const hosts = new Set();
   for (const text of texts) {
-    for (const match of String(text).matchAll(/\b([a-z0-9]{20})\.supabase\.co\b/gi)) hosts.add(`${match[1].toLowerCase()}.supabase.co`);
+    const body = String(text);
+    for (const match of body.matchAll(/\b([a-z0-9]{15,30})\.supabase\.(?:co|in)\b/gi)) hosts.add(`${match[1].toLowerCase()}.supabase.co`);
+    // Apps that build the URL from a project id still ship the anon key,
+    // whose payload names the project ("ref").
+    for (const match of body.matchAll(JWT_REGEX)) {
+      const payload = decodeJwtPayload(match[0]);
+      if (payload && /supabase/i.test(String(payload.iss || "")) && /^[a-z0-9]{15,30}$/i.test(String(payload.ref || ""))) {
+        hosts.add(`${String(payload.ref).toLowerCase()}.supabase.co`);
+      }
+    }
   }
   return [...hosts].slice(0, 2);
 }
@@ -561,8 +570,10 @@ export async function runAppCheck(input, { requester = createRequester(), lookup
 
   // Supabase backend still answering?
   let backendDown = false;
+  const backendStates = [];
   for (const host of supabaseProjectHosts(scanned.map((source) => source.text))) {
     const state = await checkSupabaseBackend(host, { requester, lookupHost });
+    backendStates.push(state);
     if (state === "gone" || state === "paused") {
       backendDown = true;
       findings.push({
@@ -598,6 +609,7 @@ export async function runAppCheck(input, { requester = createRequester(), lookup
     findings,
     passed,
     requestsMade: requester.used,
+    supabaseBackend: backendStates,
     checkedAt: new Date().toISOString(),
   };
 }

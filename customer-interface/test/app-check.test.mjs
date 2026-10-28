@@ -179,3 +179,9 @@ test("a paused Supabase project (HTTP 540) is reported as paused", async () => {
   const result = await runAppCheck("paused.example", { requester, lookupHost: async () => ({}) });
   assert.match(result.findings.find((f) => f.id === "supabase-backend-down").evidence, /paused/);
 });
+
+test("the Supabase project is also found from the anon key's ref", async () => {
+  const { supabaseProjectHosts } = await import("../src/server/app-check.mjs");
+  const anon = jwt({ iss: "supabase", ref: "zyxwvutsrqponmlkjihg", role: "anon" });
+  assert.deepEqual(supabaseProjectHosts([`const key="${anon}"`]), ["zyxwvutsrqponmlkjihg.supabase.co"]);
+});
