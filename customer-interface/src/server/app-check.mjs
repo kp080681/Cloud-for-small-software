@@ -11,7 +11,7 @@
 //   and the module stores nothing.
 
 import dns from "node:dns";
-import { lookup as dnsLookup } from "node:dns/promises";
+import { Resolver } from "node:dns/promises";
 import http from "node:http";
 import https from "node:https";
 import net from "node:net";
@@ -429,23 +429,38 @@ export function supabaseProjectHosts(texts) {
 // Is the backend behind this app still there? A paused or deleted Supabase
 // project usually stops resolving in DNS (and a paused one can answer 540),
 // while the app's own page keeps loading normally, so owners don't notice.
+const NOT_FOUND_CODES = new Set(["ENOTFOUND", "ENODATA", "EAI_NONAME"]);
+
+// Asks DNS servers directly (c-ares), not the system resolver: on the
+// hosting platform the system lookup intermittently fails with EBUSY.
+async function resolveHost(host) {
+  const resolver = new Resolver({ timeout: 3000, tries: 2 });
+  try {
+    return await resolver.resolve4(host);
+  } catch (error) {
+    if (!NOT_FOUND_CODES.has(error?.code)) throw error;
+    return await resolver.resolve6(host);
+  }
+}
+
 async function checkSupabaseBackend(host, { requester, lookupHost }) {
   try {
     await lookupHost(host);
   } catch (error) {
-    if (["ENOTFOUND", "ENODATA", "EAI_NONAME"].includes(error?.code)) return "gone";
-    return `unknown:dns:${error?.code || "error"}`;
+    if (NOT_FOUND_CODES.has(error?.code)) return "gone";
+    // Inconclusive DNS: let the request below decide.
   }
   try {
     const response = await requester.fetch(new URL(`https://${host}/auth/v1/health`), { maxBytes: 4096, followRedirects: false });
     if (response.status === 540 || (response.status === 503 && /paus/i.test(response.body))) return "paused";
     return "ok";
   } catch (error) {
+    if (NOT_FOUND_CODES.has(error?.code)) return "gone";
     return `unknown:http:${error?.code || error?.name || "error"}`;
   }
 }
 
-export async function runAppCheck(input, { requester = createRequester(), lookupHost = dnsLookup } = {}) {
+export async function runAppCheck(input, { requester = createRequester(), lookupHost = resolveHost } = {}) {
   const target = normalizeTarget(input);
   const findings = [];
   const passed = [];
