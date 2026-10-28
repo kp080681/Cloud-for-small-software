@@ -25,6 +25,10 @@ export function GitHubPanel({ workspaceId, github, mode = "full", repositoryId =
   const router = useRouter();
   const [isPending, startTransition] = useTransition();
   const [repositoryState, setRepositoryState] = useState(null);
+  // New app page (2026-10-28): one repository at a time. Until one is chosen
+  // the page shows the picker; once chosen it shows only that repository's
+  // analysis and deploy, never every repository ever selected.
+  const [focusRepository, setFocusRepository] = useState(null);
   const [analysisState, setAnalysisState] = useState({});
   const [configurationState, setConfigurationState] = useState({});
   const [deploymentState, setDeploymentState] = useState({});
@@ -61,21 +65,37 @@ export function GitHubPanel({ workspaceId, github, mode = "full", repositoryId =
     }
     startTransition(() => router.refresh());
     if (mode === "new" && body.repository?.id) {
-      // One tap, not three (2026-10-28): picking a repository while adding a
-      // new app is a clear intent to analyse it. Fold the long list away,
-      // bring the analysis into view and start it, instead of leaving the
-      // person to scroll back up and find "Analyse project".
-      setRepositoryState(null);
-      setMessage("");
-      requestAnimationFrame(() =>
-        document.getElementById("github-connection")?.scrollIntoView({ behavior: "smooth", block: "start" }),
-      );
-      await analyseRepository(body.repository.id);
+      await focusOn(body.repository);
       return;
     }
     setMessage(`${body.repository.fullName} selected.`);
     await loadRepositories();
   }
+
+  // One tap, not three (2026-10-28): picking a repository while adding a new
+  // app is a clear intent to analyse it. Fold the list away, show only this
+  // repository, bring it into view and start the analysis.
+  async function focusOn(repository) {
+    setRepositoryState(null);
+    setMessage("");
+    setFocusRepository(repository);
+    requestAnimationFrame(() =>
+      document.getElementById("github-connection")?.scrollIntoView({ behavior: "smooth", block: "start" }),
+    );
+    await analyseRepository(repository.id);
+  }
+
+  function chooseAnother() {
+    setFocusRepository(null);
+    setMessage("");
+    loadRepositories();
+  }
+
+  // The picker is the first thing on the New app page: open it straight away.
+  useEffect(() => {
+    if (mode === "new" && github.connected) loadRepositories();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   async function analyseRepository(repositoryId) {
     setMessage("");
@@ -257,11 +277,14 @@ export function GitHubPanel({ workspaceId, github, mode = "full", repositoryId =
   );
 
   const embedded = mode === "app";
-  const visibleRepositories = github.selectedRepositories.filter((repository) =>
-    mode === "app" ? repository.id === repositoryId
-      : mode === "new" ? !hiddenAtOpen.has(repository.id)
-      : true,
+  const selectedByGithubId = new Map(
+    (github.selectedRepositories ?? []).map((repository) => [String(repository.githubRepositoryId), repository]),
   );
+  const visibleRepositories = mode === "new"
+    ? (focusRepository
+      ? [github.selectedRepositories.find((repository) => repository.id === focusRepository.id) ?? focusRepository]
+      : [])
+    : github.selectedRepositories.filter((repository) => (mode === "app" ? repository.id === repositoryId : true));
 
   return (
     <section id="github-connection" className={`panel section-gap github-panel${embedded ? " embedded" : ""}`}>
@@ -283,9 +306,15 @@ export function GitHubPanel({ workspaceId, github, mode = "full", repositoryId =
           <input type="hidden" name="workspaceId" value={workspaceId} />
           <button type="submit">{github.connected ? "Manage GitHub access" : "Connect GitHub"}</button>
         </form>
-        <button type="button" onClick={loadRepositories} disabled={!github.connected || isPending}>
-          {mode === "new" ? "Choose a repository" : "List repositories"}
-        </button>
+        {mode === "new" && focusRepository ? (
+          <button type="button" onClick={chooseAnother} disabled={isPending}>
+            Choose a different repository
+          </button>
+        ) : (
+          <button type="button" onClick={loadRepositories} disabled={!github.connected || isPending}>
+            {mode === "new" ? "Choose a repository" : "List repositories"}
+          </button>
+        )}
       </div>
       </>
       )}
@@ -369,7 +398,11 @@ export function GitHubPanel({ workspaceId, github, mode = "full", repositoryId =
               {group.repositories.length === 0 && !group.error ? (
                 <p className="helptext">No repositories are available to this installation.</p>
               ) : null}
-              {group.repositories.map((repository) => (
+              {group.repositories.filter((repository) => {
+                if (mode !== "new") return true;
+                const stored = selectedByGithubId.get(String(repository.githubRepositoryId));
+                return !(stored && hiddenAtOpen.has(stored.id));
+              }).map((repository) => (
                 <div className="repo" key={repository.githubRepositoryId}>
                   <span className="repo-left">
                     <span className="repo-icon">{repository.name.slice(0, 1).toUpperCase()}</span>
@@ -378,19 +411,36 @@ export function GitHubPanel({ workspaceId, github, mode = "full", repositoryId =
                       <small>{repository.private ? "Private" : "Public"} - {repository.defaultBranch}</small>
                     </span>
                   </span>
-                  <button
-                    type="button"
-                    onClick={() =>
-                      selectRepository(group.installation.githubInstallationId, repository.githubRepositoryId)
-                    }
-                    disabled={repository.selected || isPending}
-                  >
-                    {repository.selected ? "Selected" : "Select"}
-                  </button>
+                  {mode === "new" ? (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const stored = selectedByGithubId.get(String(repository.githubRepositoryId));
+                        if (stored) focusOn(stored);
+                        else selectRepository(group.installation.githubInstallationId, repository.githubRepositoryId);
+                      }}
+                      disabled={isPending}
+                    >
+                      Select
+                    </button>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={() =>
+                        selectRepository(group.installation.githubInstallationId, repository.githubRepositoryId)
+                      }
+                      disabled={repository.selected || isPending}
+                    >
+                      {repository.selected ? "Selected" : "Select"}
+                    </button>
+                  )}
                 </div>
               ))}
             </div>
           ))}
+          {mode === "new" ? (
+            <p className="helptext">Don't see your repository? Use <strong>Manage GitHub access</strong> to share it with Utplava, then come back here.</p>
+          ) : null}
         </div>
       ) : null}
     </section>
