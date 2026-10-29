@@ -119,7 +119,7 @@ export default async function McpConsentPage({ searchParams }) {
         )}
         <h2>Allow {client.name} to access Utplava?</h2>
         <p className="muted">
-          {client.name} will be able to see and manage apps in your <strong>{workspace.name}</strong> workspace —
+          {client.name} will be able to see and manage apps in your <strong>{workspace.name.replace(/\s+workspace$/i, "")}</strong> workspace —
           deploying, checking status, and reading logs — using your Utplava account.
         </p>
         <p className="fine muted">
