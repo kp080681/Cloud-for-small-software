@@ -1,5 +1,6 @@
 import { createMcpHandler, withMcpAuth } from "mcp-handler";
 import { z } from "zod";
+import { recordToolCall } from "@/src/server/mcp-usage.mjs";
 import { connectDatabase } from "@/src/server/db.mjs";
 import { enforceMcpToolCallLimit, verifyAccessToken } from "@/src/server/mcp-auth.mjs";
 import { RateLimitError } from "@/src/shared/control-plane/rate-limit.mjs";
@@ -115,10 +116,12 @@ async function runTool(toolName, ctx, fn) {
     db = await connectDatabase();
     await enforceMcpToolCallLimit(db, { workspaceId: identity.workspaceId });
     const output = await fn(db, identity);
+    await recordToolCall(db, { workspaceId: identity.workspaceId, toolName, ok: true });
     return { content: [{ type: "text", text: JSON.stringify(output) }], structuredContent: output };
   } catch (error) {
     const message = safeToolErrorMessage(error);
     if (message === GENERIC_TOOL_ERROR_MESSAGE) logUnexpectedToolError(toolName, identity.workspaceId, error);
+    await recordToolCall(db, { workspaceId: identity.workspaceId, toolName, ok: false });
     return { isError: true, content: [{ type: "text", text: message }] };
   } finally {
     if (db) await db.end();
