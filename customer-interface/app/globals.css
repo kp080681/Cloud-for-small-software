@@ -1817,3 +1817,78 @@ button.danger:disabled {
   color: #ff8b8f;
   font-size: 12px;
 }
+
+/* MCP consent: recognised vs unrecognised apps (2026-10-29) */
+.consent-recognised {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 12px;
+  border-radius: 999px;
+  background: var(--good-tint);
+  border: 1px solid var(--good-line);
+  color: var(--good);
+  font-size: 13px;
+  font-weight: 600;
+  margin: 0 0 14px;
+}
+
+.consent-warning {
+  border: 1px solid rgba(248, 81, 73, 0.55);
+  background: rgba(248, 81, 73, 0.1);
+  border-radius: var(--radius);
+  padding: 14px 16px;
+  margin: 0 0 18px;
+  color: var(--ink);
+}
+
+.consent-warning p {
+  margin: 0;
+  line-height: 1.55;
+}
+
+.consent-warning-title {
+  color: #ff7b72;
+  font-weight: 700;
+  font-size: 16px;
+  margin-bottom: 6px !important;
+}
+
+.consent-destination {
+  color: #ffffff;
+  font-family: var(--font-mono);
+  font-size: 15px;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+  margin: 6px 0 8px !important;
+  padding: 6px 10px;
+  border-radius: 6px;
+  background: rgba(0, 0, 0, 0.35);
+}
+
+/* Allow stays visibly off until the box is ticked (the server enforces it too). */
+.consent-form:has(.consent-ack input:not(:checked)) button[value="allow"] {
+  opacity: 0.4;
+  pointer-events: none;
+}
+
+.consent-ack {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  padding: 12px 14px;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius);
+  background: var(--panel-raised);
+  color: var(--ink);
+  font-size: 14px;
+  cursor: pointer;
+}
+
+.consent-ack input {
+  margin-top: 2px;
+  width: 16px;
+  height: 16px;
+  accent-color: #ff7b72;
+  flex: none;
+}

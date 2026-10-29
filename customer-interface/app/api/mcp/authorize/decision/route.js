@@ -2,6 +2,7 @@ import { cookies } from "next/headers";
 import { connectDatabase } from "@/src/server/db.mjs";
 import { requireCustomerSession } from "@/src/server/customer-shell.mjs";
 import { createAuthorizationCode, resolveMcpClient } from "@/src/server/mcp-auth.mjs";
+import { recognisedClient, UNRECOGNISED_ACK_VALUE } from "@/src/server/mcp-recognised-clients.mjs";
 
 export const dynamic = "force-dynamic";
 
@@ -44,6 +45,15 @@ export async function POST(request) {
       target.searchParams.set("error", "access_denied");
       if (typeof state === "string" && state) target.searchParams.set("state", state);
       return Response.redirect(target);
+    }
+
+    // Unrecognised destinations need the explicit "I set this up myself"
+    // tick. Enforced here, not just by the form, so it can't be skipped.
+    if (!recognisedClient(redirectUri) && form.get("acknowledged") !== UNRECOGNISED_ACK_VALUE) {
+      return Response.json(
+        { error: "confirmation_required", message: "Go back and tick \"I set this up myself\" to allow an app Utplava doesn't recognise." },
+        { status: 400 },
+      );
     }
 
     if (typeof codeChallenge !== "string" || typeof workspaceId !== "string" || !codeChallenge || !workspaceId) {

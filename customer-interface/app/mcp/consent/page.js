@@ -3,6 +3,7 @@ import { readCurrentSession } from "@/src/server/customer-shell.mjs";
 import { getAuthorizedWorkspace } from "@/src/server/customer-workspaces.mjs";
 import { connectDatabase } from "@/src/server/db.mjs";
 import { resolveMcpClient } from "@/src/server/mcp-auth.mjs";
+import { recognisedClient, UNRECOGNISED_ACK_VALUE } from "@/src/server/mcp-recognised-clients.mjs";
 
 export const dynamic = "force-dynamic";
 
@@ -90,6 +91,9 @@ export default async function McpConsentPage({ searchParams }) {
     return <ConsentError title="This authorization request is invalid." message="Ask the app or tool you're connecting to start the connection again." />;
   }
 
+  const recognised = recognisedClient(redirectUri);
+  const destination = returnLabel(redirectUri);
+
   return (
     <main className="sign-in">
       <div className="brand">
@@ -97,13 +101,29 @@ export default async function McpConsentPage({ searchParams }) {
         utplava
       </div>
       <section className="panel">
+        {recognised ? (
+          <p className="consent-recognised">
+            <span aria-hidden="true">✓</span> Recognised: {recognised.label}
+          </p>
+        ) : (
+          <div className="consent-warning" role="alert">
+            <p className="consent-warning-title">Utplava doesn&apos;t recognise this app</p>
+            <p>
+              If you allow, access to your apps goes to:
+            </p>
+            <p className="consent-destination">{destination}</p>
+            <p>
+              Someone may be trying to trick you into giving them access. Only continue if you set this up yourself, just now.
+            </p>
+          </div>
+        )}
         <h2>Allow {client.name} to access Utplava?</h2>
         <p className="muted">
           {client.name} will be able to see and manage apps in your <strong>{workspace.name}</strong> workspace —
           deploying, checking status, and reading logs — using your Utplava account.
         </p>
         <p className="fine muted">
-          After you allow, you&apos;ll be sent back to <strong>{returnLabel(redirectUri)}</strong>. Only allow this if you
+          After you allow, you&apos;ll be sent back to <strong>{destination}</strong>. Only allow this if you
           started connecting {client.name} yourself just now.
         </p>
         <form action="/api/mcp/authorize/decision" method="post" className="consent-form">
@@ -113,10 +133,16 @@ export default async function McpConsentPage({ searchParams }) {
           <input type="hidden" name="code_challenge_method" value={codeChallengeMethod} />
           <input type="hidden" name="workspace_id" value={workspaceId} />
           {state ? <input type="hidden" name="state" value={state} /> : null}
+          {recognised ? null : (
+            <label className="consent-ack">
+              <input type="checkbox" name="acknowledged" value={UNRECOGNISED_ACK_VALUE} required />
+              I set this up myself and trust {destination}
+            </label>
+          )}
           <button className="button primary" type="submit" name="decision" value="allow">
             Allow
           </button>
-          <button className="button" type="submit" name="decision" value="deny">
+          <button className="button" type="submit" name="decision" value="deny" formNoValidate>
             Deny
           </button>
         </form>
