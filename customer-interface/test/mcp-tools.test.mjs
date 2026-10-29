@@ -58,6 +58,7 @@ test("deploy always re-analyzes, even for an app that already exists — regress
     deploymentId: "dep-fresh-analysis",
     status: "queued",
     message: "Deploying — this'll take a moment.",
+    dashboardUrl: "https://app.utplava.dev/apps/app-1?workspace=workspace-a",
     url: null,
   });
 });
@@ -139,7 +140,8 @@ test("deploy returns blocked, not a thrown error, when the repository analysis i
   });
 
   assert.equal(result.status, "blocked");
-  assert.match(result.message, /PACKAGE_JSON_NOT_FOUND/);
+  assert.equal(result.errorCode, "PACKAGE_JSON_NOT_FOUND");
+  assert.match(result.message, /index\.html/);
 });
 
 test("getStatus throws APPLICATION_NOT_FOUND for an app with no deployments, without calling loadProgress", async () => {
@@ -239,4 +241,35 @@ test("listApps maps every field the schema promises, including a null status/url
     { appId: "app-1", name: "My App", slug: "my-app", status: "LIVE", url: "https://my-app.utplava.app" },
     { appId: "app-2", name: "New App", slug: "new-app", status: null, url: null },
   ]);
+});
+
+test("a newcomer who hasn't connected GitHub is told exactly how, with the link", async () => {
+  await assert.rejects(
+    deploy(new FakeDb(), {
+      customerId: "identity-a", workspaceId: "workspace-a", repo: "someone/my-app", authorizeWorkspace: noopAuthorize,
+      listInstallations: async () => ({ installations: [] }),
+    }),
+    (error) => error.code === "GITHUB_NOT_CONNECTED" && error.status === 404 && /app\.utplava\.dev\/new/.test(error.message) && /Connect GitHub/.test(error.message),
+  );
+});
+
+test("a repository that isn't shared yet gets the Manage GitHub access step", async () => {
+  await assert.rejects(
+    deploy(new FakeDb(), {
+      customerId: "identity-a", workspaceId: "workspace-a", repo: "someone/other-app", authorizeWorkspace: noopAuthorize,
+      listInstallations: async () => ({ installations: [{ installation: { githubInstallationId: "1" }, repositories: [{ fullName: "someone/my-app", githubRepositoryId: "9" }] }] }),
+    }),
+    (error) => error.code === "REPOSITORY_NOT_AVAILABLE" && /Manage GitHub access/.test(error.message) && /someone\/other-app/.test(error.message),
+  );
+});
+
+test("needs_configuration names the settings and where to add them", async () => {
+  const result = await deploy(new FakeDb({ selectedRepositoryId: "repo-1" }), {
+    customerId: "identity-a", workspaceId: "workspace-a", repo: "a/b", authorizeWorkspace: noopAuthorize,
+    analyzeRepository: async () => ({ appId: "app-9", deploymentId: "d", supported: true }),
+    checkReadiness: async () => ({ readiness: "CONFIGURATION_REQUIRED", deploymentId: "d", requirements: [{ envKey: "OPENAI_API_KEY", required: true }] }),
+    startDeployment: async () => {},
+  });
+  assert.match(result.message, /OPENAI_API_KEY/);
+  assert.match(result.message, /app\.utplava\.dev\/apps\/app-9/);
 });

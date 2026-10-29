@@ -1,4 +1,5 @@
 import { getAuthorizedWorkspace, listWorkspaceApplications } from "./customer-workspaces.mjs";
+import { friendlyErrorMessage } from "../shared/deployment-ui-state.mjs";
 import { analyzeSelectedRepository } from "./repository-analysis.mjs";
 import { listWorkspaceInstallationRepositories, selectWorkspaceRepository } from "./customer-github.mjs";
 import { startCustomerDeployment, getCustomerDeploymentProgressWithResume } from "./customer-deployments.mjs";
@@ -11,6 +12,8 @@ import { getDeploymentReadiness, saveCustomerAppSecret } from "./customer-config
 // today analyze-for-a-new-app and redeploy-an-existing-app are two separate
 // functions with nothing that picks between them; this is that missing
 // entry point.
+
+const DASHBOARD = "https://app.utplava.dev";
 
 export class McpToolError extends Error {
   constructor(code, message, status = 400) {
@@ -33,11 +36,28 @@ async function findSelectedRepositoryId(db, { workspaceId, repo }) {
 // selecting it first (via the real GitHub-backed selection flow) if this
 // workspace has never selected it before. Reuses selectWorkspaceRepository
 // exactly as the web UI's repo picker does — no parallel selection logic.
-async function resolveAndSelectRepository(db, { customerId, workspaceId, repo, listRepositories }) {
+async function resolveAndSelectRepository(db, { customerId, workspaceId, repo, listRepositories, listInstallations = listWorkspaceInstallationRepositories }) {
   const existing = await findSelectedRepositoryId(db, { workspaceId, repo });
   if (existing) return existing;
 
-  const listing = await listWorkspaceInstallationRepositories(db, { customerId, workspaceId, listRepositories });
+  const listing = await listInstallations(db, { customerId, workspaceId, listRepositories });
+  // Newcomers (2026-10-29): someone who just added Utplava from an AI
+  // assistant's directory usually hasn't shared any repositories yet. Say
+  // exactly what to do, with the link, rather than a bare "not available".
+  if (!listing.installations.length) {
+    throw new McpToolError(
+      "GITHUB_NOT_CONNECTED",
+      `Utplava can't see your GitHub repositories yet. Open ${DASHBOARD}/new, click "Connect GitHub" and choose ${repo} (or all repositories). Then ask to deploy again.`,
+      404,
+    );
+  }
+  if (listing.installations.every((group) => group.error)) {
+    throw new McpToolError(
+      "GITHUB_ACCESS_NEEDS_RECONNECT",
+      `Utplava lost access to your GitHub repositories. Open ${DASHBOARD}/new and click "Manage GitHub access" to reconnect, then ask to deploy again.`,
+      404,
+    );
+  }
   for (const group of listing.installations) {
     const match = (group.repositories || []).find((r) => r.fullName?.toLowerCase() === repo.toLowerCase());
     if (match) {
@@ -53,9 +73,15 @@ async function resolveAndSelectRepository(db, { customerId, workspaceId, repo, l
   }
   throw new McpToolError(
     "REPOSITORY_NOT_AVAILABLE",
-    `"${repo}" isn't available to this workspace's connected GitHub installation.`,
+    `Utplava can't see "${repo}" yet. Open ${DASHBOARD}/new, click "Manage GitHub access" and add ${repo} to the repositories Utplava may use, then ask to deploy again. (Check the name is spelled exactly as on GitHub, as owner/name.)`,
     404,
   );
+}
+
+function needsConfigMessage(missing, appUrl) {
+  const keys = missing.map((item) => item.key);
+  const list = keys.length ? `: ${keys.slice(0, 10).join(", ")}${keys.length > 10 ? "…" : ""}` : "";
+  return `This app needs ${keys.length === 1 ? "a setting" : "some settings"} before it can go live${list}. They can be saved with set_env, or on the app's page: ${appUrl}`;
 }
 
 function missingConfigFrom(requirements = []) {
@@ -93,6 +119,7 @@ export async function deploy(
     repo,
     branch,
     listRepositories,
+    listInstallations,
     createInstallationClient,
     deploymentKeyFactory,
     authorizeWorkspace = getAuthorizedWorkspace,
@@ -117,7 +144,7 @@ export async function deploy(
     );
   }
 
-  const repositoryId = await resolveAndSelectRepository(db, { customerId, workspaceId, repo, listRepositories });
+  const repositoryId = await resolveAndSelectRepository(db, { customerId, workspaceId, repo, listRepositories, listInstallations });
   const analysis = await analyzeRepository(db, {
     customerId,
     workspaceId,
@@ -131,7 +158,8 @@ export async function deploy(
       appId: analysis.appId,
       deploymentId: analysis.deploymentId,
       status: "blocked",
-      message: analysis.errorCode ? `This repository isn't supported: ${analysis.errorCode}` : "This repository isn't supported.",
+      errorCode: analysis.errorCode ?? null,
+      message: friendlyErrorMessage(analysis.errorCode, "Utplava can't deploy this repository yet."),
       url: null,
     };
   }
@@ -153,6 +181,7 @@ export async function deploy(
       deploymentId: readiness.deploymentId,
       status: "queued",
       message: "Deploying — this'll take a moment.",
+      dashboardUrl: `${DASHBOARD}/apps/${analysis.appId}?workspace=${workspaceId}`,
       url: null,
     };
   }
@@ -162,7 +191,7 @@ export async function deploy(
       appId: analysis.appId,
       deploymentId: readiness.deploymentId,
       status: "blocked",
-      message: "This app can't be deployed right now — check get_status for details.",
+      message: `This app can't be deployed right now. Its page in the dashboard explains why: ${DASHBOARD}/apps/${analysis.appId}?workspace=${workspaceId}`,
       url: null,
     };
   }
@@ -172,7 +201,7 @@ export async function deploy(
     deploymentId: readiness.deploymentId,
     status: "needs_configuration",
     missingConfig: missingConfigFrom(readiness.requirements),
-    message: "This app needs some configuration before it can deploy.",
+    message: needsConfigMessage(missingConfigFrom(readiness.requirements), `${DASHBOARD}/apps/${analysis.appId}?workspace=${workspaceId}`),
     url: null,
   };
 }
@@ -265,6 +294,9 @@ function customerFacingUrl(url) {
 export async function listApps(db, { customerId, workspaceId, loadApplications = listWorkspaceApplications }) {
   const apps = await loadApplications(db, { customerId, workspaceId });
   return {
+    ...(apps.length ? {} : {
+      message: `No apps yet. To put one online, deploy a GitHub repository (owner/name). If Utplava can't see your repositories, connect GitHub first at ${DASHBOARD}/new.`,
+    }),
     apps: apps.map((app) => ({
       appId: app.id,
       name: app.name,

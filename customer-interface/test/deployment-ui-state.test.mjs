@@ -62,7 +62,7 @@ test("friendlyErrorMessage covers the analysis errorCode set too, not just deplo
   // Says what Utplava CAN run, in plain words (2026-10-25), never the raw code.
   assert.match(friendlyErrorMessage("PACKAGE_JSON_NOT_FOUND"), /index\.html/);
   assert.doesNotMatch(friendlyErrorMessage("PACKAGE_JSON_NOT_FOUND"), /PACKAGE_JSON_NOT_FOUND/);
-  assert.match(friendlyErrorMessage("UNSUPPORTED_PROJECT"), /not a supported/);
+  assert.match(friendlyErrorMessage("UNSUPPORTED_PROJECT"), /can't run this project yet/);
   assert.match(friendlyErrorMessage("APP_SLUG_CONFLICT"), /already used/);
 });
 

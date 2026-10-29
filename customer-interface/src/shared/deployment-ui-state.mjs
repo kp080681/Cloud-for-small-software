@@ -25,9 +25,9 @@ const FRIENDLY_ERROR_MESSAGES = {
   // second site was shipping the raw code straight to the customer.
   REPOSITORY_NOT_SELECTED: "Select a repository before analysing it.",
   GITHUB_BRANCH_HEAD_INVALID: "Utplava could not resolve the repository branch to a commit.",
-  SOURCE_TREE_TRUNCATED: "The repository is too large for V1 source analysis.",
+  SOURCE_TREE_TRUNCATED: "This repository is too large for Utplava to deploy right now.",
   PACKAGE_JSON_NOT_FOUND: "Utplava can't run this project yet. It deploys websites with an index.html at the top of the repository, and JavaScript apps like Next.js, Node.js, Vite and Lovable projects.",
-  UNSUPPORTED_PROJECT: "This repository is not a supported V1 Next.js or Node.js project.",
+  UNSUPPORTED_PROJECT: "Utplava can't run this project yet. It deploys websites with an index.html at the top of the repository, and JavaScript apps like Next.js, Node.js, Vite and Lovable projects.",
   APP_SLUG_CONFLICT: "This application name is already used by another repository in the workspace.",
 };
 
