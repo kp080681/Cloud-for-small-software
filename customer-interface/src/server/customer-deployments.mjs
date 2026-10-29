@@ -39,6 +39,14 @@ const stageByStatus = Object.freeze({
 });
 
 const eventTitles = Object.freeze({
+  ENV_REQUIREMENTS_DETECTED: "Settings your app needs detected",
+  BUILD_INPUT_PREPARED: "Source code prepared",
+  REDEPLOY_CREATED: "Redeploy started",
+  ROLLBACK_CREATED: "Restore to an earlier version started",
+  SECURITY_HEADERS_APPLIED: "Browser safety settings applied",
+  SECURITY_HEADERS_FAILED: "Browser safety settings couldn't be applied (the app still works)",
+  BRANDED_DOMAIN_ATTACHED: "utplava.dev link ready",
+  BRANDED_DOMAIN_PENDING: "utplava.dev link being set up",
   ENV_REQUIREMENTS_VERIFIED: "Configuration verified",
   DATABASE_READY: "Database ready",
   RUNTIME_RECONCILED: "Runtime ready",
@@ -75,19 +83,11 @@ const safeEvidenceKeys = new Set([
   "maxBuildMinutes",
   "missingCount",
   "missingKeys",
-  "provider",
-  "providerDeploymentId",
-  "providerDeploymentUrl",
-  "providerProjectId",
-  "providerProjectName",
-  "providerStatus",
   "reconciled",
   "redirectLocationHost",
-  "responseBodyStored",
   "retryableNow",
   "sourceCommitSha",
   "target",
-  "vercelAuthRedirect",
 ]);
 
 export function deploymentStartIdempotencyKey(deploymentId) {
@@ -131,6 +131,9 @@ function safeEvidence(metadata = {}) {
   const evidence = {};
   for (const [key, value] of Object.entries(metadata || {})) {
     if (blocked.test(key) || !safeEvidenceKeys.has(key) || value === undefined) continue;
+    // The hosting provider stays behind the scenes (2026-10-29): never show
+    // its addresses or names to customers.
+    if (typeof value === "string" && /vercel/i.test(value)) continue;
     evidence[key] = Array.isArray(value) ? value.slice(0, 25) : value;
   }
   return evidence;

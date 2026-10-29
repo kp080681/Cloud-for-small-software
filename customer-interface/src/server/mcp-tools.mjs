@@ -233,7 +233,9 @@ export async function getLogs(
 
   const progress = await loadProgress(db, { customerId, workspaceId, appId, deploymentId });
   const events = Array.isArray(progress.events) ? progress.events : [];
-  const entries = events.slice(-limit).map((event) => ({ at: event.at, title: event.title, evidence: event.evidence }));
+  // Internal bookkeeping events have no customer meaning; leave them out.
+  const meaningful = events.filter((event) => event.title && event.title !== "Deployment event recorded");
+  const entries = meaningful.slice(-limit).map((event) => ({ at: event.at, title: event.title, evidence: event.evidence }));
   return {
     summary: progress.diagnostic?.title || `Status: ${progress.stage}.`,
     entries,
