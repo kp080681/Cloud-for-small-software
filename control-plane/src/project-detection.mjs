@@ -5,8 +5,12 @@ const DATABASE_DEPENDENCIES = new Set([
   "@prisma/client",
   "prisma",
   "drizzle-orm",
-  "@supabase/supabase-js",
 ]);
+// Not "@supabase/supabase-js" (2026-10-30): an app using the Supabase
+// client keeps its own Supabase project (Lovable and Bolt apps nearly all
+// do), so a managed database here sat unused and used up the free plan's
+// one database. An app that also talks to Postgres directly still matches
+// pg, postgres, Prisma or Drizzle above.
 
 // Plain HTML websites (2026-10-25): an index.html at the top of the
 // repository and nothing to build. Common for apps a chat assistant writes

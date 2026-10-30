@@ -485,6 +485,11 @@ async function createOrReuseApp(db, { workspaceId, repository, source }) {
     [workspaceId, repository.id],
   );
   if (existingForRepository.rows[0]) {
+    // An app that already has a Utplava-managed database keeps it, even if
+    // detection no longer asks for one (2026-10-30: Supabase-client apps
+    // stopped getting a database). A redeploy must never quietly take a
+    // live app's DATABASE_URL away.
+    const keepsDatabase = existingForRepository.rows[0].database_mode === "SSC_MANAGED";
     const updated = await db.query(
       `UPDATE apps
           SET name = $1,
@@ -495,7 +500,7 @@ async function createOrReuseApp(db, { workspaceId, repository, source }) {
               updated_at = now()
         WHERE id = $6
         RETURNING id, workspace_id, repository_id, name, slug, framework, runtime, database_required, database_mode`,
-      [appName, source.detection.framework, source.detection.runtime, databaseRequired, databaseMode, existingForRepository.rows[0].id],
+      [appName, source.detection.framework, source.detection.runtime, databaseRequired || keepsDatabase, keepsDatabase ? "SSC_MANAGED" : databaseMode, existingForRepository.rows[0].id],
     );
     return updated.rows[0];
   }

@@ -125,3 +125,12 @@ test("no package.json and no index.html is still unsupported", () => {
   assert.equal(detection.supported, false);
   assert.equal(detection.reason, "PACKAGE_JSON_NOT_FOUND");
 });
+
+test("a Supabase-client app keeps its own backend: no managed database is created for it", async () => {
+  const { detectProject } = await import("../src/project-detection.mjs");
+  const lovable = detectProject({ packageJson: { scripts: { build: "vite build" }, dependencies: { "@supabase/supabase-js": "^2", react: "^18" } }, rootFiles: ["package.json"] });
+  assert.equal(lovable.supported, true);
+  assert.equal(lovable.databaseRequired, false);
+  const both = detectProject({ packageJson: { scripts: { start: "node server.js" }, dependencies: { "@supabase/supabase-js": "^2", pg: "^8" } }, rootFiles: ["package.json"] });
+  assert.equal(both.databaseRequired, true, "direct Postgres use still gets a database");
+});
