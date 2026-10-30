@@ -69,7 +69,7 @@ async function ensureProjectDomain(projectId: string, name: string, redirect?: s
   if (created.status >= 200 && created.status < 300 && created.body) return { ok: true as const, domain: created.body };
   const providerCode = String(created.body?.error?.code ?? "");
   if (created.status === 409 || /in_use|already/i.test(providerCode)) {
-    return { ok: false as const, code: "DOMAIN_IN_USE", message: `${name} is already connected to another app. Remove it there first, or use a different domain.` };
+    return { ok: false as const, code: "DOMAIN_IN_USE", message: `${name} is already connected to another website or app. If it's yours (for example, a project you host elsewhere), remove the domain there first, then try again here. Or use a subdomain such as app.${name}.` };
   }
   if (created.status === 400 || created.status === 422) {
     return { ok: false as const, code: "DOMAIN_REJECTED", message: `${name} can't be used. Check the spelling, and that it's a domain you've registered.` };
