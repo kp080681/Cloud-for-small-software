@@ -18,8 +18,6 @@ export class CustomDomainInputError extends Error {
 // addresses and the hosting provider's. Matching is "equal or a subdomain of".
 export const RESERVED_DOMAIN_SUFFIXES = Object.freeze([
   "utplava.dev",
-  "utplava.com",
-  "dealup.co.in",
   "vercel.app",
   "vercel.com",
   "vercel.sh",
