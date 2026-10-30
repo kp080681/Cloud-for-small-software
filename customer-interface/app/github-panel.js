@@ -375,6 +375,7 @@ export function GitHubPanel({ workspaceId, github, mode = "full", repositoryId =
                     isPending={isPending}
                     checkForNewCode={embedded ? () => analyseRepository(repository.id) : null}
                     checkingForNewCode={isAnalysing}
+                    domainHref={analysis.appId ? (embedded ? "#your-domain" : `/apps/${encodeURIComponent(analysis.appId)}?workspace=${encodeURIComponent(workspaceId)}#your-domain`) : null}
                   />
                 ) : null}
               </div>
@@ -464,7 +465,7 @@ function isProviderUrl(url) {
   }
 }
 
-function LiveReveal({ url, onRefresh = null }) {
+function LiveReveal({ url, onRefresh = null, domainHref = null }) {
   const [copied, setCopied] = useState(false);
   const temporary = isProviderUrl(url);
   const displayUrl = url.replace(/^https?:\/\//, "");
@@ -515,6 +516,9 @@ function LiveReveal({ url, onRefresh = null }) {
             </button>
           </div>
         )}
+        {domainHref && !temporary ? (
+          <a className="live-reveal-domain" href={domainHref}>Use your own domain instead</a>
+        ) : null}
       </div>
     </div>
   );
@@ -536,6 +540,7 @@ function AnalysisResult({
   isPending,
   checkForNewCode = null,
   checkingForNewCode = false,
+  domainHref = null,
 }) {
   const displayName = {
     nextjs: "Next.js",
@@ -683,7 +688,7 @@ function AnalysisResult({
   if (settled) {
     return (
       <div className="analysis-result settled">
-        {currentDeployment.liveUrl ? <LiveReveal url={currentDeployment.liveUrl} onRefresh={() => loadDeploymentProgress(currentDeployment.appId, currentDeployment.deploymentId, { silent: true })} /> : null}
+        {currentDeployment.liveUrl ? <LiveReveal url={currentDeployment.liveUrl} domainHref={domainHref} onRefresh={() => loadDeploymentProgress(currentDeployment.appId, currentDeployment.deploymentId, { silent: true })} /> : null}
         <div className="settled-actions">
           <button
             type="button"
@@ -738,7 +743,7 @@ function AnalysisResult({
             ))}
           </div>
         ) : null}
-        {live && currentDeployment.liveUrl ? <LiveReveal url={currentDeployment.liveUrl} onRefresh={() => loadDeploymentProgress(currentDeployment.appId, currentDeployment.deploymentId, { silent: true })} /> : null}
+        {live && currentDeployment.liveUrl ? <LiveReveal url={currentDeployment.liveUrl} domainHref={domainHref} onRefresh={() => loadDeploymentProgress(currentDeployment.appId, currentDeployment.deploymentId, { silent: true })} /> : null}
         {failed && retryLimitReached ? (
           <small role="status">This deployment has been retried enough times without success. Review what went wrong before trying again.</small>
         ) : null}

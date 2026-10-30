@@ -106,7 +106,7 @@ export function CustomDomainCard({ workspaceId, appId, appIsLive, initialDomain 
 
   if (!domain) {
     return (
-      <section className="card">
+      <section className="card" id="your-domain">
         <h2>Your domain</h2>
         <p className="card-sub">
           Use your own address, like <span className="mono">mybakery.com</span> or <span className="mono">app.mybakery.com</span>.
@@ -139,7 +139,7 @@ export function CustomDomainCard({ workspaceId, appId, appIsLive, initialDomain 
   const toAdd = domain.records ?? [];
 
   return (
-    <section className="card domain-card">
+    <section className="card domain-card" id="your-domain">
       <h2>Your domain</h2>
       <div className="domain-head">
         <span className="mono domain-name">

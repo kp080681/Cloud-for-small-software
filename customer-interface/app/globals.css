@@ -2031,3 +2031,16 @@ button.danger:disabled {
     width: 100%;
   }
 }
+.live-reveal-domain {
+  display: inline-block;
+  margin-top: 8px;
+  font-size: 13px;
+  color: var(--brand);
+  text-decoration: none;
+}
+.live-reveal-domain:hover {
+  text-decoration: underline;
+}
+#your-domain {
+  scroll-margin-top: 80px;
+}
