@@ -142,6 +142,9 @@ class FakeDb {
               ...app,
               latest_deployment_status: latest?.status ?? null,
               live_url: newestLive?.live_url ?? null,
+              custom_domain: app.custom_domain ?? null,
+              custom_domain_status: app.custom_domain_status ?? null,
+              custom_domain_active: app.custom_domain_status === "ACTIVE" ? app.custom_domain : null,
             };
           }),
       };
@@ -275,6 +278,9 @@ test("application listing is workspace-scoped and returns only customer-safe fie
       databaseRequired: false,
       latestDeploymentStatus: "LIVE",
       liveUrl: "https://example.test",
+      utplavaUrl: "https://example.test",
+      customDomain: null,
+      customDomainStatus: null,
       autoDeployOnPush: true,
       repositoryId: null,
       repositoryFullName: null,
@@ -300,4 +306,25 @@ test("an app keeps its working link while a newer deployment is still running", 
   const [app] = await listWorkspaceApplications(db, { customerId: "identity-a", workspaceId: "workspace-a" });
   assert.equal(app.latestDeploymentStatus, "BUILDING");
   assert.equal(app.liveUrl, "https://vantage.utplava.dev");
+});
+
+test("a live custom domain becomes the app's main link; the utplava.dev link stays available", async () => {
+  const db = new FakeDb();
+  db.workspaces.push({ id: "workspace-a", name: "A" });
+  db.memberships.push({ customerId: "identity-a", workspaceId: "workspace-a" });
+  db.apps.push(
+    { id: "app-a", workspace_id: "workspace-a", name: "Bakery", slug: "bakery", deleted_at: null, custom_domain: "mybakery.com", custom_domain_status: "ACTIVE" },
+    { id: "app-b", workspace_id: "workspace-a", name: "Shop", slug: "shop", deleted_at: null, custom_domain: "shop.com", custom_domain_status: "NEEDS_DNS" },
+  );
+  db.deployments.push(
+    { app_id: "app-a", status: "LIVE", live_url: "https://bakery.utplava.dev", created_at: 1 },
+    { app_id: "app-b", status: "LIVE", live_url: "https://shop.utplava.dev", created_at: 1 },
+  );
+  const apps = await listWorkspaceApplications(db, { customerId: "identity-a", workspaceId: "workspace-a" });
+  const bakery = apps.find((app) => app.id === "app-a");
+  const shop = apps.find((app) => app.id === "app-b");
+  assert.equal(bakery.liveUrl, "https://mybakery.com");
+  assert.equal(bakery.utplavaUrl, "https://bakery.utplava.dev");
+  assert.equal(shop.liveUrl, "https://shop.utplava.dev", "a domain still being set up isn't the main link");
+  assert.equal(shop.customDomainStatus, "NEEDS_DNS");
 });

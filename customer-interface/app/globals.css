@@ -1892,3 +1892,142 @@ button.danger:disabled {
   accent-color: #ff7b72;
   flex: none;
 }
+
+/* Custom domain card (2026-10-30) */
+.domain-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-top: 6px;
+}
+.domain-name {
+  font-size: 15px;
+  color: var(--ink);
+  overflow-wrap: anywhere;
+}
+.domain-name a {
+  color: var(--ink);
+  text-decoration: none;
+  border-bottom: 1px solid var(--line-strong);
+}
+.domain-name a:hover {
+  border-bottom-color: var(--brand);
+}
+.domain-message {
+  margin: 10px 0 4px;
+  color: var(--ink-soft);
+  font-size: 14px;
+  line-height: 1.55;
+}
+.domain-setup {
+  margin-top: 14px;
+  border-top: 1px solid var(--line);
+  padding-top: 14px;
+}
+.domain-where {
+  margin: 0 0 6px;
+  font-size: 14px;
+  color: var(--ink-soft);
+}
+.domain-steps {
+  margin: 0 0 14px;
+  padding-left: 20px;
+  color: var(--ink-soft);
+  font-size: 14px;
+  line-height: 1.6;
+}
+.domain-subhead {
+  margin: 14px 0 8px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--ink);
+}
+.dns-records {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  overflow: hidden;
+  margin-bottom: 12px;
+}
+.dns-row {
+  display: grid;
+  grid-template-columns: 72px minmax(90px, 1fr) minmax(0, 2.2fr);
+  gap: 12px;
+  align-items: center;
+  padding: 9px 12px;
+  border-top: 1px solid var(--line);
+  font-size: 13px;
+}
+.dns-row:first-child {
+  border-top: 0;
+}
+.dns-header {
+  background: var(--bg-elevated);
+  color: var(--muted);
+  font-size: 12px;
+}
+.dns-row > span {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.dns-value {
+  color: var(--ink);
+}
+.dns-row button.copy {
+  min-height: 26px;
+  padding: 0 8px;
+  font-size: 12px;
+  margin-left: auto;
+  flex: none;
+}
+.domain-actions {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-top: 14px;
+}
+.domain-error {
+  margin: 10px 0 0;
+  color: #ff7b72;
+  font-size: 13px;
+}
+@media (max-width: 560px) {
+  .dns-row {
+    grid-template-columns: 1fr;
+    gap: 4px;
+  }
+  .dns-header {
+    display: none;
+  }
+  .dns-row > span::before {
+    color: var(--muted);
+    min-width: 44px;
+  }
+  .dns-row > span:nth-child(1)::before { content: "Type"; }
+  .dns-row > span:nth-child(2)::before { content: "Name"; }
+  .dns-row > span:nth-child(3)::before { content: "Value"; }
+}
+.domain-confirm {
+  flex-basis: 100%;
+  margin: 0 0 4px;
+  color: var(--ink-soft);
+  font-size: 13px;
+  line-height: 1.5;
+}
+.domain-form .button.primary {
+  width: auto;
+  flex: none;
+  padding: 0 16px;
+}
+@media (max-width: 560px) {
+  .domain-form {
+    flex-direction: column;
+  }
+  .domain-form .button.primary {
+    width: 100%;
+  }
+}

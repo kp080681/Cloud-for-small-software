@@ -600,6 +600,42 @@ export async function triggerAppDeletionTask({ appId, workspaceId, deletionKey, 
   return response.json().catch(() => ({}));
 }
 
+// Starts the engine task that attaches, checks or removes a custom domain
+// (see customer-custom-domain.mjs for who may ask). The engine does every
+// provider call; this only names the domain row and the action.
+const CUSTOM_DOMAIN_TASK_ID = "ssc-control-plane-manage-custom-domain";
+const CUSTOM_DOMAIN_ACTIONS = new Set(["attach", "check", "remove"]);
+
+export async function triggerCustomDomainTask({ domainId, action, env = process.env, fetchImpl = fetch, now = Date.now() }) {
+  if (!CUSTOM_DOMAIN_ACTIONS.has(action)) throw new Error("Unknown custom domain action.");
+  const secret = env.TRIGGER_SECRET_KEY;
+  if (!secret) {
+    throw Object.assign(new Error("TRIGGER_SECRET_KEY is required."), { status: 500, code: "TRIGGER_SECRET_KEY_REQUIRED" });
+  }
+  const response = await fetchImpl(`${triggerBaseUrl(env)}/api/v1/tasks/${encodeURIComponent(CUSTOM_DOMAIN_TASK_ID)}/trigger`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${secret}`,
+      "Content-Type": "application/json",
+      "x-trigger-api-version": "2025-07-16",
+      "x-trigger-source": "utplava-customer-interface",
+    },
+    body: JSON.stringify({
+      payload: { domainId, action },
+      options: {
+        payloadType: "application/json",
+        // Collapses double-clicks within 15 seconds.
+        idempotencyKey: `domain:${domainId}:${action}:${Math.floor(now / 15_000)}`,
+        tags: [`custom-domain:${domainId}`, `custom-domain-${action}`],
+      },
+    }),
+  });
+  if (!response.ok) {
+    throw Object.assign(new Error("Utplava couldn't start that just now. Try again in a minute."), { status: 502, code: "CUSTOM_DOMAIN_START_FAILED" });
+  }
+  return response.json().catch(() => ({}));
+}
+
 export async function triggerDeploymentOrchestrator({
   deploymentId,
   idempotencyKey = deploymentStartIdempotencyKey(deploymentId),

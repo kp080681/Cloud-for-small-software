@@ -1,0 +1,51 @@
+{
+  "name": "connect_domain",
+  "description": "Connects a domain the user owns (e.g. mybakery.com or app.mybakery.com) to one of their live apps, or re-checks one already connected. Returns the status and, until it's live, the DNS records to add (and any old ones to take out) at the user's domain provider, with steps for that provider.",
+  "backedBy": {
+    "existingFunctions": ["customer-custom-domain.mjs#connectCustomDomain", "customer-custom-domain.mjs#checkCustomDomain"]
+  },
+  "input": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": ["appId", "domain"],
+    "properties": {
+      "appId": { "type": "string" },
+      "domain": { "type": "string", "minLength": 3, "maxLength": 253 }
+    }
+  },
+  "output": {
+    "type": "object",
+    "required": ["status", "message"],
+    "properties": {
+      "domain": { "type": "string" },
+      "status": { "type": "string", "enum": ["NONE", "PENDING", "NEEDS_DNS", "SECURING", "ACTIVE", "FAILED", "REMOVING"] },
+      "url": { "type": ["string", "null"] },
+      "message": { "type": "string" },
+      "dnsProvider": { "type": ["string", "null"] },
+      "addRecords": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "required": ["type", "name", "value"],
+          "properties": { "type": { "type": "string" }, "name": { "type": "string" }, "value": { "type": "string" } }
+        }
+      },
+      "deleteRecords": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "required": ["type", "name", "value"],
+          "properties": { "type": { "type": "string" }, "name": { "type": "string" }, "value": { "type": "string" } }
+        }
+      },
+      "steps": { "type": "array", "items": { "type": "string" } }
+    }
+  },
+  "errors": [
+    { "code": "DOMAIN_INVALID", "retryable": false, "note": "Not a domain name; the message says how to type it." },
+    { "code": "DOMAIN_RESERVED", "retryable": false, "note": "A Utplava or hosting-provider address." },
+    { "code": "DOMAIN_IN_USE", "retryable": false, "note": "Already connected to another app." },
+    { "code": "CUSTOM_DOMAIN_EXISTS", "retryable": false, "note": "This app already has a different domain; remove it on the dashboard first." },
+    { "code": "APP_NOT_LIVE", "retryable": false, "note": "The app must be live before a domain can be connected." }
+  ]
+}

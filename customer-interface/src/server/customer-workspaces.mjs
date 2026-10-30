@@ -32,7 +32,12 @@ export function safeApplication(row) {
     runtime: row.runtime,
     databaseRequired: row.database_required,
     latestDeploymentStatus: row.latest_deployment_status ?? null,
-    liveUrl: row.live_url ?? null,
+    // An active custom domain becomes the app's main link once the app is
+    // live; the utplava.dev link keeps working underneath it.
+    liveUrl: row.live_url ? (row.custom_domain_active ? `https://${row.custom_domain_active}` : row.live_url) : null,
+    utplavaUrl: row.live_url ?? null,
+    customDomain: row.custom_domain ?? null,
+    customDomainStatus: row.custom_domain_status ?? null,
     autoDeployOnPush: row.auto_deploy_on_push !== false,
     repositoryId: row.repository_id ?? null,
     repositoryFullName: row.repository_full_name ?? null,
@@ -227,7 +232,10 @@ export async function listWorkspaceApplications(db, { customerId, workspaceId })
         latest.started AS latest_deployment_started,
         live.live_url,
         live.source_commit_sha AS live_commit_sha,
-        live.deployed_at AS live_deployed_at
+        live.deployed_at AS live_deployed_at,
+        cd.domain AS custom_domain,
+        cd.status AS custom_domain_status,
+        CASE WHEN cd.status = 'ACTIVE' THEN cd.domain END AS custom_domain_active
       FROM customer_workspace_memberships cwm
       JOIN apps a ON a.workspace_id = cwm.workspace_id
       LEFT JOIN github_repositories r ON r.id = a.repository_id
@@ -250,6 +258,13 @@ export async function listWorkspaceApplications(db, { customerId, workspaceId })
         ORDER BY d.created_at DESC
         LIMIT 1
       ) live ON true
+      LEFT JOIN LATERAL (
+        SELECT c.domain, c.status
+        FROM app_custom_domains c
+        WHERE c.app_id = a.id AND c.status <> 'REMOVED'
+        ORDER BY c.created_at DESC
+        LIMIT 1
+      ) cd ON true
       WHERE cwm.customer_identity_id = $1
         AND cwm.workspace_id = $2
         AND a.deleted_at IS NULL

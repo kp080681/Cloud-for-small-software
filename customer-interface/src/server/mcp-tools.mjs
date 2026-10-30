@@ -4,6 +4,7 @@ import { analyzeSelectedRepository } from "./repository-analysis.mjs";
 import { listWorkspaceInstallationRepositories, selectWorkspaceRepository } from "./customer-github.mjs";
 import { startCustomerDeployment, getCustomerDeploymentProgressWithResume } from "./customer-deployments.mjs";
 import { getDeploymentReadiness, saveCustomerAppSecret } from "./customer-configuration.mjs";
+import { checkCustomDomain, connectCustomDomain, getAppCustomDomain } from "./customer-custom-domain.mjs";
 
 // Implements the five tools locked in mcp/schemas/*.json (checklist item 7),
 // composed entirely from existing, already-tested customer-interface
@@ -238,12 +239,13 @@ export async function getStatus(
   if (!deploymentId) throw new McpToolError("APPLICATION_NOT_FOUND", "This app has no deployments yet.", 404);
 
   const progress = await loadProgress(db, { customerId, workspaceId, appId, deploymentId });
+  const customUrl = progress.status === "LIVE" && progress.liveUrl ? await activeCustomDomainUrl(db, appId) : null;
   return {
     status: progress.status,
     stage: progress.stage,
     active: progress.active,
     terminal: progress.terminal,
-    url: customerFacingUrl(progress.liveUrl),
+    url: customUrl ?? customerFacingUrl(progress.liveUrl),
     message: progress.diagnostic?.title
       || (progress.liveUrl && !customerFacingUrl(progress.liveUrl)
         ? "This app is live; its utplava.dev link is still being set up. Check again in a minute."
@@ -305,4 +307,53 @@ export async function listApps(db, { customerId, workspaceId, loadApplications =
       url: customerFacingUrl(app.liveUrl),
     })),
   };
+}
+
+async function activeCustomDomainUrl(db, appId) {
+  const result = await db.query(
+    `SELECT domain FROM app_custom_domains WHERE app_id = $1 AND status = 'ACTIVE' LIMIT 1`,
+    [appId],
+  );
+  return result.rows[0] ? `https://${result.rows[0].domain}` : null;
+}
+
+// connect_domain — connects the person's own domain to an app, or reports
+// how far an already-connected one has got. Utplava attaches it in the
+// background; the records to add usually appear within a few seconds, so
+// this waits briefly for them rather than returning an empty list.
+export async function connectDomain(
+  db,
+  { customerId, workspaceId, appId, domain, authorizeWorkspace = getAuthorizedWorkspace, connect = connectCustomDomain, check = checkCustomDomain, wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms)), loadDomain = loadCustomDomainForTool },
+) {
+  await authorizeWorkspace(db, { customerId, workspaceId });
+  const connected = await connect(db, { customerId, workspaceId, appId, domain });
+  if (connected.alreadyConnected) await check(db, { customerId, workspaceId, appId });
+  let current = connected.domain;
+  for (let attempt = 0; attempt < 6 && current?.status === "PENDING"; attempt++) {
+    await wait(2000);
+    current = (await loadDomain(db, { customerId, workspaceId, appId })) ?? current;
+  }
+  return toolDomainView(current);
+}
+
+async function loadCustomDomainForTool(db, identity) {
+  return (await getAppCustomDomain(db, identity)).domain;
+}
+
+function toolDomainView(domain) {
+  if (!domain) return { status: "NONE", message: "No custom domain is connected." };
+  const view = {
+    domain: domain.domain,
+    status: domain.status,
+    url: domain.url,
+    message: domain.message,
+    dnsProvider: domain.provider?.name ?? null,
+  };
+  if (domain.records?.length || domain.remove?.length) {
+    view.addRecords = domain.records.map(({ type, name, value }) => ({ type, name, value }));
+    view.deleteRecords = domain.remove.map(({ type, name, value }) => ({ type, name, value }));
+    view.steps = domain.steps;
+  }
+  if (domain.status === "PENDING") view.message = `Connecting ${domain.domain}. Call connect_domain again in a few seconds to get the DNS records to add.`;
+    return view;
 }

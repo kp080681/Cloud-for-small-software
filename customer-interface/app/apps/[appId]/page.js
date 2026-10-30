@@ -8,8 +8,10 @@ import { GitHubPanel } from "../../github-panel.js";
 import { AutoDeployToggle } from "../../auto-deploy-toggle.js";
 import { DeleteAppCard } from "../../delete-app-card.js";
 import { DatabaseCard } from "../../database-card.js";
+import { CustomDomainCard } from "../../custom-domain-card.js";
 import { RestoreButton } from "../../restore-button.js";
 import { getAppDatabaseSummary } from "@/src/server/customer-app-database.mjs";
+import { getAppCustomDomain } from "@/src/server/customer-custom-domain.mjs";
 import { Chrome, Status, appStatus, timeAgo, workspaceHref } from "../../ui.js";
 
 export const dynamic = "force-dynamic";
@@ -69,9 +71,11 @@ export default async function AppPage({ params, searchParams }) {
   const db = await connectDatabase();
   let history = [];
   let database = null;
+  let customDomain = null;
   try {
     history = await listAppDeployments(db, { customerId: shell.user.id, workspaceId: active.id, appId: app.id });
     database = await getAppDatabaseSummary(db, { customerId: shell.user.id, workspaceId: active.id, appId: app.id });
+    customDomain = (await getAppCustomDomain(db, { customerId: shell.user.id, workspaceId: active.id, appId: app.id }).catch(() => ({ domain: null }))).domain;
   } finally {
     await db.end();
   }
@@ -116,6 +120,8 @@ export default async function AppPage({ params, searchParams }) {
           <AutoDeployToggle workspaceId={active.id} appId={app.id} initialEnabled={app.autoDeployOnPush} labelMode="state" />
         </div>
       </section>
+
+      <CustomDomainCard workspaceId={active.id} appId={app.id} appIsLive={Boolean(servingId)} initialDomain={customDomain} />
 
       <section className="card">
         <h2>Deployments</h2>

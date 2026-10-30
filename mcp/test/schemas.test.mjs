@@ -16,7 +16,7 @@ function loadTool(name) {
 const ajv = new Ajv({ allErrors: true, strict: true });
 addFormats(ajv);
 
-const TOOL_NAMES = ["deploy", "get_status", "get_logs", "set_env", "list_apps"];
+const TOOL_NAMES = ["deploy", "get_status", "get_logs", "set_env", "list_apps", "connect_domain"];
 
 for (const name of TOOL_NAMES) {
   test(`${name}: input and output are each well-formed JSON Schema`, () => {

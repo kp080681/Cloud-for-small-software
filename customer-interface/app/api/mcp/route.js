@@ -4,7 +4,7 @@ import { recordToolCall } from "@/src/server/mcp-usage.mjs";
 import { connectDatabase } from "@/src/server/db.mjs";
 import { enforceMcpToolCallLimit, verifyAccessToken } from "@/src/server/mcp-auth.mjs";
 import { RateLimitError } from "@/src/shared/control-plane/rate-limit.mjs";
-import { deploy, getLogs, getStatus, listApps, setEnv } from "@/src/server/mcp-tools.mjs";
+import { connectDomain, deploy, getLogs, getStatus, listApps, setEnv } from "@/src/server/mcp-tools.mjs";
 
 export const dynamic = "force-dynamic";
 
@@ -194,6 +194,23 @@ const handler = createMcpHandler(
         }),
       },
       async ({ appId, key, value }, ctx) => runTool("set_env", ctx, (db, identity) => setEnv(db, { ...identity, appId, key, value })),
+    );
+
+    server.registerTool(
+      "connect_domain",
+      {
+        title: "Connect a custom domain",
+        // Adds a domain to the app; the utplava.dev address keeps working, and
+        // calling it again for the same domain only re-checks it.
+        annotations: { title: "Connect a custom domain", readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true },
+        description:
+          "Connects a domain the user owns (e.g. mybakery.com or app.mybakery.com) to one of their live apps, or re-checks one already connected. Returns the status and, until it's live, the DNS records the user must add (and any old ones to take out) at their domain provider, with steps for that provider.",
+        inputSchema: z.object({
+          appId: z.string().uuid(),
+          domain: z.string().min(3).max(253).describe('The domain to connect, e.g. "mybakery.com" or "app.mybakery.com".'),
+        }),
+      },
+      async ({ appId, domain }, ctx) => runTool("connect_domain", ctx, (db, identity) => connectDomain(db, { ...identity, appId, domain })),
     );
 
     server.registerTool(

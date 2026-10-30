@@ -164,6 +164,9 @@ export const deleteApp = task({
         // so deleting the app-scoped bindings safely removes their application records too.
         await db.query(`DELETE FROM app_secret_bindings WHERE app_id=$1`, [payload.appId]);
         await db.query(`DELETE FROM app_runtimes WHERE app_id=$1`, [payload.appId]);
+        // Deleting the Vercel project above removed its domains too; release
+        // the app's custom domain so it can be connected to another app.
+        await db.query(`UPDATE app_custom_domains SET status='REMOVED', removed_at=COALESCE(removed_at,now()), updated_at=now() WHERE app_id=$1 AND status <> 'REMOVED'`, [payload.appId]);
         await db.query(`UPDATE app_databases SET connection_secret_id=NULL, updated_at=now() WHERE app_id=$1`, [payload.appId]);
         await db.query(`DELETE FROM encrypted_secrets WHERE app_id=$1`, [payload.appId]);
         await db.query(`UPDATE deployments SET status='DELETED', live_url=NULL, finished_at=COALESCE(finished_at,now()), updated_at=now() WHERE app_id=$1`, [payload.appId]);

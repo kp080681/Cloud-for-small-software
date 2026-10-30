@@ -273,3 +273,27 @@ test("needs_configuration names the settings and where to add them", async () =>
   assert.match(result.message, /OPENAI_API_KEY/);
   assert.match(result.message, /app\.utplava\.dev\/apps\/app-9/);
 });
+
+test("connect_domain waits briefly for the records, then returns only type/name/value", async () => {
+  const { connectDomain } = await import("../src/server/mcp-tools.mjs");
+  const pending = { domain: "mybakery.com", status: "PENDING", message: "Connecting", records: [], remove: [] };
+  const ready = {
+    domain: "mybakery.com", status: "NEEDS_DNS", url: null, message: "Add the records below in GoDaddy.",
+    provider: { key: "godaddy", name: "GoDaddy" }, steps: ["Sign in"],
+    records: [{ type: "A", name: "@", value: "76.76.21.21", fqdn: "mybakery.com", purpose: "main" }],
+    remove: [{ type: "A", name: "@", value: "185.1.1.1", fqdn: "mybakery.com", purpose: null }],
+  };
+  let loads = 0;
+  const result = await connectDomain({}, {
+    customerId: "c", workspaceId: "w", appId: "a", domain: "mybakery.com",
+    authorizeWorkspace: async () => {},
+    connect: async () => ({ domain: pending, alreadyConnected: false }),
+    check: async () => { throw new Error("not called for a new domain"); },
+    wait: async () => {},
+    loadDomain: async () => (++loads >= 2 ? ready : pending),
+  });
+  assert.equal(result.status, "NEEDS_DNS");
+  assert.equal(result.dnsProvider, "GoDaddy");
+  assert.deepEqual(result.addRecords, [{ type: "A", name: "@", value: "76.76.21.21" }]);
+  assert.deepEqual(result.deleteRecords, [{ type: "A", name: "@", value: "185.1.1.1" }]);
+});
