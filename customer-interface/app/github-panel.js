@@ -465,10 +465,14 @@ function isProviderUrl(url) {
   }
 }
 
-function LiveReveal({ url, onRefresh = null, domainHref = null }) {
+function LiveReveal({ url, customUrl = null, onRefresh = null, domainHref = null }) {
   const [copied, setCopied] = useState(false);
   const temporary = isProviderUrl(url);
-  const displayUrl = url.replace(/^https?:\/\//, "");
+  // With the customer's own domain live, that's the address; the utplava.dev
+  // one is shown underneath as a backup.
+  const primaryUrl = customUrl || url;
+  const displayUrl = primaryUrl.replace(/^https?:\/\//, "");
+  const backupUrl = customUrl ? url.replace(/^https?:\/\//, "") : null;
 
   // Latest callback in a ref: the parent passes a new function every render,
   // which must not restart the timer (or its ~10 minute cap).
@@ -487,7 +491,7 @@ function LiveReveal({ url, onRefresh = null, domainHref = null }) {
 
   async function copyUrl() {
     try {
-      await navigator.clipboard.writeText(url);
+      await navigator.clipboard.writeText(primaryUrl);
       setCopied(true);
       setTimeout(() => setCopied(false), 1800);
     } catch {
@@ -510,13 +514,14 @@ function LiveReveal({ url, onRefresh = null, domainHref = null }) {
           </div>
         ) : (
           <div className="live-reveal-url-row">
-            <a className="live-reveal-url mono" href={url} target="_blank" rel="noreferrer">{displayUrl}</a>
+            <a className="live-reveal-url mono" href={primaryUrl} target="_blank" rel="noreferrer">{displayUrl}</a>
             <button type="button" className="plain live-reveal-copy" onClick={copyUrl}>
               {copied ? "Copied" : "Copy"}
             </button>
           </div>
         )}
-        {domainHref && !temporary ? (
+        {backupUrl ? <small className="live-reveal-backup">Also at <span className="mono">{backupUrl}</span></small> : null}
+        {domainHref && !temporary && !customUrl ? (
           <a className="live-reveal-domain" href={domainHref}>Use your own domain instead</a>
         ) : null}
       </div>
@@ -688,7 +693,7 @@ function AnalysisResult({
   if (settled) {
     return (
       <div className="analysis-result settled">
-        {currentDeployment.liveUrl ? <LiveReveal url={currentDeployment.liveUrl} domainHref={domainHref} onRefresh={() => loadDeploymentProgress(currentDeployment.appId, currentDeployment.deploymentId, { silent: true })} /> : null}
+        {currentDeployment.liveUrl ? <LiveReveal url={currentDeployment.liveUrl} customUrl={currentDeployment.customDomainUrl} domainHref={domainHref} onRefresh={() => loadDeploymentProgress(currentDeployment.appId, currentDeployment.deploymentId, { silent: true })} /> : null}
         <div className="settled-actions">
           <button
             type="button"
@@ -743,7 +748,7 @@ function AnalysisResult({
             ))}
           </div>
         ) : null}
-        {live && currentDeployment.liveUrl ? <LiveReveal url={currentDeployment.liveUrl} domainHref={domainHref} onRefresh={() => loadDeploymentProgress(currentDeployment.appId, currentDeployment.deploymentId, { silent: true })} /> : null}
+        {live && currentDeployment.liveUrl ? <LiveReveal url={currentDeployment.liveUrl} customUrl={currentDeployment.customDomainUrl} domainHref={domainHref} onRefresh={() => loadDeploymentProgress(currentDeployment.appId, currentDeployment.deploymentId, { silent: true })} /> : null}
         {failed && retryLimitReached ? (
           <small role="status">This deployment has been retried enough times without success. Review what went wrong before trying again.</small>
         ) : null}

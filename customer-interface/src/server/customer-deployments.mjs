@@ -208,6 +208,8 @@ export function safeCustomerDeployment(row, events = []) {
     active,
     terminal,
     liveUrl: row.status === "LIVE" ? row.live_url : null,
+    // The customer's own domain, once it's live, is the address to show first.
+    customDomainUrl: row.status === "LIVE" && row.live_url && row.custom_domain_active ? `https://${row.custom_domain_active}` : null,
     sourceCommitSha: row.source_commit_sha,
     sourceBranch: row.source_branch,
     diagnostic: failureDiagnostic(row),
@@ -236,6 +238,7 @@ async function loadAuthorizedDeployment(db, { customerId, workspaceId, appId, de
              d.created_at,
              d.updated_at,
              (SELECT max(e.created_at) FROM deployment_events e WHERE e.deployment_id = d.id) AS latest_event_at,
+             (SELECT c.domain FROM app_custom_domains c WHERE c.app_id = d.app_id AND c.status = 'ACTIVE' LIMIT 1) AS custom_domain_active,
              a.deleted_at AS app_deleted_at,
              bi.id AS build_input_id,
              bi.build_command
@@ -305,6 +308,7 @@ async function loadRetryChildDeployment(db, { appId, parentDeploymentId }) {
              d.created_at,
              d.updated_at,
              (SELECT max(e.created_at) FROM deployment_events e WHERE e.deployment_id = d.id) AS latest_event_at,
+             (SELECT c.domain FROM app_custom_domains c WHERE c.app_id = d.app_id AND c.status = 'ACTIVE' LIMIT 1) AS custom_domain_active,
              NULL AS app_deleted_at,
              bi.id AS build_input_id,
              bi.build_command
@@ -344,6 +348,7 @@ async function loadRetryLineageDeployment(db, { appId, deploymentId }) {
              d.created_at,
              d.updated_at,
              (SELECT max(e.created_at) FROM deployment_events e WHERE e.deployment_id = d.id) AS latest_event_at,
+             (SELECT c.domain FROM app_custom_domains c WHERE c.app_id = d.app_id AND c.status = 'ACTIVE' LIMIT 1) AS custom_domain_active,
              NULL AS app_deleted_at,
              bi.id AS build_input_id,
              bi.build_command
@@ -482,6 +487,7 @@ async function loadRedeploymentInProgress(db, { appId }) {
              d.created_at,
              d.updated_at,
              (SELECT max(e.created_at) FROM deployment_events e WHERE e.deployment_id = d.id) AS latest_event_at,
+             (SELECT c.domain FROM app_custom_domains c WHERE c.app_id = d.app_id AND c.status = 'ACTIVE' LIMIT 1) AS custom_domain_active,
              NULL AS app_deleted_at,
              bi.id AS build_input_id,
              bi.build_command

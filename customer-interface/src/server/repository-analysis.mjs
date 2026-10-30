@@ -112,6 +112,7 @@ function safeAnalysis(row) {
       source_branch: row.source_branch ?? null,
       orchestrator_run_id: row.orchestrator_run_id ?? null,
       live_url: row.live_url ?? null,
+      custom_domain_active: row.custom_domain_active ?? null,
     })
     : null;
   return {
@@ -158,6 +159,7 @@ export async function listWorkspaceRepositoryAnalyses(db, { customerId, workspac
         d.error_code,
         d.orchestrator_run_id,
         d.live_url,
+        (SELECT c.domain FROM app_custom_domains c WHERE c.app_id = a.id AND c.status = 'ACTIVE' LIMIT 1) AS custom_domain_active,
         bi.package_manager,
         bi.install_command,
         bi.build_command,

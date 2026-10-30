@@ -2044,3 +2044,9 @@ button.danger:disabled {
 #your-domain {
   scroll-margin-top: 80px;
 }
+.live-reveal-backup {
+  display: block;
+  margin-top: 6px;
+  color: var(--muted);
+  font-size: 12px;
+}
