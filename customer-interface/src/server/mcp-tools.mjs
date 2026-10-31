@@ -329,7 +329,7 @@ export async function connectDomain(
   const connected = await connect(db, { customerId, workspaceId, appId, domain });
   if (connected.alreadyConnected) await check(db, { customerId, workspaceId, appId });
   let current = connected.domain;
-  for (let attempt = 0; attempt < 6 && current?.status === "PENDING"; attempt++) {
+  for (let attempt = 0; attempt < 6 && current?.status === "PENDING" && !current?.waitingForProof; attempt++) {
     await wait(2000);
     current = (await loadDomain(db, { customerId, workspaceId, appId })) ?? current;
   }
@@ -354,6 +354,6 @@ function toolDomainView(domain) {
     view.deleteRecords = domain.remove.map(({ type, name, value }) => ({ type, name, value }));
     view.steps = domain.steps;
   }
-  if (domain.status === "PENDING") view.message = `Connecting ${domain.domain}. Call connect_domain again in a few seconds to get the DNS records to add.`;
+  if (domain.status === "PENDING" && !domain.waitingForProof) view.message = `Connecting ${domain.domain}. Call connect_domain again in a few seconds to get the DNS records to add.`;
     return view;
 }

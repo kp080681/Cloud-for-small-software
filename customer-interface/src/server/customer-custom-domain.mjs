@@ -76,13 +76,14 @@ export function safeCustomDomain(row) {
     provider: providerName ? { key: row.dns_provider_key, name: providerName } : null,
     steps,
     // Once live, only the www record can still be missing (it's optional).
-    records: status === S.NEEDS_DNS || status === S.SECURING
+    records: status === S.NEEDS_DNS || status === S.SECURING || (status === S.PENDING && row.problem_code === "OWNERSHIP_PROOF_NEEDED")
       ? cleanRecords(row.records)
       : status === S.ACTIVE && row.include_www && !row.www_ready
         ? cleanRecords(row.records).filter((record) => record.purpose === "www")
         : [],
     remove: status === S.NEEDS_DNS ? cleanRecords(row.conflicts) : [],
     lastCheckedAt: row.last_checked_at ? new Date(row.last_checked_at).toISOString() : null,
+    waitingForProof: status === S.PENDING && row.problem_code === "OWNERSHIP_PROOF_NEEDED",
     checking: Boolean(row.check_requested_at && (!row.last_checked_at || new Date(row.check_requested_at) > new Date(row.last_checked_at))),
   };
 }

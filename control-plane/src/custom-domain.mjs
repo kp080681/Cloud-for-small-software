@@ -276,6 +276,14 @@ export function verificationRecords(verification = [], apexName) {
     });
 }
 
+// Ownership proof for a domain that was live in another Utplava workspace:
+// a TXT record at _utplava-verify.<domain> holding a value tied to this
+// connection request, so it can't be reused for another one.
+export const OWNERSHIP_PROOF_PREFIX = "_utplava-verify";
+export function ownershipProofValue(domainRowId) {
+  return `utplava-verify=${String(domainRowId)}`;
+}
+
 // Plain-English status shown to the customer. `primaryConfigured` is
 // Vercel's !misconfigured for the main domain; `httpsReachable` is a real
 // anonymous request to https://domain succeeding.
@@ -289,7 +297,7 @@ export function statusMessage({ status, domain, providerName, problem }) {
   const where = providerName ? ` in ${providerName}` : "";
   switch (status) {
     case CUSTOM_DOMAIN_STATUS.PENDING:
-      return `Connecting ${domain}…`;
+      return problem || `Connecting ${domain}…`;
     case CUSTOM_DOMAIN_STATUS.NEEDS_DNS:
       return problem || `Add the records below${where}. Utplava checks automatically; changes usually show up within minutes, sometimes a few hours.`;
     case CUSTOM_DOMAIN_STATUS.SECURING:

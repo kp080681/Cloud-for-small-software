@@ -4,6 +4,9 @@ import pg from "pg";
 import {
   CUSTOM_DOMAIN_STATUS as S,
   decideStatus,
+  hostLabel,
+  OWNERSHIP_PROOF_PREFIX,
+  ownershipProofValue,
   recognizeDnsProvider,
   recordsForName,
   verificationRecords,
@@ -144,10 +147,58 @@ async function fail(db: pg.Client, domainId: string, code: string, message: stri
   return { status: S.FAILED, code };
 }
 
+// A domain that was live on Utplava in ANOTHER workspace may still point at
+// Utplava after that app was deleted. Before connecting it to a new
+// workspace, its owner must prove control with a one-time TXT record, so
+// nobody can pick up a domain someone else forgot to unpoint.
+async function proofRequired(db: pg.Client, row: any) {
+  const prior = await db.query(
+    `SELECT 1 FROM app_custom_domains
+      WHERE status = 'REMOVED' AND active_at IS NOT NULL AND workspace_id <> $2
+        AND (domain = $1 OR domain = 'www.' || $1 OR 'www.' || domain = $1)
+      LIMIT 1`,
+    [row.domain, row.workspace_id],
+  );
+  return prior.rowCount > 0;
+}
+
+async function zoneApex(resolver: Resolver, name: string) {
+  const labels = name.split(".");
+  for (let i = 0; i < labels.length - 1; i++) {
+    const candidate = labels.slice(i).join(".");
+    const ns = await quiet(resolver.resolveNs(candidate), [] as string[]);
+    if (ns.length) return { apex: candidate, nameservers: ns };
+  }
+  return { apex: name, nameservers: [] as string[] };
+}
+
+async function ownershipProven(db: pg.Client, row: any) {
+  if (!(await proofRequired(db, row))) return true;
+  const resolver = publicResolver();
+  const proofName = `${OWNERSHIP_PROOF_PREFIX}.${row.domain}`;
+  const expected = ownershipProofValue(row.id);
+  const txt = await quiet(resolver.resolveTxt(proofName), [] as string[][]);
+  if (txt.some((chunks) => chunks.join("") === expected)) return true;
+  const { apex, nameservers } = await zoneApex(resolver, row.domain);
+  const provider = recognizeDnsProvider(nameservers);
+  const record = { type: "TXT", name: hostLabel(proofName, apex), value: expected, fqdn: proofName, purpose: "ownership" };
+  await db.query(
+    `UPDATE app_custom_domains
+        SET records = $2::jsonb, conflicts = '[]'::jsonb, dns_provider_key = $3, dns_provider_name = $4,
+            problem_code = 'OWNERSHIP_PROOF_NEEDED',
+            problem = $5, last_checked_at = now(), updated_at = now()
+      WHERE id = $1 AND status = 'PENDING'`,
+    [row.id, JSON.stringify([record]), provider.key, provider.name,
+     `This domain was connected to a different Utplava account before. To prove it's yours, add the TXT record below${provider.name ? ` in ${provider.name}` : ""}. Utplava connects it as soon as the record shows up.`],
+  );
+  return false;
+}
+
 async function attach(db: pg.Client, row: any) {
   if (row.provider !== "vercel" || !row.provider_project_id) {
     return fail(db, row.id, "APP_NOT_DEPLOYED", "Deploy this app first, then connect your domain.");
   }
+  if (!(await ownershipProven(db, row))) return { status: S.PENDING, proofNeeded: true };
   const primary = await ensureProjectDomain(row.provider_project_id, row.domain);
   if (!primary.ok) return fail(db, row.id, primary.code, primary.message);
   const apexName = String(primary.domain?.apexName || row.domain).toLowerCase();

@@ -45,7 +45,7 @@ export function CustomDomainCard({ workspaceId, appId, appIsLive, initialDomain 
   // slowly while waiting for the customer's DNS change to show up.
   useEffect(() => {
     if (!domain || domain.status === "ACTIVE" || domain.status === "FAILED") return undefined;
-    const fast = domain.status === "PENDING" || domain.status === "SECURING" || domain.status === "REMOVING" || domain.checking;
+    const fast = (domain.status === "PENDING" && !domain.waitingForProof) || domain.status === "SECURING" || domain.status === "REMOVING" || domain.checking;
     const timer = setTimeout(refresh, fast ? 4000 : 20000);
     return () => clearTimeout(timer);
   }, [domain, refresh]);
@@ -145,7 +145,7 @@ export function CustomDomainCard({ workspaceId, appId, appIsLive, initialDomain 
         <span className="mono domain-name">
           {domain.status === "ACTIVE" ? <a href={domain.url} target="_blank" rel="noreferrer">{domain.domain} ↗</a> : domain.domain}
         </span>
-        <span className={`status ${TONE[domain.status] ?? ""}`}><span className="dot" aria-hidden="true" />{LABEL[domain.status] ?? domain.status}</span>
+        <span className={`status ${TONE[domain.status] ?? ""}`}><span className="dot" aria-hidden="true" />{domain.waitingForProof ? "Prove ownership" : LABEL[domain.status] ?? domain.status}</span>
       </div>
       <p className="domain-message" aria-live="polite">{domain.message}</p>
       {domain.status === "ACTIVE" && domain.includeWww ? (

@@ -117,3 +117,12 @@ test("status messages are plain and name the provider", () => {
   assert.equal(statusMessage({ status: S.ACTIVE, domain: "mybakery.com" }), "Live at mybakery.com.");
   assert.equal(statusMessage({ status: S.FAILED, domain: "x.com", problem: "Nope." }), "Nope.");
 });
+
+test("ownership proof is a TXT value tied to this one connection request", async () => {
+  const { OWNERSHIP_PROOF_PREFIX, ownershipProofValue } = await import("../src/custom-domain.mjs");
+  assert.equal(OWNERSHIP_PROOF_PREFIX, "_utplava-verify");
+  assert.equal(ownershipProofValue("abc-123"), "utplava-verify=abc-123");
+  assert.notEqual(ownershipProofValue("a"), ownershipProofValue("b"));
+  assert.equal(statusMessage({ status: S.PENDING, domain: "x.com", problem: "Prove it." }), "Prove it.");
+  assert.match(statusMessage({ status: S.PENDING, domain: "x.com" }), /Connecting x\.com/);
+});

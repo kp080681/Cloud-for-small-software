@@ -130,3 +130,15 @@ test("the engine task is started by id with only the row and action", async () =
   assert.deepEqual(sent.body.payload, { domainId: "dom-1", action: "check" });
   await assert.rejects(triggerCustomDomainTask({ domainId: "d", action: "drop-table", env: { TRIGGER_SECRET_KEY: "x" }, fetchImpl }));
 });
+
+test("a domain waiting for ownership proof shows the TXT record and isn't treated as connecting", () => {
+  const view = safeCustomDomain({
+    id: "d", domain: "mybakery.com", status: "PENDING", problem_code: "OWNERSHIP_PROOF_NEEDED",
+    problem: "This domain was connected to a different Utplava account before.",
+    records: [{ type: "TXT", name: "_utplava-verify", value: "utplava-verify=d", purpose: "ownership" }], conflicts: [],
+  });
+  assert.equal(view.waitingForProof, true);
+  assert.equal(view.records.length, 1);
+  assert.match(view.message, /different Utplava account/);
+  assert.equal(safeCustomDomain({ id: "d", domain: "a.com", status: "PENDING", records: [{ type: "A", name: "@", value: "1.1.1.1" }], conflicts: [] }).records.length, 0);
+});
