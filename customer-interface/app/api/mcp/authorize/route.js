@@ -80,9 +80,14 @@ export async function GET(request) {
       // straight back to this same request (2026-10-23). The return path is
       // checked by safeReturnTo on the way out and again on the way back,
       // and can only ever be this endpoint or the consent screen.
-      const start = new URL("/api/auth/github/start", request.url);
-      start.searchParams.set("return_to", `${url.pathname}${url.search}`);
-      return Response.redirect(start);
+      // Since 2026-10-31 it goes via /mcp/welcome first: strangers arriving
+      // from a directory were dropped straight onto GitHub's authorize screen
+      // with no idea what Utplava is, and left. The welcome page explains,
+      // then its button starts the same GitHub sign-in with this request as
+      // the return path.
+      const welcome = new URL("/mcp/welcome", request.url);
+      welcome.search = url.search;
+      return Response.redirect(welcome);
     }
     if (!redirectUriTrusted) {
       // redirect_uri itself could not be confirmed safe (unknown client,

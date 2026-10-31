@@ -2050,3 +2050,57 @@ button.danger:disabled {
   color: var(--muted);
   font-size: 12px;
 }
+
+/* MCP welcome page for signed-out visitors from AI tools (2026-10-31) */
+.welcome-panel {
+  max-width: 440px !important;
+}
+
+.welcome-from {
+  display: inline-block;
+  padding: 4px 12px;
+  border-radius: 12px;
+  border: 1px solid var(--line);
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 600;
+  margin: 0 0 14px;
+}
+
+.welcome-points {
+  list-style: none;
+  padding: 0;
+  margin: 4px 0 20px;
+  display: grid;
+  gap: 10px;
+}
+
+.welcome-points li {
+  position: relative;
+  padding-left: 22px;
+  color: var(--muted);
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+.welcome-points li::before {
+  content: "";
+  position: absolute;
+  left: 3px;
+  top: 7px;
+  width: 9px;
+  height: 5px;
+  border-left: 2px solid var(--good);
+  border-bottom: 2px solid var(--good);
+  transform: rotate(-45deg);
+}
+
+.welcome-points strong {
+  color: var(--ink);
+}
+
+.welcome-panel .button.primary {
+  width: 100%;
+  justify-content: center;
+  margin-bottom: 12px;
+}
