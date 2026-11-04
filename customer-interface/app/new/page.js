@@ -31,7 +31,13 @@ export default async function NewAppPage({ searchParams }) {
           <p className="muted">Choose a GitHub repository. Utplava works out how to run it and puts it on the internet.</p>
         </div>
       </div>
-      <GitHubPanel workspaceId={active.id} github={shell.github} mode="new" hideRepositoryIds={liveRepositoryIds} />
+      <GitHubPanel
+        workspaceId={active.id}
+        github={shell.github}
+        mode="new"
+        hideRepositoryIds={liveRepositoryIds}
+        initialFocusRepositoryId={typeof query?.repo === "string" ? query.repo : null}
+      />
     </Chrome>
   );
 }

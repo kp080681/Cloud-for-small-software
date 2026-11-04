@@ -21,7 +21,7 @@ import { checkServiceValue, serviceFollowUps, serviceGuideFor } from "@/src/shar
 // mode "new": the New app page; GitHub connection + repository picker +
 //   analyse/deploy for repositories that weren't live when the page opened
 //   (captured once, so an app that goes live here doesn't vanish mid-reveal).
-export function GitHubPanel({ workspaceId, github, mode = "full", repositoryId = null, hideRepositoryIds = [] }) {
+export function GitHubPanel({ workspaceId, github, mode = "full", repositoryId = null, hideRepositoryIds = [], initialFocusRepositoryId = null }) {
   const [hiddenAtOpen] = useState(() => new Set(hideRepositoryIds));
   const router = useRouter();
   const [isPending, startTransition] = useTransition();
@@ -29,7 +29,15 @@ export function GitHubPanel({ workspaceId, github, mode = "full", repositoryId =
   // New app page (2026-10-28): one repository at a time. Until one is chosen
   // the page shows the picker; once chosen it shows only that repository's
   // analysis and deploy, never every repository ever selected.
-  const [focusRepository, setFocusRepository] = useState(null);
+  // The chosen repository is also kept in the address (?repo=), so a refresh
+  // or re-render brings the person back to it instead of the picker
+  // (Kiran, 2026-11-04: the settings appeared, then the page jumped back to
+  // the repository list).
+  const [focusRepository, setFocusRepository] = useState(() =>
+    mode === "new" && initialFocusRepositoryId
+      ? (github.selectedRepositories ?? []).find((repository) => repository.id === initialFocusRepositoryId) ?? null
+      : null,
+  );
   const [analysisState, setAnalysisState] = useState({});
   const [configurationState, setConfigurationState] = useState({});
   const [deploymentState, setDeploymentState] = useState({});
@@ -76,10 +84,22 @@ export function GitHubPanel({ workspaceId, github, mode = "full", repositoryId =
   // One tap, not three (2026-10-28): picking a repository while adding a new
   // app is a clear intent to analyse it. Fold the list away, show only this
   // repository, bring it into view and start the analysis.
+  function rememberFocus(id) {
+    try {
+      const url = new URL(window.location.href);
+      if (id) url.searchParams.set("repo", id);
+      else url.searchParams.delete("repo");
+      window.history.replaceState(window.history.state, "", url);
+    } catch {
+      // Only a convenience: the page still works without it.
+    }
+  }
+
   async function focusOn(repository) {
     setRepositoryState(null);
     setMessage("");
     setFocusRepository(repository);
+    rememberFocus(repository.id);
     requestAnimationFrame(() =>
       document.getElementById("github-connection")?.scrollIntoView({ behavior: "smooth", block: "start" }),
     );
@@ -88,13 +108,14 @@ export function GitHubPanel({ workspaceId, github, mode = "full", repositoryId =
 
   function chooseAnother() {
     setFocusRepository(null);
+    rememberFocus(null);
     setMessage("");
     loadRepositories();
   }
 
   // The picker is the first thing on the New app page: open it straight away.
   useEffect(() => {
-    if (mode === "new" && github.connected) loadRepositories();
+    if (mode === "new" && github.connected && !focusRepository) loadRepositories();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
