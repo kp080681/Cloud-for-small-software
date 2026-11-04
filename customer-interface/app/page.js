@@ -10,13 +10,16 @@ function SignIn() {
   return (
     <main className="sign-in">
       <Brand />
-      <h1>Built it with AI?<br />Put it online.</h1>
-      <p className="muted">Pick a GitHub repo, get a live link. Database included.</p>
+      <h1>You built the app.<br />Now put it online.</h1>
+      <p className="muted">Sign in with GitHub, where your app&apos;s code is kept. Free for up to 3 apps, no card needed.</p>
       <section className="panel">
         <h2>Sign in to Utplava</h2>
-        <p className="fine muted">Use your GitHub account to continue.</p>
         <a className="button primary" href="/api/auth/github/start">Continue with GitHub</a>
-        <p className="helptext">Repository access is a separate step. You choose what Utplava can access.</p>
+        <ul className="sign-in-notes">
+          <li>GitHub will ask you to let Utplava see your public profile, which is your name and username. It doesn&apos;t share your code or your password.</li>
+          <li>You choose which apps Utplava can see in a separate step, after signing in.</li>
+          <li>No GitHub account yet? <a href="https://github.com/signup" target="_blank" rel="noreferrer">Create one free</a>, then come back. Built in Lovable? <a href="https://utplava.dev/guides/lovable/" target="_blank" rel="noreferrer">Connect Lovable to GitHub first</a>.</li>
+        </ul>
       </section>
     </main>
   );
@@ -94,13 +97,13 @@ export default async function Home({ searchParams }) {
       ) : (
         <section className="panel empty">
           <div className="symbol" aria-hidden="true">+</div>
-          <h2>Your workspace is ready.</h2>
-          <p className="muted">Pick a GitHub repository and Utplava will put it on the internet.</p>
-          <Link className="button" href={newAppHref}>Deploy your first app</Link>
+          <h2>You&apos;re in. Let&apos;s put your first app online.</h2>
+          <p className="muted">Choose the app you want to put online. Utplava works out how to run it and tells you if it needs anything from you.</p>
+          <Link className="button primary" href={newAppHref}>Put my first app online</Link>
           <div className="empty-footer">
-            <span>GitHub source</span>
-            <span>Next.js + Node.js</span>
-            <span>PostgreSQL, when needed</span>
+            <span>Code from your GitHub</span>
+            <span>Next.js, React, Vite, Lovable</span>
+            <span>A database, when it needs one</span>
           </div>
         </section>
       )}

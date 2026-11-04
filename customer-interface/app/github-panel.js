@@ -315,7 +315,7 @@ export function GitHubPanel({ workspaceId, github, mode = "full", repositoryId =
       <div className="row">
         <div>
           <h2>GitHub</h2>
-          <small>{github.connected ? "Connected through the Utplava GitHub App" : "Connect repository access for this workspace"}</small>
+          <small>{github.connected ? "Utplava can see the apps you shared with it on GitHub" : "Let Utplava see your app's code on GitHub"}</small>
         </div>
         <span className={`status ${github.connected ? "live" : "neutral"}`}>
           <span className="dot" aria-hidden="true" />
@@ -323,10 +323,22 @@ export function GitHubPanel({ workspaceId, github, mode = "full", repositoryId =
         </span>
       </div>
 
+      {!github.connected ? (
+        <div className="github-prep">
+          <strong>What happens next</strong>
+          <ol>
+            <li>If GitHub asks where to install Utplava, pick your own account.</li>
+            <li>Choose <b>Only select repositories</b>, pick the app you want online, and tap <b>Install</b> (or <b>Install &amp; Authorize</b>).</li>
+            <li>You come straight back here and pick it from the list.</li>
+          </ol>
+          <small>Utplava can only read the apps you pick. You can add or remove apps any time with Manage GitHub access.</small>
+        </div>
+      ) : null}
+
       <div className="github-actions">
         <form action="/api/github/install/start" method="post">
           <input type="hidden" name="workspaceId" value={workspaceId} />
-          <button type="submit">{github.connected ? "Manage GitHub access" : "Connect GitHub"}</button>
+          <button type="submit" className={github.connected ? undefined : "button primary"}>{github.connected ? "Manage GitHub access" : "Connect GitHub"}</button>
         </form>
         {mode === "new" && focusRepository ? (
           <button type="button" onClick={chooseAnother} disabled={isPending}>
@@ -462,7 +474,7 @@ export function GitHubPanel({ workspaceId, github, mode = "full", repositoryId =
             </div>
           ))}
           {mode === "new" ? (
-            <p className="helptext">Don't see your repository? Use <strong>Manage GitHub access</strong> to share it with Utplava, then come back here.</p>
+            <p className="helptext">Don&apos;t see your app? GitHub doesn&apos;t share new repositories with Utplava automatically, so a repository Lovable or another tool just created won&apos;t be here yet. Tap <strong>Manage GitHub access</strong>, add it and save, then come back.</p>
           ) : null}
         </div>
       ) : null}
