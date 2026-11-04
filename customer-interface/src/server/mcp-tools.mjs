@@ -1,4 +1,5 @@
 import { getAuthorizedWorkspace, listWorkspaceApplications } from "./customer-workspaces.mjs";
+import { serviceGuideFor } from "../shared/service-guides.mjs";
 import { friendlyErrorMessage } from "../shared/deployment-ui-state.mjs";
 import { analyzeSelectedRepository } from "./repository-analysis.mjs";
 import { listWorkspaceInstallationRepositories, selectWorkspaceRepository } from "./customer-github.mjs";
@@ -94,7 +95,22 @@ function missingConfigFrom(requirements = []) {
     // named short variables could otherwise still assemble a large
     // combined payload even with each individual name kept short).
     .slice(0, 50)
-    .map((item) => ({ key: item.envKey, public: Boolean(item.public) }));
+    .map((item) => {
+      const entry = { key: item.envKey, public: Boolean(item.public) };
+      // "Connect your services": fixed, plain-English help an assistant can
+      // pass on (what the key is, where to find it). The name only selects
+      // from service-guides.mjs's own text; nothing from it is echoed back.
+      const guide = serviceGuideFor(item.envKey);
+      if (guide?.service) {
+        entry.service = guide.serviceName;
+        entry.whatItIs = guide.what;
+        entry.whereToFind = guide.where;
+        entry.url = guide.url;
+        entry.looksLike = guide.looksLike;
+      }
+      if (guide?.exposedWarning) entry.warning = guide.exposedWarning;
+      return entry;
+    });
 }
 
 // deploy — always deploys the repository's current code. Composed from

@@ -124,7 +124,15 @@ test("deploy returns needs_configuration with the missing keys, and never calls 
   assert.equal(startCalled, false);
   assert.equal(result.status, "needs_configuration");
   assert.deepEqual(result.missingConfig, [
-    { key: "OPENAI_API_KEY", public: false },
+    {
+      key: "OPENAI_API_KEY",
+      public: false,
+      service: "OpenAI",
+      whatItIs: "Your OpenAI API key, used by your app's server to call ChatGPT models.",
+      whereToFind: "OpenAI platform, then API keys",
+      url: "https://platform.openai.com/api-keys",
+      looksLike: "It starts with sk-",
+    },
     { key: "NEXT_PUBLIC_SITE_URL", public: true },
   ]);
 });

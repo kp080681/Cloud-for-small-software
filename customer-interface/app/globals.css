@@ -1150,6 +1150,43 @@ main#main-content {
   font-family: var(--font-mono);
 }
 
+.secret-field + .secret-field {
+  margin-top: 16px;
+}
+
+.service-help {
+  display: grid;
+  gap: 6px;
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: var(--muted);
+}
+
+.service-help a,
+.service-followups a {
+  color: var(--brand);
+}
+
+.service-note {
+  border-left: 2px solid var(--line-strong);
+  padding-left: 8px;
+}
+
+.service-warning {
+  border-left-color: var(--warn);
+  color: var(--ink-soft);
+}
+
+.service-followups {
+  display: grid;
+  gap: 6px;
+  margin-top: 14px;
+}
+
+.service-followups small {
+  line-height: 1.5;
+}
+
 /* ---- small screens ---------------------------------------------------- */
 
 @media (max-width: 760px) {

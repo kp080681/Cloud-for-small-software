@@ -13,6 +13,7 @@ import {
   retrySuccessMessage,
   stageLabelForStatus,
 } from "@/src/shared/deployment-ui-state.mjs";
+import { checkServiceValue, serviceFollowUps, serviceGuideFor } from "@/src/shared/service-guides.mjs";
 
 // mode "full": the original all-in-one panel.
 // mode "app": embedded on an app's own page; shows only that app's
@@ -642,6 +643,7 @@ function AnalysisResult({
               return (
                 <label className="secret-field" key={item.envKey}>
                   <span>{item.envKey} Required</span>
+                  <ServiceHelp envKey={item.envKey} value={secretInputs[inputKey] || ""} />
                   <span className="secret-entry">
                     <input
                       type="password"
@@ -660,6 +662,7 @@ function AnalysisResult({
             })}
             {configured.map((item) => <small key={item.envKey}>{item.envKey} Configured</small>)}
             {!analysis.errorCode && !requiredMissing.length && !configured.length ? <small>No required action detected.</small> : null}
+            <ServiceFollowUps envKeys={requirements.map((item) => item.envKey)} />
           </div>
         </div>
         <div className="configuration-state">
@@ -817,6 +820,46 @@ function DeployTracker({ status }) {
           </div>
         );
       })}
+    </div>
+  );
+}
+
+// "Connect your services": what a key is, where to find it, and whether what
+// was pasted looks right. Help only: saving is never blocked by these checks.
+function ServiceHelp({ envKey, value }) {
+  const guide = serviceGuideFor(envKey);
+  const notes = checkServiceValue(envKey, value);
+  if (!guide && !notes.length) return null;
+  return (
+    <span className="service-help">
+      {guide?.exposedWarning ? <span className="service-note service-warning" role="alert">{guide.exposedWarning}</span> : null}
+      {guide?.what ? (
+        <span>
+          {guide.what} Find it in{" "}
+          <a href={guide.url} target="_blank" rel="noreferrer">{guide.where}</a>. {guide.looksLike}
+        </span>
+      ) : null}
+      {notes.map((note) => (
+        <span key={note.message} className={`service-note ${note.level === "warning" ? "service-warning" : ""}`} role={note.level === "warning" ? "alert" : undefined}>
+          {note.message}
+        </span>
+      ))}
+    </span>
+  );
+}
+
+function ServiceFollowUps({ envKeys }) {
+  const steps = serviceFollowUps(envKeys);
+  if (!steps.length) return null;
+  return (
+    <div className="service-followups">
+      <strong>After it&apos;s live</strong>
+      {steps.map((step) => (
+        <small key={step.service}>
+          <b>{step.serviceName}:</b> {step.message}{" "}
+          <a href={step.url} target="_blank" rel="noreferrer">Open {step.serviceName}</a>
+        </small>
+      ))}
     </div>
   );
 }
