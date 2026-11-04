@@ -4,6 +4,7 @@ import { getAuthorizedWorkspace } from "@/src/server/customer-workspaces.mjs";
 import { connectDatabase } from "@/src/server/db.mjs";
 import { resolveMcpClient } from "@/src/server/mcp-auth.mjs";
 import { recognisedClient, UNRECOGNISED_ACK_VALUE } from "@/src/server/mcp-recognised-clients.mjs";
+import { funnelClientLabel, recordFunnelStep } from "@/src/server/mcp-funnel.mjs";
 
 export const dynamic = "force-dynamic";
 
@@ -82,6 +83,11 @@ export default async function McpConsentPage({ searchParams }) {
   try {
     db = await connectDatabase();
     client = await resolveMcpClient(db, { clientId, redirectUri });
+    const known = recognisedClient(redirectUri);
+    await recordFunnelStep(db, {
+      step: "consent_viewed",
+      client: funnelClientLabel({ recognisedLabel: known?.kind === "hosted" ? known.label : null, clientName: client.name }),
+    });
     workspace = await getAuthorizedWorkspace(db, { customerId: session.customerId, workspaceId }).catch(() => null);
   } finally {
     if (db) await db.end();

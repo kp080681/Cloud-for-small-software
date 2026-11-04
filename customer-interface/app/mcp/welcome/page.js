@@ -4,6 +4,7 @@ import { connectDatabase } from "@/src/server/db.mjs";
 import { resolveMcpClient } from "@/src/server/mcp-auth.mjs";
 import { safeReturnTo } from "@/src/server/mcp-registration.mjs";
 import { recognisedClient } from "@/src/server/mcp-recognised-clients.mjs";
+import { funnelClientLabel, recordFunnelStep } from "@/src/server/mcp-funnel.mjs";
 
 export const dynamic = "force-dynamic";
 
@@ -59,6 +60,11 @@ export default async function McpWelcomePage({ searchParams }) {
   try {
     db = await connectDatabase();
     client = await resolveMcpClient(db, { clientId, redirectUri });
+    const known = recognisedClient(redirectUri);
+    await recordFunnelStep(db, {
+      step: "welcome_viewed",
+      client: funnelClientLabel({ recognisedLabel: known?.kind === "hosted" ? known.label : null, clientName: client.name }),
+    });
   } catch {
     client = null;
   } finally {
