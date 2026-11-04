@@ -714,11 +714,19 @@ async function persistEnvironmentDetection(db, { workspaceId, app, deployment, r
   );
 }
 
+// A Node.js app with a start script but no build script is recognised but
+// can't be deployed yet (every deploy runs a build). Say so specifically
+// instead of the generic "can't run this project" (found 2026-11-04).
+function unsupportedCode(source) {
+  if (source.detection.supported && !source.buildCommand) return "BUILD_SCRIPT_MISSING";
+  return source.detection.reason || "UNSUPPORTED_PROJECT";
+}
+
 async function markUnsupported(db, { deployment, source }) {
   if (await hasDeploymentEvent(db, { deploymentId: deployment.id, eventType: "PROJECT_ANALYSIS_UNSUPPORTED" })) {
     return;
   }
-  const code = source.detection.reason || "UNSUPPORTED_PROJECT";
+  const code = unsupportedCode(source);
   await db.query(
     `UPDATE deployments
         SET error_code = $1,
@@ -784,7 +792,7 @@ async function hasDeploymentEvent(db, { deploymentId, eventType }) {
 
 function analysisResultFromSource({ repository, app, deployment, source }) {
   const supported = Boolean(source.detection.supported && source.buildCommand);
-  const code = supported ? null : source.detection.reason || "UNSUPPORTED_PROJECT";
+  const code = supported ? null : unsupportedCode(source);
   return {
     result: supported ? "REPOSITORY_ANALYSIS_READY" : "REPOSITORY_ANALYSIS_UNSUPPORTED",
     repositoryId: repository.id,
@@ -825,6 +833,7 @@ function customerMessageForCode(code) {
     GITHUB_BRANCH_HEAD_INVALID: "Utplava could not resolve the repository branch to a commit.",
     SOURCE_TREE_TRUNCATED: "This repository is too large for Utplava to deploy right now.",
     PACKAGE_JSON_NOT_FOUND: "Utplava can't run this project yet: there's no package.json or index.html at the top of the repository. If your app's files are inside a folder, move them to the top. If you've just added them, deploy again.",
+    BUILD_SCRIPT_MISSING: "Utplava can't run this project yet: its package.json has a \"start\" script but no \"build\" script, and every deploy runs a build. Next.js and Vite apps already have one. For a plain Node.js server, this isn't supported yet.",
     UNSUPPORTED_PROJECT: "Utplava can't run this project yet: its package.json has no \"start\" or \"build\" script, so there's no way to tell how to run it. Add a start script for a server app or a build script for a website, then deploy again.",
     APP_SLUG_CONFLICT: "This application name is already used by another repository in the workspace.",
     WORKSPACE_RATE_LIMIT_REACHED: "You've hit the limit for this action right now — please wait a bit and try again.",

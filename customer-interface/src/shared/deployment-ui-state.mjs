@@ -27,6 +27,7 @@ const FRIENDLY_ERROR_MESSAGES = {
   GITHUB_BRANCH_HEAD_INVALID: "Utplava could not resolve the repository branch to a commit.",
   SOURCE_TREE_TRUNCATED: "This repository is too large for Utplava to deploy right now.",
   PACKAGE_JSON_NOT_FOUND: "Utplava can't run this project yet: there's no package.json or index.html at the top of the repository. If your app's files are inside a folder, move them to the top. If you've just added them, deploy again.",
+  BUILD_SCRIPT_MISSING: "Utplava can't run this project yet: its package.json has a \"start\" script but no \"build\" script, and every deploy runs a build. Next.js and Vite apps already have one. For a plain Node.js server, this isn't supported yet.",
   UNSUPPORTED_PROJECT: "Utplava can't run this project yet: its package.json has no \"start\" or \"build\" script, so there's no way to tell how to run it. Add a start script for a server app or a build script for a website, then deploy again.",
   APP_SLUG_CONFLICT: "This application name is already used by another repository in the workspace.",
 };
