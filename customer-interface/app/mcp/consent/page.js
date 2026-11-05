@@ -5,6 +5,7 @@ import { connectDatabase } from "@/src/server/db.mjs";
 import { resolveMcpClient } from "@/src/server/mcp-auth.mjs";
 import { recognisedClient, UNRECOGNISED_ACK_VALUE } from "@/src/server/mcp-recognised-clients.mjs";
 import { funnelClientLabel, recordFunnelStep } from "@/src/server/mcp-funnel.mjs";
+import { listWorkspaceGitHubInstallations } from "@/src/server/customer-github.mjs";
 
 export const dynamic = "force-dynamic";
 
@@ -79,6 +80,7 @@ export default async function McpConsentPage({ searchParams }) {
 
   let client;
   let workspace;
+  let githubConnected = true;
   let db;
   try {
     db = await connectDatabase();
@@ -89,6 +91,12 @@ export default async function McpConsentPage({ searchParams }) {
       client: funnelClientLabel({ recognisedLabel: known?.kind === "hosted" ? known.label : null, clientName: client.name }),
     });
     workspace = await getAuthorizedWorkspace(db, { customerId: session.customerId, workspaceId }).catch(() => null);
+    if (workspace) {
+      // Two strangers (Nov 2026) allowed access and then never deployed:
+      // neither had shared a GitHub repository yet. Say so before they go back.
+      const installations = await listWorkspaceGitHubInstallations(db, { customerId: session.customerId, workspaceId }).catch(() => null);
+      githubConnected = Array.isArray(installations) ? installations.length > 0 : true;
+    }
   } finally {
     if (db) await db.end();
   }
@@ -152,6 +160,19 @@ export default async function McpConsentPage({ searchParams }) {
             Deny
           </button>
         </form>
+        <div className="consent-next">
+          <strong>What to do next</strong>
+          {githubConnected ? null : (
+            <p>
+              Utplava also needs to see your app&apos;s code on GitHub before it can put it online.{" "}
+              <a href="/new" target="_blank" rel="noreferrer">Connect GitHub now</a> (opens in a new tab), or do it later
+              when {client.name} asks.
+            </p>
+          )}
+          <p>
+            Back in {client.name}, try asking: <em>&ldquo;Put my app online with Utplava.&rdquo;</em>
+          </p>
+        </div>
         <p className="helptext">You can remove access at any time from Connected apps in your workspace.</p>
       </section>
     </main>
