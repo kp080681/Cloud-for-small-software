@@ -2166,3 +2166,15 @@ button.danger:disabled {
 }
 .github-prep ol { margin: 8px 0 8px; padding-left: 20px; display: grid; gap: 4px; }
 .github-prep small { color: var(--muted); }
+
+.welcome-github-note {
+  margin: 4px 0 16px;
+  padding: 12px 14px;
+  border-left: 3px solid var(--brand);
+  background: var(--panel-raised);
+  border-radius: 0 8px 8px 0;
+  font-size: 13.5px;
+  line-height: 1.55;
+  color: var(--ink-soft);
+}
+.welcome-github-note a { color: var(--brand); }

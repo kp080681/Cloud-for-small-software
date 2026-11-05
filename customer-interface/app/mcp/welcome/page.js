@@ -100,6 +100,12 @@ export default async function McpWelcomePage({ searchParams }) {
           <li><strong>You pick the repositories</strong> Utplava can read, in a separate step.</li>
           <li><strong>Nothing is shared yet.</strong> Next you&apos;ll see exactly what {who} can do, and you can say no.</li>
         </ul>
+        <p className="welcome-github-note">
+          <strong>Your app&apos;s code needs to be on GitHub</strong> (free) so Utplava can put it online. Built it in a
+          Claude chat and it isn&apos;t there yet?{" "}
+          <a href="https://utplava.dev/guides/claude/" target="_blank" rel="noreferrer">This guide gets it there in a few minutes</a>.
+          Built in Lovable? <a href="https://utplava.dev/guides/lovable/" target="_blank" rel="noreferrer">Here&apos;s how</a>.
+        </p>
         <a className="button primary" href={signIn}>Continue with GitHub</a>
         <p className="helptext">
           New here? <a href="https://utplava.dev" target="_blank" rel="noreferrer">See what Utplava is</a> or read how it
