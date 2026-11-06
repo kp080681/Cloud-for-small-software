@@ -1,7 +1,6 @@
 "use client";
 
 import { useRef, useState } from "react";
-import { useRouter } from "next/navigation";
 
 // Direct publishing (2026-11-06): put an app online without GitHub. Two
 // ways in: paste one page of HTML (what ChatGPT or Claude usually hands
@@ -36,7 +35,6 @@ function relativePath(file) {
 }
 
 export function UploadPanel({ workspaceId, appId = null, appName = null }) {
-  const router = useRouter();
   const [method, setMethod] = useState("paste");
   const [name, setName] = useState("");
   const [html, setHtml] = useState("");
@@ -105,21 +103,36 @@ export function UploadPanel({ workspaceId, appId = null, appName = null }) {
           ),
         );
       }
-      const response = await fetch(`/api/workspaces/${encodeURIComponent(workspaceId)}/publish`, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify(updating ? { appId, files: payloadFiles } : { name: name.trim(), files: payloadFiles }),
-      });
+      // Never leave the person staring at "Uploading…": give up after 70s
+      // (the server stops at 60s) and say what to do.
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 70_000);
+      let response;
+      try {
+        response = await fetch(`/api/workspaces/${encodeURIComponent(workspaceId)}/publish`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify(updating ? { appId, files: payloadFiles } : { name: name.trim(), files: payloadFiles }),
+          signal: controller.signal,
+        });
+      } finally {
+        clearTimeout(timer);
+      }
       const body = await response.json().catch(() => null);
       if (!response.ok || !body?.appId) {
         setError(body?.error?.message || "Something went wrong while uploading. Please try again.");
         setBusy(false);
         return;
       }
-      router.push(`/apps/${body.appId}?workspace=${encodeURIComponent(workspaceId)}`);
-      router.refresh();
-    } catch {
-      setError("The upload didn't go through. Check your connection and try again.");
+      // A full page load, not a client-side route change: the app page is
+      // new, and this guarantees the person lands on it.
+      window.location.assign(`/apps/${encodeURIComponent(body.appId)}?workspace=${encodeURIComponent(workspaceId)}`);
+    } catch (error) {
+      setError(
+        error?.name === "AbortError"
+          ? "This is taking longer than it should. Open Apps to see if your app was added; if not, try again."
+          : "The upload didn't go through. Check your connection and try again.",
+      );
       setBusy(false);
     }
   }
@@ -209,7 +222,7 @@ export function UploadPanel({ workspaceId, appId = null, appName = null }) {
 
       <div className="upload-actions">
         <button type="submit" className="button primary" disabled={busy}>
-          {busy ? "Uploading…" : updating ? "Upload new version" : "Put it online"}
+          {busy ? (updating ? "Uploading and redeploying…" : "Uploading and starting your app…") : updating ? "Upload new version" : "Put it online"}
         </button>
         <small>Utplava checks your files for private keys and stops them going live by mistake.</small>
       </div>

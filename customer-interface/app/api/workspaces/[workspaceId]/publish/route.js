@@ -34,6 +34,7 @@ export async function POST(request, { params }) {
       return Response.json({ error: { code: "PUBLISH_BAD_REQUEST", message: "The upload couldn't be read. Please try again." } }, { status: 400 });
     }
 
+    const startedAt = Date.now();
     db = await connectDatabase();
     const published = await publishFiles(db, {
       customerId: session.customerId,
@@ -48,6 +49,7 @@ export async function POST(request, { params }) {
       workspaceId,
       repositoryId: published.repositoryId,
     });
+    console.log("direct_publish_done", JSON.stringify({ ms: Date.now() - startedAt, status: result.status, files: published.fileCount }));
     return Response.json({
       appId: result.appId,
       status: result.status,
