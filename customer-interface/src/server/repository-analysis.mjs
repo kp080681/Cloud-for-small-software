@@ -280,14 +280,20 @@ async function loadSelectedRepository(db, { workspaceId, repositoryId, forUpdate
         r.full_name,
         r.default_branch,
         r.private,
+        r.managed_by_utplava,
+        r.display_name,
         gi.github_installation_id AS provider_installation_id
       FROM github_repositories r
-      JOIN workspace_github_installations wgi
+      LEFT JOIN workspace_github_installations wgi
         ON wgi.workspace_id = r.workspace_id
        AND wgi.github_installation_id = r.github_installation_id
       JOIN github_installations gi ON gi.id = r.github_installation_id
       WHERE r.workspace_id = $1
         AND r.id = $2
+        -- A person's own repository needs their GitHub connection. A
+        -- repository Utplava keeps for an uploaded app (031) is never
+        -- linked to any connection; its row belongs to one workspace only.
+        AND (wgi.workspace_id IS NOT NULL OR r.managed_by_utplava)
       LIMIT 1
       ${forUpdate ? "FOR UPDATE OF r" : ""}
     `,
@@ -469,8 +475,12 @@ async function persistRepositoryAnalysis(db, { workspaceId, repository, source, 
 }
 
 async function createOrReuseApp(db, { workspaceId, repository, source }) {
-  const appName = repository.full_name.split("/").at(-1);
-  const slug = slugFromRepository(repository.full_name);
+  // Uploaded apps live in a repository named <name>-<random> in Utplava's
+  // organisation; the person only ever sees the name they chose.
+  const appName = repository.display_name || repository.full_name.split("/").at(-1);
+  const slug = repository.display_name
+    ? slugFromRepository(`uploaded/${repository.display_name}`)
+    : slugFromRepository(repository.full_name);
   const databaseRequired = Boolean(source.detection.databaseRequired);
   const databaseMode = databaseRequired ? "SSC_MANAGED" : "NONE";
   const existingForRepository = await db.query(
