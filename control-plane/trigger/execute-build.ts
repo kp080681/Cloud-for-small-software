@@ -12,6 +12,7 @@ import {
 } from "../src/vercel-deployment-recovery.mjs";
 import { withTransientRetry } from "../src/transient-retry.mjs";
 import { selectFilesUnderRoot } from "../src/repository-file-selection.mjs";
+import { fileUploadSourceMeta } from "../src/vercel-deployment-identity.mjs";
 import {
   assertProviderProjectNotOwnedByAnotherApp,
   assertRemoteProjectMatchesSscApp,
@@ -477,7 +478,7 @@ async function runExecuteBuild(db:any,payload:{deploymentId:string}){
     // instead of referencing it by git commit.
     try{
       const files=await buildFilesArrayFromRepository(deployment);
-      const fileUploadBody:any={name:gitSourceBody.name,project:gitSourceBody.project,target:gitSourceBody.target,files,meta:gitSourceBody.meta,projectSettings:gitSourceBody.projectSettings};
+      const fileUploadBody:any={name:gitSourceBody.name,project:gitSourceBody.project,target:gitSourceBody.target,files,meta:{...gitSourceBody.meta,...fileUploadSourceMeta(deployment.commit_sha)},projectSettings:gitSourceBody.projectSettings};
       created=await withTransientRetry(()=>vercelRequest(`/v13/deployments${teamQuery()}`,{method:"POST",body:JSON.stringify(fileUploadBody)}),{maxAttempts:3,baseDelayMs:1000,maxDelayMs:8000,isRetryable:(error:any)=>classifyProviderError(error)?.retryableNow===true});
     }catch(fallbackError:any){
       const classifiedError=classifyProviderError(fallbackError);

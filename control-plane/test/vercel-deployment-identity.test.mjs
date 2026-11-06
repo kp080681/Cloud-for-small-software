@@ -376,3 +376,18 @@ test("public access task verifies provider binding before anonymous reachability
   assert.ok(anonymousCheck < liveUpdate);
   assert.match(source, /PUBLIC_BINDING_UNVERIFIED/);
 });
+
+test("file-upload builds are verified by the commit Utplava recorded, never when Git metadata is present", async () => {
+  const { providerObservedSourceSha, verifyProviderSourceIdentity, fileUploadSourceMeta, SourceIdentityStatus } = await import("../src/vercel-deployment-identity.mjs");
+  const sha = "a1db9e075d93c76d75ec56ab4630e0f82152a62a";
+  const upload = { meta: { sscDeploymentId: "d", ...fileUploadSourceMeta(sha) } };
+  assert.equal(providerObservedSourceSha(upload), sha);
+  assert.equal(verifyProviderSourceIdentity(upload, sha).status, SourceIdentityStatus.MATCH);
+  assert.equal(verifyProviderSourceIdentity(upload, "b".repeat(40)).status, SourceIdentityStatus.MISMATCH);
+  // Without the marker, no observed source.
+  assert.equal(providerObservedSourceSha({ meta: { sscUploadedCommitSha: sha } }), null);
+  // A Git-sourced build always reports its own Git commit, never the upload field.
+  const git = { gitSource: { type: "github" }, meta: { githubCommitSha: "c".repeat(40), ...fileUploadSourceMeta(sha) } };
+  assert.equal(providerObservedSourceSha(git), "c".repeat(40));
+  assert.equal(providerObservedSourceSha({ gitSource: { type: "github" }, meta: fileUploadSourceMeta(sha) }), null);
+});

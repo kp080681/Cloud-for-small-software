@@ -41,11 +41,28 @@ function normalizeSha(value) {
   return text.toLowerCase();
 }
 
+// File-upload builds (execute-build's fallback, and every uploaded app from
+// direct publishing, 2026-11-06) carry no Git metadata: the files were read
+// by Utplava's own GitHub App from the deployment's exact frozen Git tree
+// and uploaded by the control plane with its own provider credentials.
+// For those, and only when the provider deployment has no Git source of its
+// own, the commit recorded at upload time is the observed source.
+export const FILE_UPLOAD_SOURCE_MARKER = "github-app-tree";
+
+export function fileUploadSourceMeta(commitSha) {
+  return { sscSourceUpload: FILE_UPLOAD_SOURCE_MARKER, sscUploadedCommitSha: commitSha };
+}
+
 export function providerObservedSourceSha(deployment) {
-  return normalizeSha(deployment?.meta?.githubCommitSha)
+  const fromGit = normalizeSha(deployment?.meta?.githubCommitSha)
     ?? normalizeSha(deployment?.gitSource?.sha)
     ?? normalizeSha(deployment?.gitSource?.ref)
     ?? null;
+  if (fromGit) return fromGit;
+  if (!deployment?.gitSource && deployment?.meta?.sscSourceUpload === FILE_UPLOAD_SOURCE_MARKER) {
+    return normalizeSha(deployment.meta.sscUploadedCommitSha);
+  }
+  return null;
 }
 
 export function verifyProviderSourceIdentity(deployment, expectedCommitSha) {
