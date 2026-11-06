@@ -42,6 +42,9 @@ export function UploadPanel({ workspaceId, appId = null, appName = null }) {
   const [skipped, setSkipped] = useState(0);
   const [error, setError] = useState(null);
   const [busy, setBusy] = useState(false);
+  // On an app's own page the form stays folded away until asked for, so the
+  // page is about the app, not about uploading.
+  const [open, setOpen] = useState(!appId);
   const fileInput = useRef(null);
   const folderInput = useRef(null);
   const updating = Boolean(appId);
@@ -147,6 +150,20 @@ export function UploadPanel({ workspaceId, appId = null, appName = null }) {
     }
   }
 
+  if (!open) {
+    return (
+      <section className="card">
+        <div className="setting-row">
+          <div>
+            <strong>Update this app</strong>
+            <small>Upload new files or paste new HTML. Your link stays the same.</small>
+          </div>
+          <button type="button" className="button" onClick={() => setOpen(true)}>Upload a new version</button>
+        </div>
+      </section>
+    );
+  }
+
   return (
     <form className="card upload-panel" onSubmit={submit}>
       <h2>{updating ? `Upload a new version of ${appName ?? "this app"}` : "Upload your app"}</h2>
@@ -234,6 +251,9 @@ export function UploadPanel({ workspaceId, appId = null, appName = null }) {
         <button type="submit" className="button primary" disabled={busy}>
           {busy ? (updating ? "Uploading and redeploying…" : "Uploading and starting your app…") : updating ? "Upload new version" : "Put it online"}
         </button>
+        {updating ? (
+          <button type="button" className="button" onClick={() => { setOpen(false); setError(null); }} disabled={busy}>Cancel</button>
+        ) : null}
         <small>Utplava checks your files for private keys and stops them going live by mistake.</small>
       </div>
     </form>

@@ -21,7 +21,7 @@ import { checkServiceValue, serviceFollowUps, serviceGuideFor } from "@/src/shar
 // mode "new": the New app page; GitHub connection + repository picker +
 //   analyse/deploy for repositories that weren't live when the page opened
 //   (captured once, so an app that goes live here doesn't vanish mid-reveal).
-export function GitHubPanel({ workspaceId, github, mode = "full", repositoryId = null, hideRepositoryIds = [], initialFocusRepositoryId = null }) {
+export function GitHubPanel({ workspaceId, github, mode = "full", repositoryId = null, hideRepositoryIds = [], initialFocusRepositoryId = null, uploaded = false }) {
   const [hiddenAtOpen] = useState(() => new Set(hideRepositoryIds));
   const router = useRouter();
   const [isPending, startTransition] = useTransition();
@@ -407,7 +407,8 @@ export function GitHubPanel({ workspaceId, github, mode = "full", repositoryId =
                     redeployApp={redeployApp}
                     loadDeploymentProgress={loadDeploymentProgress}
                     isPending={isPending}
-                    checkForNewCode={embedded ? () => analyseRepository(repository.id) : null}
+                    checkForNewCode={embedded && !uploaded ? () => analyseRepository(repository.id) : null}
+                    uploaded={uploaded}
                     checkingForNewCode={isAnalysing}
                     domainHref={analysis.appId ? (embedded ? "#your-domain" : `/apps/${encodeURIComponent(analysis.appId)}?workspace=${encodeURIComponent(workspaceId)}#your-domain`) : null}
                   />
@@ -578,6 +579,7 @@ function AnalysisResult({
   loadDeploymentProgress,
   isPending,
   checkForNewCode = null,
+  uploaded = false,
   checkingForNewCode = false,
   domainHref = null,
 }) {
@@ -739,7 +741,9 @@ function AnalysisResult({
             {deploymentPending ? "Starting..." : "Redeploy"}
           </button>
           <small className="muted">
-            {analysis.branch} · {analysis.shortCommitSha || "pending"}
+            {uploaded
+              ? `Version ${analysis.shortCommitSha || "pending"}`
+              : `${analysis.branch} · ${analysis.shortCommitSha || "pending"}`}
           </small>
           {checkForNewCode ? (
             <button type="button" className="plain settled-check" onClick={checkForNewCode} disabled={isPending || checkingForNewCode}>

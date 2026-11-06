@@ -108,7 +108,7 @@ export default async function AppPage({ params, searchParams }) {
         {[app.uploaded ? "Uploaded to Utplava" : app.repositoryFullName, app.uploaded ? null : app.defaultBranch, app.framework === "nextjs" ? "Next.js" : app.framework].filter(Boolean).join(" · ")}
       </p>
 
-      <GitHubPanel workspaceId={active.id} github={shell.github} mode="app" repositoryId={app.repositoryId} />
+      <GitHubPanel workspaceId={active.id} github={shell.github} mode="app" repositoryId={app.repositoryId} uploaded={app.uploaded} />
 
       {app.uploaded ? (
         <UploadPanel workspaceId={active.id} appId={app.id} appName={app.name} />
