@@ -59,7 +59,7 @@ export function publisherConfig(env = process.env) {
     throw new PublishError(
       "PUBLISH_NOT_CONFIGURED",
       "Uploading files isn't switched on yet. Email contact@dealup.co.in and we'll put your app online with you.",
-      503,
+      409,
     );
   }
   return { org, token };
@@ -338,7 +338,7 @@ export async function ensurePublisherInstallation(db, { workspaceId, env = proce
     throw new PublishError(
       "PUBLISH_NOT_CONFIGURED",
       "Uploading files isn't switched on yet. Email contact@dealup.co.in and we'll put your app online with you.",
-      503,
+      409,
     );
   }
   const saved = await db.query(
@@ -534,7 +534,7 @@ export function safePublishError(error) {
   if (error?.code === "WORKSPACE_APP_LIMIT_REACHED") {
     return { error: { code: error.code, message: "The free plan includes up to 3 apps. Need more? Email contact@dealup.co.in." } };
   }
-  if (error?.code === "WORKSPACE_NOT_FOUND" || error?.status === 404) {
+  if (error?.code === "WORKSPACE_NOT_FOUND") {
     return { error: { code: "NOT_FOUND", message: "That workspace or app wasn't found." } };
   }
   return { error: { code: "PUBLISH_FAILED", message: "Something went wrong while uploading. Please try again. If it keeps happening, email contact@dealup.co.in." } };

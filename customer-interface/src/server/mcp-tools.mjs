@@ -5,6 +5,7 @@ import { analyzeSelectedRepository } from "./repository-analysis.mjs";
 import { listWorkspaceInstallationRepositories, selectWorkspaceRepository } from "./customer-github.mjs";
 import { startCustomerDeployment, getCustomerDeploymentProgressWithResume } from "./customer-deployments.mjs";
 import { getDeploymentReadiness, saveCustomerAppSecret } from "./customer-configuration.mjs";
+import { publishFiles } from "./direct-publish.mjs";
 import { checkCustomDomain, connectCustomDomain, getAppCustomDomain } from "./customer-custom-domain.mjs";
 
 // Implements the five tools locked in mcp/schemas/*.json (checklist item 7),
@@ -162,6 +163,34 @@ export async function deploy(
   }
 
   const repositoryId = await resolveAndSelectRepository(db, { customerId, workspaceId, repo, listRepositories, listInstallations });
+  return deployRepository(db, {
+    customerId,
+    workspaceId,
+    repositoryId,
+    createInstallationClient,
+    deploymentKeyFactory,
+    analyzeRepository,
+    checkReadiness,
+    startDeployment,
+  });
+}
+
+// Analyse -> readiness -> start for a repository row already in this
+// workspace. Shared by deploy (a person's GitHub repository) and
+// publish_files / the dashboard upload (a repository Utplava keeps).
+export async function deployRepository(
+  db,
+  {
+    customerId,
+    workspaceId,
+    repositoryId,
+    createInstallationClient,
+    deploymentKeyFactory,
+    analyzeRepository = analyzeSelectedRepository,
+    checkReadiness = getDeploymentReadiness,
+    startDeployment = startCustomerDeployment,
+  },
+) {
   const analysis = await analyzeRepository(db, {
     customerId,
     workspaceId,
@@ -372,4 +401,22 @@ function toolDomainView(domain) {
   }
   if (domain.status === "PENDING" && !domain.waitingForProof) view.message = `Connecting ${domain.domain}. Call connect_domain again in a few seconds to get the DNS records to add.`;
     return view;
+}
+
+// publish_files — puts an app online from files the AI chat sends, with no
+// GitHub account or repository needed. New app: pass name. Update an app
+// that was published this way: pass appId. All checks (size, file types,
+// paths, leaked keys, phishing, rate limits, app limit) live in
+// direct-publish.mjs; deploying then follows exactly the deploy() path.
+export async function publishAppFiles(
+  db,
+  { customerId, workspaceId, name, appId, files, publish = publishFiles, deployRepo = deployRepository },
+) {
+  await getAuthorizedWorkspace(db, { customerId, workspaceId });
+  if (!appId && !name) {
+    throw new McpToolError("PUBLISH_NAME_INVALID", "Give the app a name, or pass appId to update an app published earlier.", 400);
+  }
+  const published = await publish(db, { customerId, workspaceId, name, appId, files, source: "mcp" });
+  const result = await deployRepo(db, { customerId, workspaceId, repositoryId: published.repositoryId });
+  return { ...result, appName: published.appName, filesUploaded: published.fileCount };
 }

@@ -5,6 +5,7 @@ import { connectDatabase } from "@/src/server/db.mjs";
 import { listAppDeployments } from "@/src/server/customer-workspaces.mjs";
 import { friendlyErrorMessage } from "@/src/shared/deployment-ui-state.mjs";
 import { GitHubPanel } from "../../github-panel.js";
+import { UploadPanel } from "../../upload-panel.js";
 import { AutoDeployToggle } from "../../auto-deploy-toggle.js";
 import { DeleteAppCard } from "../../delete-app-card.js";
 import { DatabaseCard } from "../../database-card.js";
@@ -104,11 +105,14 @@ export default async function AppPage({ params, searchParams }) {
         </div>
       </div>
       <p className="title-sub">
-        {[app.repositoryFullName, app.defaultBranch, app.framework === "nextjs" ? "Next.js" : app.framework].filter(Boolean).join(" · ")}
+        {[app.uploaded ? "Uploaded to Utplava" : app.repositoryFullName, app.uploaded ? null : app.defaultBranch, app.framework === "nextjs" ? "Next.js" : app.framework].filter(Boolean).join(" · ")}
       </p>
 
       <GitHubPanel workspaceId={active.id} github={shell.github} mode="app" repositoryId={app.repositoryId} />
 
+      {app.uploaded ? (
+        <UploadPanel workspaceId={active.id} appId={app.id} appName={app.name} />
+      ) : (
       <section className="card">
         <div className="setting-row">
           <div>
@@ -120,6 +124,7 @@ export default async function AppPage({ params, searchParams }) {
           <AutoDeployToggle workspaceId={active.id} appId={app.id} initialEnabled={app.autoDeployOnPush} labelMode="state" />
         </div>
       </section>
+      )}
 
       <CustomDomainCard workspaceId={active.id} appId={app.id} appIsLive={Boolean(servingId)} initialDomain={customDomain} />
 

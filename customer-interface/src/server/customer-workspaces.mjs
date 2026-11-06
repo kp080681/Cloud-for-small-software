@@ -40,7 +40,10 @@ export function safeApplication(row) {
     customDomainStatus: row.custom_domain_status ?? null,
     autoDeployOnPush: row.auto_deploy_on_push !== false,
     repositoryId: row.repository_id ?? null,
-    repositoryFullName: row.repository_full_name ?? null,
+    // Uploaded apps (031): the repository is Utplava's own storage, so
+    // its name is never shown and "push to GitHub" doesn't apply.
+    uploaded: Boolean(row.managed_by_utplava),
+    repositoryFullName: row.managed_by_utplava ? null : row.repository_full_name ?? null,
     defaultBranch: row.default_branch ?? null,
     latestDeploymentReason: row.latest_deployment_reason ?? null,
     latestDeploymentStarted: Boolean(row.latest_deployment_started),
@@ -227,6 +230,7 @@ export async function listWorkspaceApplications(db, { customerId, workspaceId })
         a.repository_id,
         r.full_name AS repository_full_name,
         r.default_branch,
+        COALESCE(r.managed_by_utplava, false) AS managed_by_utplava,
         latest.status AS latest_deployment_status,
         latest.deployment_reason AS latest_deployment_reason,
         latest.started AS latest_deployment_started,

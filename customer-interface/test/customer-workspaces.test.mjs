@@ -283,6 +283,7 @@ test("application listing is workspace-scoped and returns only customer-safe fie
       customDomainStatus: null,
       autoDeployOnPush: true,
       repositoryId: null,
+      uploaded: false,
       repositoryFullName: null,
       defaultBranch: null,
       latestDeploymentReason: null,

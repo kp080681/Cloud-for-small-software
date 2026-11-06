@@ -4,7 +4,7 @@ import { recordToolCall } from "@/src/server/mcp-usage.mjs";
 import { connectDatabase } from "@/src/server/db.mjs";
 import { enforceMcpToolCallLimit, verifyAccessToken } from "@/src/server/mcp-auth.mjs";
 import { RateLimitError } from "@/src/shared/control-plane/rate-limit.mjs";
-import { connectDomain, deploy, getLogs, getStatus, listApps, setEnv } from "@/src/server/mcp-tools.mjs";
+import { connectDomain, deploy, getLogs, getStatus, listApps, publishAppFiles, setEnv } from "@/src/server/mcp-tools.mjs";
 
 export const dynamic = "force-dynamic";
 
@@ -148,6 +148,35 @@ const handler = createMcpHandler(
         }),
       },
       async ({ repo, branch }, ctx) => runTool("deploy", ctx, (db, identity) => deploy(db, { ...identity, repo, branch })),
+    );
+
+    server.registerTool(
+      "publish_files",
+      {
+        title: "Publish files",
+        annotations: { title: "Publish files", readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
+        description:
+          "Puts an app online from its files, with no GitHub needed. Use this when the person has the app's files here in the chat (for example a single-page HTML app you wrote) rather than in a GitHub repository. " +
+          "Send every file the app needs: an index.html at the top level for a website, or a package.json for a Vite or React project. Up to 50 files and 2 MB in total; web files only (HTML, CSS, JavaScript, TypeScript, JSON, SVG, images, fonts). " +
+          "Never include secret keys or .env files: Utplava refuses the upload. Ask the person for keys later and save them with set_env. " +
+          "For a new app pass name; to update an app published this way, pass its appId and the complete new set of files (files left out are removed). Returns the app ID and deployment status; check get_status for the live address.",
+        inputSchema: z.object({
+          name: z.string().min(2).max(40).optional().describe('A short name for a new app, e.g. "Bakery site". Omit when passing appId.'),
+          appId: z.string().uuid().optional().describe("The app to update. Only apps published with publish_files can be updated this way."),
+          files: z
+            .array(
+              z.object({
+                path: z.string().min(1).max(160).describe('Path from the app\'s top folder, e.g. "index.html" or "assets/logo.svg".'),
+                content: z.string().describe("The file's content: plain text, or base64 when encoding is base64."),
+                encoding: z.enum(["utf8", "base64"]).optional().describe("utf8 (default) for text files, base64 for images and fonts."),
+              }),
+            )
+            .min(1)
+            .max(50),
+        }),
+      },
+      async ({ name, appId, files }, ctx) =>
+        runTool("publish_files", ctx, (db, identity) => publishAppFiles(db, { ...identity, name, appId, files })),
     );
 
     server.registerTool(
