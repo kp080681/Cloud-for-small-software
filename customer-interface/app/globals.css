@@ -1747,7 +1747,7 @@ aside .nav-link.active {
 }
 
 .card .helptext a,
-.empty a.button {
+.empty a.button:not(.primary) {
   color: var(--ink);
 }
 

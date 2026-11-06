@@ -100,11 +100,11 @@ export default async function Home({ searchParams }) {
         <section className="panel empty">
           <div className="symbol" aria-hidden="true">+</div>
           <h2>You&apos;re in. Let&apos;s put your first app online.</h2>
-          <p className="muted">Choose the app you want to put online. Utplava works out how to run it and tells you if it needs anything from you.</p>
+          <p className="muted">Paste the page ChatGPT or Claude wrote, upload your files, or pick your app from GitHub. Utplava works out how to run it and tells you if it needs anything from you.</p>
           <Link className="button primary" href={newAppHref}>Put my first app online</Link>
           <div className="empty-footer">
-            <span>Code from your GitHub</span>
-            <span>Next.js, React, Vite, Lovable</span>
+            <span>Paste or upload, no GitHub needed</span>
+            <span>Or from GitHub: Next.js, React, Vite, Lovable</span>
             <span>A database, when it needs one</span>
           </div>
         </section>
