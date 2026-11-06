@@ -84,6 +84,9 @@ export async function getCustomerShell({ selectedWorkspaceId = null } = {}) {
       apps,
       github: {
         connected: githubInstallations.length > 0,
+        // GitHub access is tied to the GitHub account a person signed in
+        // with; Google and email accounts upload instead.
+        canConnect: session.provider === "github",
         installations: githubInstallations,
         selectedRepositories,
         repositoryAnalyses,

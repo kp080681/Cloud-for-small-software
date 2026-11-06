@@ -75,7 +75,7 @@ export default async function McpConsentPage({ searchParams }) {
     // handling here too.
     const back = new URLSearchParams();
     for (const [key, value] of Object.entries(params ?? {})) if (typeof value === "string") back.set(key, value);
-    redirect(`/api/auth/github/start?return_to=${encodeURIComponent(`/mcp/consent?${back.toString()}`)}`);
+    redirect(`/?return_to=${encodeURIComponent(`/mcp/consent?${back.toString()}`)}`);
   }
 
   let client;
@@ -162,16 +162,16 @@ export default async function McpConsentPage({ searchParams }) {
         </form>
         <div className="consent-next">
           <strong>What to do next</strong>
+          <p>
+            Back in {client.name}, try asking: <em>&ldquo;Put this app online with Utplava.&rdquo;</em> {client.name} can send
+            the app&apos;s files straight to Utplava, so you don&apos;t need GitHub.
+          </p>
           {githubConnected ? null : (
             <p>
-              Utplava also needs to see your app&apos;s code on GitHub before it can put it online.{" "}
-              <a href="/new" target="_blank" rel="noreferrer">Connect GitHub now</a> (opens in a new tab), or do it later
-              when {client.name} asks.
+              Keep your code on GitHub? <a href="/new" target="_blank" rel="noreferrer">Connect GitHub</a> (opens in a new tab)
+              and {client.name} can deploy it from there too.
             </p>
           )}
-          <p>
-            Back in {client.name}, try asking: <em>&ldquo;Put my app online with Utplava.&rdquo;</em>
-          </p>
         </div>
         <p className="helptext">You can remove access at any time from Connected apps in your workspace.</p>
       </section>

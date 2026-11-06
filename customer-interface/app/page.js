@@ -1,24 +1,26 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import { getCustomerShell } from "@/src/server/customer-shell.mjs";
+import { safeReturnTo } from "@/src/server/mcp-registration.mjs";
 import { githubInstallCallbackRedirectPath } from "@/src/server/github-install-state.mjs";
+import { SignInOptions } from "./sign-in-options.js";
 import { Brand, Chrome, Status, appStatus, isProviderUrl, timeAgo, workspaceHref } from "./ui.js";
 
 export const dynamic = "force-dynamic";
 
-function SignIn() {
+function SignIn({ returnTo = null }) {
   return (
     <main className="sign-in">
       <Brand />
       <h1>You built the app.<br />Now put it online.</h1>
-      <p className="muted">Sign in with GitHub, where your app&apos;s code is kept. Free for up to 3 apps, no card needed.</p>
+      <p className="muted">Paste or upload your app, or bring it from GitHub. Free for up to 3 apps, no card needed.</p>
       <section className="panel">
         <h2>Sign in to Utplava</h2>
-        <a className="button primary" href="/api/auth/github/start">Continue with GitHub</a>
+        <SignInOptions returnTo={returnTo} />
         <ul className="sign-in-notes">
-          <li>GitHub will ask you to let Utplava see your public profile, which is your name and username. It doesn&apos;t share your code or your password.</li>
-          <li>You choose which apps Utplava can see in a separate step, after signing in.</li>
-          <li>No GitHub account yet? <a href="https://github.com/signup" target="_blank" rel="noreferrer">Create one free</a>, then come back. Built in Lovable? <a href="https://utplava.dev/guides/lovable/" target="_blank" rel="noreferrer">Connect Lovable to GitHub first</a>.</li>
+          <li>Utplava only gets your name and email. It never sees your password.</li>
+          <li>Built in ChatGPT or Claude? Paste the page it wrote and get a live link. No GitHub needed.</li>
+          <li>Built in Lovable or keep your code on GitHub? <a href="https://utplava.dev/guides/lovable/" target="_blank" rel="noreferrer">Continue with GitHub</a> and pick your app.</li>
         </ul>
       </section>
     </main>
@@ -76,7 +78,7 @@ export default async function Home({ searchParams }) {
   const workspaceId = typeof params?.workspace === "string" ? params.workspace : null;
   const shell = await getCustomerShell({ selectedWorkspaceId: workspaceId });
 
-  if (!shell.authenticated) return <SignIn />;
+  if (!shell.authenticated) return <SignIn returnTo={safeReturnTo(typeof params?.return_to === "string" ? params.return_to : null)} />;
   if (shell.selectedWorkspaceId && workspaceId !== shell.selectedWorkspaceId) {
     redirect(`/?workspace=${encodeURIComponent(shell.selectedWorkspaceId)}`);
   }

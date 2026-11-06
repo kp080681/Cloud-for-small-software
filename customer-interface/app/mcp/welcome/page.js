@@ -1,3 +1,4 @@
+import { SignInOptions } from "../../sign-in-options.js";
 import { redirect } from "next/navigation";
 import { readCurrentSession } from "@/src/server/customer-shell.mjs";
 import { connectDatabase } from "@/src/server/db.mjs";
@@ -77,7 +78,6 @@ export default async function McpWelcomePage({ searchParams }) {
   const recognised = recognisedClient(redirectUri);
   const named = recognised?.kind === "hosted" ? recognised.label : null;
   const who = named || client.name;
-  const signIn = `/api/auth/github/start?return_to=${encodeURIComponent(returnTo)}`;
 
   return (
     <main className="sign-in">
@@ -91,22 +91,16 @@ export default async function McpWelcomePage({ searchParams }) {
         </p>
         <h2>Put your apps online, straight from {who}</h2>
         <p className="muted">
-          Utplava takes an app from GitHub, builds it, adds a database if it needs one and puts it live on a link or your own
-          domain. Once connected, {who} can deploy and check your apps when you ask.
+          Utplava puts your app live on its own link, or your own domain. Once connected, {who} can put apps online, update
+          them and check on them when you ask, straight from the files in your chat or from GitHub.
         </p>
         <ul className="welcome-points">
           <li><strong>Free to start.</strong> 3 apps and a database, no card needed.</li>
-          <li><strong>Sign in with GitHub</strong>, where your app&apos;s code lives. Utplava never sees your GitHub password.</li>
-          <li><strong>You pick the repositories</strong> Utplava can read, in a separate step.</li>
+          <li><strong>No GitHub needed.</strong> {who} can send your app&apos;s files to Utplava directly.</li>
+          <li><strong>Sign in with Google or GitHub.</strong> Utplava never sees your password.</li>
           <li><strong>Nothing is shared yet.</strong> Next you&apos;ll see exactly what {who} can do, and you can say no.</li>
         </ul>
-        <p className="welcome-github-note">
-          <strong>Your app&apos;s code needs to be on GitHub</strong> (free) so Utplava can put it online. Built it in a
-          Claude chat and it isn&apos;t there yet?{" "}
-          <a href="https://utplava.dev/guides/claude/" target="_blank" rel="noreferrer">This guide gets it there in a few minutes</a>.
-          Built in Lovable? <a href="https://utplava.dev/guides/lovable/" target="_blank" rel="noreferrer">Here&apos;s how</a>.
-        </p>
-        <a className="button primary" href={signIn}>Continue with GitHub</a>
+        <SignInOptions returnTo={returnTo} />
         <p className="helptext">
           New here? <a href="https://utplava.dev" target="_blank" rel="noreferrer">See what Utplava is</a> or read how it
           keeps your apps <a href="https://utplava.dev/security/" target="_blank" rel="noreferrer">safe</a>.

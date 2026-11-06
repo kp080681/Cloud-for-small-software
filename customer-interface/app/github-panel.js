@@ -323,7 +323,12 @@ export function GitHubPanel({ workspaceId, github, mode = "full", repositoryId =
         </span>
       </div>
 
-      {!github.connected ? (
+      {!github.connected && github.canConnect === false ? (
+        <div className="github-prep">
+          <strong>Deploying from GitHub needs a GitHub sign-in</strong>
+          <p>You signed in with Google or email, so upload your app above instead. To deploy straight from GitHub, sign out and choose <b>Continue with GitHub</b>.</p>
+        </div>
+      ) : !github.connected ? (
         <div className="github-prep">
           <strong>What happens next</strong>
           <ol>
@@ -335,6 +340,7 @@ export function GitHubPanel({ workspaceId, github, mode = "full", repositoryId =
         </div>
       ) : null}
 
+      {github.canConnect === false && !github.connected ? null : (
       <div className="github-actions">
         <form action="/api/github/install/start" method="post">
           <input type="hidden" name="workspaceId" value={workspaceId} />
@@ -350,6 +356,7 @@ export function GitHubPanel({ workspaceId, github, mode = "full", repositoryId =
           </button>
         )}
       </div>
+      )}
       </>
       )}
 

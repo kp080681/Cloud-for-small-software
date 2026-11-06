@@ -2255,3 +2255,12 @@ button.danger:disabled {
 .new-app-or h2 { margin: 0 0 4px; font-size: 15px; font-weight: 600; }
 .new-app-or p { margin: 0; font-size: 13px; }
 @media (max-width: 560px) { .upload-methods { grid-template-columns: 1fr; } }
+
+/* Sign-in options (2026-11-06): Google, GitHub, reviewer email. */
+.sign-in-options { display: grid; gap: 10px; }
+.sign-in-options .button { justify-content: center; text-align: center; }
+.sign-in-email { color: var(--muted); font-size: 12.5px; text-align: center; }
+.sign-in-email a { color: var(--brand); }
+.email-sign-in { display: grid; gap: 12px; margin-top: 12px; }
+.email-sign-in label { display: grid; gap: 6px; font-size: 13.5px; }
+.email-sign-in label span { font-weight: 600; }

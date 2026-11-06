@@ -154,7 +154,10 @@ const handler = createMcpHandler(
       "publish_files",
       {
         title: "Publish files",
-        annotations: { title: "Publish files", readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
+        // Marked destructive: updating an app replaces its files (earlier
+        // versions stay restorable from the app's history). OpenAI's review
+        // rules count overwriting as destructive, so clients ask first.
+        annotations: { title: "Publish files", readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true },
         description:
           "Puts an app online from its files, with no GitHub needed. Use this when the person has the app's files here in the chat (for example a single-page HTML app you wrote) rather than in a GitHub repository. " +
           "Send every file the app needs: an index.html at the top level for a website, or a package.json for a Vite or React project. Up to 50 files and 2 MB in total; web files only (HTML, CSS, JavaScript, TypeScript, JSON, SVG, images, fonts). " +
@@ -183,7 +186,7 @@ const handler = createMcpHandler(
       "get_status",
       {
         title: "Get deployment status",
-        annotations: { title: "Get deployment status", readOnlyHint: true, openWorldHint: false },
+        annotations: { title: "Get deployment status", readOnlyHint: true, destructiveHint: false, openWorldHint: false },
         description: "Returns the status of an app's most recent deployment: a machine-readable status, a plain-language stage and message, and the live address when it is available.",
         inputSchema: z.object({ appId: z.string().uuid() }),
       },
@@ -194,7 +197,7 @@ const handler = createMcpHandler(
       "get_logs",
       {
         title: "Get deployment logs",
-        annotations: { title: "Get deployment logs", readOnlyHint: true, openWorldHint: false },
+        annotations: { title: "Get deployment logs", readOnlyHint: true, destructiveHint: false, openWorldHint: false },
         description:
           "Returns a plain-language timeline of an app's most recent deployment, with supporting details for each step. Some details, such as the names of missing settings, come from the app's own repository.",
         inputSchema: z.object({
@@ -246,7 +249,7 @@ const handler = createMcpHandler(
       "list_apps",
       {
         title: "List apps",
-        annotations: { title: "List apps", readOnlyHint: true, openWorldHint: false },
+        annotations: { title: "List apps", readOnlyHint: true, destructiveHint: false, openWorldHint: false },
         description: "Lists the apps in the signed-in user's Utplava workspace, with each app's status and address.",
         inputSchema: z.object({}),
       },
