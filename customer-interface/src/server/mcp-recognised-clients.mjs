@@ -17,6 +17,8 @@ const HOSTS = new Map([
   ["vscode.dev", "VS Code"],
   ["insiders.vscode.dev", "VS Code"],
   ["glama.ai", "Glama"],
+  // Grok custom connectors (checked 2026-11-06: https://grok.com/connectors-oauth-exchange-code/)
+  ["grok.com", "Grok"],
 ]);
 
 const SCHEMES = new Map([
