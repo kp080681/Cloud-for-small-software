@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 // Direct publishing (2026-11-06): put an app online without GitHub. Two
 // ways in: paste one page of HTML (what ChatGPT or Claude usually hands
@@ -45,6 +45,16 @@ export function UploadPanel({ workspaceId, appId = null, appName = null }) {
   const fileInput = useRef(null);
   const folderInput = useRef(null);
   const updating = Boolean(appId);
+
+  // Coming Back to this page restores it exactly as it was left, which was
+  // mid-upload ("Uploading…") because a successful upload moves on to the
+  // app's page. Reset so the form is usable again.
+  useEffect(() => {
+    const reset = (event) => { if (event.persisted) setBusy(false); };
+    setBusy(false);
+    window.addEventListener("pageshow", reset);
+    return () => window.removeEventListener("pageshow", reset);
+  }, []);
 
   function takeFiles(list) {
     setError(null);
