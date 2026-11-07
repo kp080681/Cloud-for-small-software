@@ -46,7 +46,7 @@ export function GET() {
     // "none": there is no client_secret — PKCE (S256) is the only
     // credential a public client like this needs, by design (see
     // register-mcp-client.mjs and mcp/README.md).
-    token_endpoint_auth_methods_supported: ["none"],
+    token_endpoint_auth_methods_supported: ["none", "client_secret_post", "client_secret_basic"],
   });
 }
 

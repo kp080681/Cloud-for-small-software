@@ -11,6 +11,12 @@
 // connection returns to, because a self-registered name proves nothing.
 
 import { randomBytes } from "node:crypto";
+import { hashToken } from "../shared/control-plane/mcp-auth-crypto.mjs";
+
+// Confidential clients (2026-11-07, migration 033): a platform that asks for
+// client_secret_post or client_secret_basic gets a secret, shown once here
+// and stored only as a hash. Everything else is a public client using PKCE.
+export const SECRET_AUTH_METHODS = new Set(["client_secret_post", "client_secret_basic"]);
 
 export class RegistrationError extends Error {
   constructor(error, description, status = 400) {
@@ -74,13 +80,15 @@ export function validateRegistrationRequest(body) {
   if (!Array.isArray(responseTypes) || responseTypes.some((r) => r !== "code")) {
     throw new RegistrationError("invalid_client_metadata", "Only the code response type is supported.");
   }
-  // Public clients only: PKCE (S256) is the credential. A client asking for
-  // a secret-based method is registered as "none" (RFC 7591 §3.2.1 lets the
-  // server replace requested values) and told so in the response.
+  const requested = body.token_endpoint_auth_method;
+  if (requested !== undefined && requested !== "none" && !SECRET_AUTH_METHODS.has(requested)) {
+    throw new RegistrationError("invalid_client_metadata", "token_endpoint_auth_method must be none, client_secret_post or client_secret_basic.");
+  }
   return {
     name: cleanName(body.client_name),
     redirectUris: unique,
     grantTypes: [...new Set(grantTypes)],
+    authMethod: SECRET_AUTH_METHODS.has(requested) ? requested : "none",
   };
 }
 
@@ -89,25 +97,42 @@ export function validateRegistrationRequest(body) {
 // their client_id.
 export const REGISTRATIONS_PER_HOUR = 300;
 
-export async function registerMcpClient(db, body, { now = Date.now(), idFactory = () => `mcp_${randomBytes(24).toString("base64url")}` } = {}) {
+export async function registerMcpClient(
+  db,
+  body,
+  {
+    now = Date.now(),
+    idFactory = () => `mcp_${randomBytes(24).toString("base64url")}`,
+    secretFactory = () => `mcs_${randomBytes(32).toString("base64url")}`,
+  } = {},
+) {
   const request = validateRegistrationRequest(body);
   const recent = await db.query(`SELECT count(*)::int AS n FROM mcp_clients WHERE created_at > now() - interval '1 hour'`);
   if ((recent.rows[0]?.n ?? 0) >= REGISTRATIONS_PER_HOUR) {
     throw new RegistrationError("temporarily_unavailable", "Too many registrations right now. Try again later.", 429);
   }
   const clientId = idFactory();
-  await db.query(
-    `INSERT INTO mcp_clients (client_id, name, redirect_uris) VALUES ($1, $2, $3)`,
-    [clientId, request.name, request.redirectUris],
-  );
+  const secret = request.authMethod === "none" ? null : secretFactory();
+  if (secret) {
+    await db.query(
+      `INSERT INTO mcp_clients (client_id, name, redirect_uris, client_secret_hash, token_endpoint_auth_method) VALUES ($1, $2, $3, $4, $5)`,
+      [clientId, request.name, request.redirectUris, hashToken(secret), request.authMethod],
+    );
+  } else {
+    await db.query(
+      `INSERT INTO mcp_clients (client_id, name, redirect_uris) VALUES ($1, $2, $3)`,
+      [clientId, request.name, request.redirectUris],
+    );
+  }
   return {
     client_id: clientId,
     client_id_issued_at: Math.floor(now / 1000),
+    ...(secret ? { client_secret: secret, client_secret_expires_at: 0 } : {}),
     client_name: request.name,
     redirect_uris: request.redirectUris,
     grant_types: request.grantTypes,
     response_types: ["code"],
-    token_endpoint_auth_method: "none",
+    token_endpoint_auth_method: request.authMethod,
   };
 }
 

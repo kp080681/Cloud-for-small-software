@@ -39,7 +39,7 @@ class FakeDb {
   async query(sql, params = []) {
     const text = sql.replace(/\s+/g, " ").trim();
 
-    if (text.startsWith("SELECT id, client_id, name, redirect_uris, disabled_at FROM mcp_clients")) {
+    if (text.startsWith("SELECT id, client_id, name, redirect_uris, disabled_at, client_secret_hash FROM mcp_clients")) {
       const [clientId] = params;
       const client = this.clients.find((c) => c.client_id === clientId);
       return { rowCount: client ? 1 : 0, rows: client ? [client] : [] };
@@ -116,10 +116,10 @@ class FakeDb {
       return { rowCount: row ? 1 : 0, rows: row ? [row] : [] };
     }
 
-    if (text === "SELECT id FROM mcp_clients WHERE client_id=$1 AND disabled_at IS NULL") {
+    if (text === "SELECT id, client_secret_hash FROM mcp_clients WHERE client_id=$1 AND disabled_at IS NULL") {
       const [clientId] = params;
       const client = this.clients.find((c) => c.client_id === clientId && !c.disabled_at);
-      return { rowCount: client ? 1 : 0, rows: client ? [{ id: client.id }] : [] };
+      return { rowCount: client ? 1 : 0, rows: client ? [{ id: client.id, client_secret_hash: client.client_secret_hash ?? null }] : [] };
     }
 
     if (text === "BEGIN" || text === "COMMIT" || text === "ROLLBACK" || text.startsWith("SELECT pg_advisory_xact_lock")) {
@@ -544,4 +544,84 @@ test("revokeTokenFamily is tenant-scoped — cannot revoke a family belonging to
   const correct = await revokeTokenFamily(db, { customerId: "identity-a", workspaceId: "workspace-a", tokenFamilyId });
   assert.equal(correct.revokedCount, 1);
   await assert.rejects(verifyAccessToken(db, { accessToken: tokens.accessToken }), (e) => e.code === "INVALID_TOKEN");
+});
+
+// ---- Confidential clients (033): secret instead of, or alongside, PKCE ----
+
+const SH_REDIRECT = "https://docs.superhuman.com/packsAuth/oauth2";
+const SH_SECRET = "mcs_superhuman_secret";
+
+function dbWithConfidentialClient() {
+  const db = new FakeDb();
+  db.clients.push({
+    id: "client-row-sh",
+    client_id: "superhuman",
+    name: "Superhuman",
+    redirect_uris: [SH_REDIRECT],
+    disabled_at: null,
+    client_secret_hash: createHash("sha256").update(SH_SECRET, "utf8").digest("hex"),
+  });
+  return db;
+}
+
+test("a public client still cannot get a code without PKCE", async () => {
+  const db = new FakeDb();
+  await assert.rejects(
+    createAuthorizationCode(db, { customerId: "identity-a", workspaceId: "workspace-a", clientId: "claude-code", redirectUri: REDIRECT_URI, codeChallenge: null }),
+    (e) => e.code === "INVALID_CODE_CHALLENGE",
+  );
+  assert.equal(db.authCodes.length, 0);
+});
+
+test("a confidential client without PKCE: code issued, redeemable only with the right secret", async () => {
+  const db = dbWithConfidentialClient();
+  const issue = () => createAuthorizationCode(db, { customerId: "identity-a", workspaceId: "workspace-a", clientId: "superhuman", redirectUri: SH_REDIRECT, codeChallenge: null });
+
+  const first = await issue();
+  assert.equal(db.authCodes.at(-1).code_challenge, null);
+  assert.equal(db.authCodes.at(-1).code_challenge_method, null);
+  await assert.rejects(
+    exchangeAuthorizationCode(db, { code: first.code, clientId: "superhuman", redirectUri: SH_REDIRECT }),
+    (e) => e.code === "INVALID_CLIENT" && e.status === 401,
+    "no secret",
+  );
+
+  const second = await issue();
+  await assert.rejects(
+    exchangeAuthorizationCode(db, { code: second.code, clientId: "superhuman", redirectUri: SH_REDIRECT, clientSecret: "wrong" }),
+    (e) => e.code === "INVALID_CLIENT" && e.status === 401,
+    "wrong secret",
+  );
+
+  const third = await issue();
+  const tokens = await exchangeAuthorizationCode(db, { code: third.code, clientId: "superhuman", redirectUri: SH_REDIRECT, clientSecret: SH_SECRET });
+  assert.ok(tokens.accessToken);
+  const resolved = await verifyAccessToken(db, { accessToken: tokens.accessToken });
+  assert.equal(resolved.workspaceId, "workspace-a");
+
+  await assert.rejects(
+    rotateRefreshToken(db, { refreshToken: tokens.refreshToken, clientId: "superhuman", clientSecret: "wrong" }),
+    (e) => e.code === "INVALID_CLIENT",
+    "a wrong secret on refresh is refused",
+  );
+  const refreshed = await rotateRefreshToken(db, { refreshToken: tokens.refreshToken, clientId: "superhuman", clientSecret: SH_SECRET });
+  assert.ok(refreshed.accessToken);
+});
+
+test("a confidential client that also uses PKCE keeps working without sending its secret", async () => {
+  const db = dbWithConfidentialClient();
+  const { verifier, challenge } = realPkcePair();
+  const { code } = await createAuthorizationCode(db, { customerId: "identity-a", workspaceId: "workspace-a", clientId: "superhuman", redirectUri: SH_REDIRECT, codeChallenge: challenge });
+  const tokens = await exchangeAuthorizationCode(db, { code, clientId: "superhuman", redirectUri: SH_REDIRECT, codeVerifier: verifier });
+  assert.ok(tokens.accessToken);
+});
+
+test("a secret sent by a public client is refused, never ignored", async () => {
+  const db = new FakeDb();
+  const { verifier, challenge } = realPkcePair();
+  const { code } = await createAuthorizationCode(db, { customerId: "identity-a", workspaceId: "workspace-a", clientId: "claude-code", redirectUri: REDIRECT_URI, codeChallenge: challenge });
+  await assert.rejects(
+    exchangeAuthorizationCode(db, { code, clientId: "claude-code", redirectUri: REDIRECT_URI, codeVerifier: verifier, clientSecret: "anything" }),
+    (e) => e.code === "INVALID_CLIENT",
+  );
 });

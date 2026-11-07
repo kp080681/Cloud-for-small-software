@@ -23,6 +23,16 @@ export async function POST(request) {
     body = contentType.includes("application/x-www-form-urlencoded")
       ? Object.fromEntries(new URLSearchParams(await request.text()))
       : await request.json().catch(() => ({}));
+    // Confidential clients (033) send their secret either in the form body
+    // (client_secret_post) or as HTTP Basic (client_secret_basic, RFC 6749
+    // §2.3.1: form-encoded id and secret, base64'd).
+    const basic = parseBasicAuth(request.headers.get("authorization"));
+    if (basic && body.client_id && body.client_id !== basic.clientId) {
+      return Response.json({ error: "invalid_client" }, { status: 401 });
+    }
+    const clientId = body.client_id || basic?.clientId;
+    const clientSecret = body.client_secret || basic?.clientSecret;
+    body = { ...body, client_id: clientId };
     db = await connectDatabase();
 
     if (body.grant_type === "authorization_code") {
@@ -31,6 +41,7 @@ export async function POST(request) {
         clientId: body.client_id,
         redirectUri: body.redirect_uri,
         codeVerifier: body.code_verifier,
+        clientSecret,
       });
       await recordFunnelStep(db, { step: "token_issued", client: await clientLabelFor(db, body.client_id) });
       return Response.json(toOAuthResponse(tokens));
@@ -40,6 +51,7 @@ export async function POST(request) {
       const tokens = await rotateRefreshToken(db, {
         refreshToken: body.refresh_token,
         clientId: body.client_id,
+        clientSecret,
       });
       return Response.json(toOAuthResponse(tokens));
     }
@@ -57,7 +69,8 @@ export async function POST(request) {
       const hint = !body?.client_id ? (request.headers.get("authorization") ? "client_id_in_basic_auth" : "no_client_id") : code.toLowerCase();
       await recordFunnelStep(db, { step: "token_rejected", client: `${await clientLabelFor(db, body?.client_id)} (${hint})` });
     }
-    return Response.json({ error: code.toLowerCase() }, { status });
+    const headers = status === 401 ? { "WWW-Authenticate": 'Basic realm="utplava"' } : undefined;
+    return Response.json({ error: code.toLowerCase() }, { status, headers });
   } finally {
     if (db) await db.end();
   }
@@ -74,4 +87,19 @@ function toOAuthResponse(tokens) {
     expires_in: tokens.expiresIn,
     refresh_token: tokens.refreshToken,
   };
+}
+
+function parseBasicAuth(header) {
+  if (typeof header !== "string" || !/^basic\s+/i.test(header)) return null;
+  try {
+    const decoded = Buffer.from(header.replace(/^basic\s+/i, "").trim(), "base64").toString("utf8");
+    const i = decoded.indexOf(":");
+    if (i < 1) return null;
+    return {
+      clientId: decodeURIComponent(decoded.slice(0, i).replace(/\+/g, " ")),
+      clientSecret: decodeURIComponent(decoded.slice(i + 1).replace(/\+/g, " ")),
+    };
+  } catch {
+    return null;
+  }
 }

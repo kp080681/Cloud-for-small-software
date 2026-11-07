@@ -64,7 +64,9 @@ export default async function McpConsentPage({ searchParams }) {
   const workspaceId = typeof params?.workspace_id === "string" ? params.workspace_id : null;
   const state = typeof params?.state === "string" ? params.state : null;
 
-  if (!clientId || !redirectUri || !codeChallenge || !workspaceId) {
+  // code_challenge may be absent only for a confidential client (033);
+  // createAuthorizationCode enforces that when the person clicks Allow.
+  if (!clientId || !redirectUri || !workspaceId) {
     return <ConsentError title="This authorization request is incomplete." message="Ask the app or tool you're connecting to start the connection again." />;
   }
 
@@ -143,8 +145,8 @@ export default async function McpConsentPage({ searchParams }) {
         <form action="/api/mcp/authorize/decision" method="post" className="consent-form">
           <input type="hidden" name="client_id" value={clientId} />
           <input type="hidden" name="redirect_uri" value={redirectUri} />
-          <input type="hidden" name="code_challenge" value={codeChallenge} />
-          <input type="hidden" name="code_challenge_method" value={codeChallengeMethod} />
+          {codeChallenge ? <input type="hidden" name="code_challenge" value={codeChallenge} /> : null}
+          {codeChallenge ? <input type="hidden" name="code_challenge_method" value={codeChallengeMethod} /> : null}
           <input type="hidden" name="workspace_id" value={workspaceId} />
           {state ? <input type="hidden" name="state" value={state} /> : null}
           {recognised ? null : (

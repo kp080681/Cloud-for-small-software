@@ -25,7 +25,7 @@ export class McpAuthError extends Error {
 
 export async function resolveMcpClient(db, { clientId, redirectUri }) {
   const result = await db.query(
-    `SELECT id, client_id, name, redirect_uris, disabled_at FROM mcp_clients WHERE client_id=$1`,
+    `SELECT id, client_id, name, redirect_uris, disabled_at, client_secret_hash FROM mcp_clients WHERE client_id=$1`,
     [clientId],
   );
   const client = result.rows[0];
@@ -36,6 +36,45 @@ export async function resolveMcpClient(db, { clientId, redirectUri }) {
   return client;
 }
 
+// A confidential client (033) was issued a secret at registration. Rules,
+// chosen so that no client that works today can break:
+// - a secret that is sent must be the right one (else 401);
+// - a code issued WITHOUT PKCE can only be redeemed with the right secret;
+// - a code issued with PKCE is redeemed by its verifier, as before, with or
+//   without a secret (Claude asks for a secret but also uses PKCE).
+export function isConfidentialClient(client) {
+  return Boolean(client?.client_secret_hash);
+}
+
+function secretMatches(client, clientSecret) {
+  if (!isConfidentialClient(client) || typeof clientSecret !== "string" || !clientSecret) return false;
+  const given = Buffer.from(hashToken(clientSecret));
+  const stored = Buffer.from(String(client.client_secret_hash));
+  return given.length === stored.length && crypto.timingSafeEqual(given, stored);
+}
+
+function checkSentSecret(client, clientSecret) {
+  if (clientSecret === undefined || clientSecret === null || clientSecret === "") return false;
+  if (!secretMatches(client, clientSecret)) throw new McpAuthError("INVALID_CLIENT", "Client authentication failed.", 401);
+  return true;
+}
+
+// PKCE is required unless the client is confidential (has a secret). The
+// authorization endpoint, consent screen and decision route all call this.
+export function checkPkceRequest(client, { codeChallenge, codeChallengeMethod }) {
+  if (!codeChallenge) {
+    if (isConfidentialClient(client)) return { codeChallenge: null, codeChallengeMethod: null };
+    throw new McpAuthError("INVALID_CODE_CHALLENGE", "code_challenge is required.", 400);
+  }
+  if ((codeChallengeMethod || "S256") !== "S256") {
+    throw new McpAuthError("INVALID_CODE_CHALLENGE_METHOD", "Only S256 is supported.", 400);
+  }
+  if (typeof codeChallenge !== "string" || codeChallenge.length < 43 || codeChallenge.length > 128) {
+    throw new McpAuthError("INVALID_CODE_CHALLENGE", "code_challenge is invalid.", 400);
+  }
+  return { codeChallenge, codeChallengeMethod: "S256" };
+}
+
 // Called only from a route the existing cookie-authenticated web session
 // reaches (customerId comes from that session, never from the request
 // body) — an MCP client never talks to this function directly, only to the
@@ -44,14 +83,8 @@ export async function createAuthorizationCode(
   db,
   { customerId, workspaceId, clientId, redirectUri, codeChallenge, codeChallengeMethod = "S256" },
 ) {
-  if (codeChallengeMethod !== "S256") {
-    throw new McpAuthError("INVALID_CODE_CHALLENGE_METHOD", "Only S256 is supported.", 400);
-  }
-  if (typeof codeChallenge !== "string" || codeChallenge.length < 43) {
-    throw new McpAuthError("INVALID_CODE_CHALLENGE", "code_challenge is required.", 400);
-  }
-
   const client = await resolveMcpClient(db, { clientId, redirectUri });
+  const pkce = checkPkceRequest(client, { codeChallenge, codeChallengeMethod });
   // Reuses the exact same tenant-boundary function the rest of the web app
   // uses for every workspace-scoped page — a customer cannot mint an MCP
   // grant for a workspace they don't belong to, for the same reason and by
@@ -71,8 +104,8 @@ export async function createAuthorizationCode(
       customerId,
       workspaceId,
       redirectUri,
-      codeChallenge,
-      codeChallengeMethod,
+      pkce.codeChallenge,
+      pkce.codeChallengeMethod,
       expiresAtFromNow(AUTHORIZATION_CODE_TTL_SECONDS),
     ],
   );
@@ -105,8 +138,9 @@ async function issueTokenPair(db, { clientId, customerId, workspaceId, tokenFami
 // the MCP client (the thing it kept secret since the authorization
 // request); everything else here is re-derived from what was stored at
 // authorization time, never trusted from this request alone.
-export async function exchangeAuthorizationCode(db, { code, clientId, redirectUri, codeVerifier }) {
+export async function exchangeAuthorizationCode(db, { code, clientId, redirectUri, codeVerifier, clientSecret }) {
   const client = await resolveMcpClient(db, { clientId, redirectUri });
+  const authenticated = checkSentSecret(client, clientSecret);
 
   // Atomic single-use claim — the exact compare-and-swap pattern already
   // proven in provider-mutation-fencing.mjs (conditional UPDATE + rowCount
@@ -134,8 +168,14 @@ export async function exchangeAuthorizationCode(db, { code, clientId, redirectUr
   if (grant.redirect_uri !== redirectUri) {
     throw new McpAuthError("INVALID_GRANT", "redirect_uri does not match the authorization request.", 400);
   }
-  if (!verifyPkceChallenge({ verifier: codeVerifier, challenge: grant.code_challenge, method: grant.code_challenge_method })) {
-    throw new McpAuthError("INVALID_GRANT", "PKCE verification failed.", 400);
+  if (grant.code_challenge) {
+    if (!verifyPkceChallenge({ verifier: codeVerifier, challenge: grant.code_challenge, method: grant.code_challenge_method })) {
+      throw new McpAuthError("INVALID_GRANT", "PKCE verification failed.", 400);
+    }
+  } else if (!authenticated) {
+    // A code without PKCE is only ever issued to a confidential client, and
+    // only that client's correct secret can redeem it.
+    throw new McpAuthError("INVALID_CLIENT", "Client authentication failed.", 401);
   }
 
   return issueTokenPair(db, {
@@ -206,10 +246,11 @@ export async function enforceMcpToolCallLimit(db, { workspaceId }) {
 // and revoking a family were never mutually exclusive with each other,
 // only with themselves. The advisory lock serializes all of it — claim,
 // reuse-check, revocation, issuance — per family, not just per row.
-export async function rotateRefreshToken(db, { refreshToken, clientId, now = new Date() }) {
-  const clientResult = await db.query(`SELECT id FROM mcp_clients WHERE client_id=$1 AND disabled_at IS NULL`, [clientId]);
+export async function rotateRefreshToken(db, { refreshToken, clientId, clientSecret, now = new Date() }) {
+  const clientResult = await db.query(`SELECT id, client_secret_hash FROM mcp_clients WHERE client_id=$1 AND disabled_at IS NULL`, [clientId]);
   if (clientResult.rowCount === 0) throw new McpAuthError("INVALID_CLIENT", "Unknown or disabled MCP client.", 400);
   const client = clientResult.rows[0];
+  checkSentSecret(client, clientSecret);
   if (typeof refreshToken !== "string" || !refreshToken) throw new McpAuthError("INVALID_GRANT", "Refresh token is invalid.", 400);
   const refreshHash = hashToken(refreshToken);
 

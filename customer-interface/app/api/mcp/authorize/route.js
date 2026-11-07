@@ -3,7 +3,7 @@ import { connectDatabase } from "@/src/server/db.mjs";
 import { requireCustomerSession } from "@/src/server/customer-shell.mjs";
 import { ensureInitialWorkspace, defaultWorkspaceName } from "@/src/server/customer-workspaces.mjs";
 import { selectedWorkspaceCookieName } from "@/src/server/session.mjs";
-import { resolveMcpClient } from "@/src/server/mcp-auth.mjs";
+import { checkPkceRequest, resolveMcpClient } from "@/src/server/mcp-auth.mjs";
 import { clientLabelFor, recordFunnelStep } from "@/src/server/mcp-funnel.mjs";
 
 export const dynamic = "force-dynamic";
@@ -29,8 +29,10 @@ export async function GET(request) {
   const state = url.searchParams.get("state");
   const responseType = url.searchParams.get("response_type");
 
-  if (responseType !== "code" || !clientId || !redirectUri || !codeChallenge) {
-    const why = responseType !== "code" ? "bad_response_type" : !clientId ? "no_client_id" : !redirectUri ? "no_redirect_uri" : "no_pkce";
+  // PKCE is checked after the client is known: confidential clients (033)
+  // may omit it, public clients may not.
+  if (responseType !== "code" || !clientId || !redirectUri) {
+    const why = responseType !== "code" ? "bad_response_type" : !clientId ? "no_client_id" : "no_redirect_uri";
     await noteAuthorize(clientId, "authorize_rejected", why);
     return Response.json({ error: "invalid_request" }, { status: 400 });
   }
@@ -49,11 +51,17 @@ export async function GET(request) {
     // a malformed or unregistered request should get a clean 4xx
     // immediately, rather than first forcing a logged-out visitor through
     // a 401 for a request that was never going to succeed anyway.
-    await resolveMcpClient(db, { clientId, redirectUri }).catch(async (error) => {
+    const client = await resolveMcpClient(db, { clientId, redirectUri }).catch(async (error) => {
       await recordFunnelStep(db, { step: "authorize_rejected", client: `${await clientLabelFor(db, clientId)} (${String(error?.code || "invalid").toLowerCase()})` });
       throw error;
     });
     redirectUriTrusted = true;
+    try {
+      checkPkceRequest(client, { codeChallenge, codeChallengeMethod });
+    } catch (error) {
+      await recordFunnelStep(db, { step: "authorize_rejected", client: `${await clientLabelFor(db, clientId)} (${codeChallenge ? "bad_pkce" : "no_pkce"})` });
+      throw error;
+    }
     await recordFunnelStep(db, { step: "authorize_requested", client: await clientLabelFor(db, clientId) });
 
     const session = await requireCustomerSession(await cookies());
@@ -68,8 +76,10 @@ export async function GET(request) {
     const consentUrl = new URL("/mcp/consent", request.url);
     consentUrl.searchParams.set("client_id", clientId);
     consentUrl.searchParams.set("redirect_uri", redirectUri);
-    consentUrl.searchParams.set("code_challenge", codeChallenge);
-    consentUrl.searchParams.set("code_challenge_method", codeChallengeMethod);
+    if (codeChallenge) {
+      consentUrl.searchParams.set("code_challenge", codeChallenge);
+      consentUrl.searchParams.set("code_challenge_method", codeChallengeMethod);
+    }
     consentUrl.searchParams.set("workspace_id", workspaceId);
     if (state) consentUrl.searchParams.set("state", state);
     return Response.redirect(consentUrl);

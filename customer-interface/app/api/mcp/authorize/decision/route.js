@@ -56,7 +56,7 @@ export async function POST(request) {
       );
     }
 
-    if (typeof codeChallenge !== "string" || typeof workspaceId !== "string" || !codeChallenge || !workspaceId) {
+    if (typeof workspaceId !== "string" || !workspaceId || (codeChallenge !== null && typeof codeChallenge !== "string")) {
       return Response.json({ error: "invalid_request" }, { status: 400 });
     }
 
@@ -65,7 +65,9 @@ export async function POST(request) {
       workspaceId,
       clientId,
       redirectUri,
-      codeChallenge,
+      // Absent only for a confidential client; createAuthorizationCode
+      // refuses a missing challenge for everyone else.
+      codeChallenge: codeChallenge || null,
       codeChallengeMethod,
     });
 

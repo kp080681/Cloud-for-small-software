@@ -1,4 +1,5 @@
 import test from "node:test";
+import { createHash } from "node:crypto";
 import assert from "node:assert/strict";
 import {
   REGISTRATIONS_PER_HOUR,
@@ -54,11 +55,11 @@ test("dangerous or sloppy redirect URIs are refused", () => {
   }
 });
 
-test("registration returns a public client and stores exactly what was asked", async () => {
+test("registration returns a public client by default and stores exactly what was asked", async () => {
   const db = new FakeDb();
   const result = await registerMcpClient(
     db,
-    { client_name: "Claude", redirect_uris: ["https://claude.ai/api/mcp/auth_callback"], token_endpoint_auth_method: "client_secret_post" },
+    { client_name: "Grok", redirect_uris: ["https://grok.com/connectors-oauth-exchange-code/"] },
     { now: 1_700_000_000_000, idFactory: () => "mcp_test" },
   );
   assert.equal(result.client_id, "mcp_test");
@@ -66,7 +67,30 @@ test("registration returns a public client and stores exactly what was asked", a
   assert.equal(result.client_secret, undefined);
   assert.deepEqual(result.grant_types, ["authorization_code", "refresh_token"]);
   assert.equal(result.client_id_issued_at, 1_700_000_000);
-  assert.deepEqual(db.inserted, [["mcp_test", "Claude", ["https://claude.ai/api/mcp/auth_callback"]]]);
+  assert.deepEqual(db.inserted, [["mcp_test", "Grok", ["https://grok.com/connectors-oauth-exchange-code/"]]]);
+});
+
+test("a client asking for a secret gets one, shown once and stored only as a hash (033)", async () => {
+  for (const method of ["client_secret_post", "client_secret_basic"]) {
+    const db = new FakeDb();
+    const result = await registerMcpClient(
+      db,
+      { client_name: "Superhuman", redirect_uris: ["https://docs.superhuman.com/packsAuth/oauth2"], token_endpoint_auth_method: method },
+      { now: 1_700_000_000_000, idFactory: () => "mcp_test", secretFactory: () => "mcs_secret_value" },
+    );
+    assert.equal(result.token_endpoint_auth_method, method);
+    assert.equal(result.client_secret, "mcs_secret_value");
+    assert.equal(result.client_secret_expires_at, 0);
+    const [row] = db.inserted;
+    assert.equal(row[0], "mcp_test");
+    assert.equal(row[3], createHash("sha256").update("mcs_secret_value").digest("hex"));
+    assert.ok(!JSON.stringify(db.inserted).includes("mcs_secret_value"), "the secret itself is never stored");
+    assert.equal(row[4], method);
+  }
+  assert.throws(
+    () => validateRegistrationRequest({ redirect_uris: ["https://a.example/cb"], token_endpoint_auth_method: "private_key_jwt" }),
+    (e) => e.error === "invalid_client_metadata",
+  );
 });
 
 test("names are cleaned so they can't fake text on the consent screen", () => {
