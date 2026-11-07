@@ -3,7 +3,25 @@
 // consent screen. Numbers only, no personal data. Best-effort: counting must
 // never affect the page or redirect it sits in.
 
-export const FUNNEL_STEPS = new Set(["welcome_viewed", "signin_started", "consent_viewed"]);
+export const FUNNEL_STEPS = new Set([
+  "welcome_viewed",
+  "signin_started",
+  "consent_viewed",
+  // 2026-11-07: a client (Superhuman) registered 3 times and never reached
+  // the welcome page; Vercel keeps request logs for an hour, so record
+  // where connections fail, durably. Labels are reason codes, never data.
+  "authorize_requested",
+  "authorize_rejected",
+  "token_issued",
+  "token_rejected",
+]);
+
+// Registered client name for a client_id, for funnel labels only.
+export async function clientLabelFor(db, clientId) {
+  if (!db || typeof clientId !== "string" || !clientId) return "unknown";
+  const r = await db.query(`SELECT name FROM mcp_clients WHERE client_id = $1`, [clientId]).catch(() => null);
+  return funnelClientLabel({ clientName: r?.rows?.[0]?.name ?? null });
+}
 
 export function funnelClientLabel({ recognisedLabel, clientName } = {}) {
   const label = recognisedLabel || (clientName ? `app: ${String(clientName)}` : "unknown");

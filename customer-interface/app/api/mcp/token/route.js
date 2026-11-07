@@ -1,5 +1,6 @@
 import { connectDatabase } from "@/src/server/db.mjs";
 import { exchangeAuthorizationCode, rotateRefreshToken } from "@/src/server/mcp-auth.mjs";
+import { clientLabelFor, recordFunnelStep } from "@/src/server/mcp-funnel.mjs";
 
 export const dynamic = "force-dynamic";
 
@@ -10,6 +11,7 @@ export const dynamic = "force-dynamic";
 // in the POST body itself, exactly like a real OAuth token endpoint.
 export async function POST(request) {
   let db;
+  let body = {};
   try {
     // RFC 6749 §4.1.3/§6 require clients to send token requests as
     // application/x-www-form-urlencoded, not JSON — real OAuth clients
@@ -18,7 +20,7 @@ export async function POST(request) {
     // JSON, meaning no compliant client could actually complete a token
     // exchange against it at all.
     const contentType = request.headers.get("content-type") || "";
-    const body = contentType.includes("application/x-www-form-urlencoded")
+    body = contentType.includes("application/x-www-form-urlencoded")
       ? Object.fromEntries(new URLSearchParams(await request.text()))
       : await request.json().catch(() => ({}));
     db = await connectDatabase();
@@ -30,6 +32,7 @@ export async function POST(request) {
         redirectUri: body.redirect_uri,
         codeVerifier: body.code_verifier,
       });
+      await recordFunnelStep(db, { step: "token_issued", client: await clientLabelFor(db, body.client_id) });
       return Response.json(toOAuthResponse(tokens));
     }
 
@@ -50,6 +53,10 @@ export async function POST(request) {
     const known = error?.name === "McpAuthError";
     const status = known && Number.isInteger(error?.status) ? error.status : 500;
     const code = known ? error.code : "SERVER_ERROR";
+    if (db && body?.grant_type !== "refresh_token") {
+      const hint = !body?.client_id ? (request.headers.get("authorization") ? "client_id_in_basic_auth" : "no_client_id") : code.toLowerCase();
+      await recordFunnelStep(db, { step: "token_rejected", client: `${await clientLabelFor(db, body?.client_id)} (${hint})` });
+    }
     return Response.json({ error: code.toLowerCase() }, { status });
   } finally {
     if (db) await db.end();

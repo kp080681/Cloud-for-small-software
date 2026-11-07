@@ -4,6 +4,7 @@ import { requireCustomerSession } from "@/src/server/customer-shell.mjs";
 import { ensureInitialWorkspace, defaultWorkspaceName } from "@/src/server/customer-workspaces.mjs";
 import { selectedWorkspaceCookieName } from "@/src/server/session.mjs";
 import { resolveMcpClient } from "@/src/server/mcp-auth.mjs";
+import { clientLabelFor, recordFunnelStep } from "@/src/server/mcp-funnel.mjs";
 
 export const dynamic = "force-dynamic";
 
@@ -29,6 +30,8 @@ export async function GET(request) {
   const responseType = url.searchParams.get("response_type");
 
   if (responseType !== "code" || !clientId || !redirectUri || !codeChallenge) {
+    const why = responseType !== "code" ? "bad_response_type" : !clientId ? "no_client_id" : !redirectUri ? "no_redirect_uri" : "no_pkce";
+    await noteAuthorize(clientId, "authorize_rejected", why);
     return Response.json({ error: "invalid_request" }, { status: 400 });
   }
 
@@ -46,8 +49,12 @@ export async function GET(request) {
     // a malformed or unregistered request should get a clean 4xx
     // immediately, rather than first forcing a logged-out visitor through
     // a 401 for a request that was never going to succeed anyway.
-    await resolveMcpClient(db, { clientId, redirectUri });
+    await resolveMcpClient(db, { clientId, redirectUri }).catch(async (error) => {
+      await recordFunnelStep(db, { step: "authorize_rejected", client: `${await clientLabelFor(db, clientId)} (${String(error?.code || "invalid").toLowerCase()})` });
+      throw error;
+    });
     redirectUriTrusted = true;
+    await recordFunnelStep(db, { step: "authorize_requested", client: await clientLabelFor(db, clientId) });
 
     const session = await requireCustomerSession(await cookies());
 
@@ -112,5 +119,19 @@ export async function GET(request) {
     return Response.redirect(target);
   } finally {
     if (db) await db.end();
+  }
+}
+
+// Best-effort record of a rejected request that never got a database
+// connection of its own (see mcp-funnel.mjs).
+async function noteAuthorize(clientId, step, why) {
+  let db;
+  try {
+    db = await connectDatabase();
+    await recordFunnelStep(db, { step, client: `${await clientLabelFor(db, clientId)} (${why})` });
+  } catch {
+    // counting must never affect the response
+  } finally {
+    if (db) await db.end().catch(() => {});
   }
 }
