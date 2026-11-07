@@ -19,6 +19,9 @@ const HOSTS = new Map([
   ["glama.ai", "Glama"],
   // Grok custom connectors (checked 2026-11-06: https://grok.com/connectors-oauth-exchange-code/)
   ["grok.com", "Grok"],
+  // Superhuman (formerly Grammarly) AI connectors; seen 2026-11-07:
+  // https://docs.superhuman.com/packsAuth/oauth2
+  ["docs.superhuman.com", "Superhuman"],
 ]);
 
 const SCHEMES = new Map([
