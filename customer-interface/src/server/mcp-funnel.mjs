@@ -14,6 +14,11 @@ export const FUNNEL_STEPS = new Set([
   "authorize_rejected",
   "token_issued",
   "token_rejected",
+  // Try before sign-in (2026-11-09), client label "web".
+  "try_previewed",
+  "try_publish_clicked",
+  "try_repo_checked",
+  "try_published",
 ]);
 
 // Registered client name for a client_id, for funnel labels only.

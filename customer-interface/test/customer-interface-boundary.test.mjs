@@ -94,8 +94,16 @@ test("GitHub App private key access is isolated to the server adapter", async ()
 test("customer interface does not use prototype client-side identity simulation", async () => {
   for (const file of await sourceFiles()) {
     const text = await readFile(file, "utf8");
-    assert.equal(text.includes("sessionStorage"), false, `${path.relative(root, file)} uses sessionStorage`);
-    assert.equal(text.includes("localStorage"), false, `${path.relative(root, file)} uses localStorage`);
+    const rel = path.relative(root, file);
+    assert.equal(text.includes("sessionStorage"), false, `${rel} uses sessionStorage`);
+    // One exception (2026-11-09): app/try-draft.js keeps a signed-out
+    // visitor's draft page across the sign-in redirect. It must never hold
+    // identity: no session, token, customer or workspace data.
+    if (rel === path.join("app", "try-draft.js")) {
+      assert.equal(/session|token|customer|workspace|cookie/i.test(text.replace(/\/\/.*$/gm, "")), false, `${rel} must only hold drafts`);
+      continue;
+    }
+    assert.equal(text.includes("localStorage"), false, `${rel} uses localStorage`);
     assert.equal(text.includes("fixture"), false, `${path.relative(root, file)} references fixtures`);
   }
 });

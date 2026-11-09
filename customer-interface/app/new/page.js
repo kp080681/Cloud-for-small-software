@@ -3,6 +3,7 @@ import { redirect } from "next/navigation";
 import { getCustomerShell } from "@/src/server/customer-shell.mjs";
 import { GitHubPanel } from "../github-panel.js";
 import { UploadPanel } from "../upload-panel.js";
+import { PendingPublish } from "../pending-publish.js";
 import { Chrome, workspaceHref } from "../ui.js";
 
 export const dynamic = "force-dynamic";
@@ -34,6 +35,7 @@ export default async function NewAppPage({ searchParams }) {
           <p className="muted">Upload your app, or pick it from GitHub. Utplava works out how to run it and puts it on the internet.</p>
         </div>
       </div>
+      {focusRepository ? null : <PendingPublish workspaceId={active.id} />}
       {focusRepository ? null : <UploadPanel workspaceId={active.id} />}
       {focusRepository ? null : (
         <div className="new-app-or">

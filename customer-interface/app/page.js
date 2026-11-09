@@ -4,23 +4,44 @@ import { getCustomerShell } from "@/src/server/customer-shell.mjs";
 import { safeReturnTo } from "@/src/server/mcp-registration.mjs";
 import { githubInstallCallbackRedirectPath } from "@/src/server/github-install-state.mjs";
 import { SignInOptions } from "./sign-in-options.js";
+import { TryIt } from "./try-it.js";
+import { PendingPublish } from "./pending-publish.js";
+import { isGoogleSignInConfigured } from "@/src/server/google-oauth.mjs";
 import { Brand, Chrome, Status, appStatus, isProviderUrl, timeAgo, workspaceHref } from "./ui.js";
 
 export const dynamic = "force-dynamic";
 
+// The sign-in page (2026-11-09): try first, sign in second. Visitors can
+// see their pasted page as a website, or check their GitHub repository,
+// before being asked who they are. People arriving from an AI assistant's
+// connect flow (returnTo) only need to sign in, so they get the short page.
 function SignIn({ returnTo = null }) {
+  if (returnTo) {
+    return (
+      <main className="sign-in">
+        <Brand />
+        <h1>Sign in to connect</h1>
+        <section className="panel">
+          <SignInOptions returnTo={returnTo} />
+          <ul className="sign-in-notes">
+            <li>Utplava only gets your name and email. It never sees your password.</li>
+          </ul>
+        </section>
+      </main>
+    );
+  }
   return (
-    <main className="sign-in">
+    <main className="sign-in sign-in-try">
       <Brand />
       <h1>You built the app.<br />Now put it online.</h1>
-      <p className="muted">Paste or upload your app, or bring it from GitHub. Free for up to 3 apps, no card needed.</p>
-      <section className="panel">
-        <h2>Sign in to Utplava</h2>
-        <SignInOptions returnTo={returnTo} />
+      <p className="muted">See it as a real website first. Sign in only when you want it live. Free for up to 3 apps, no card needed.</p>
+      <TryIt googleEnabled={isGoogleSignInConfigured()} />
+      <section className="panel sign-in-direct">
+        <h2>Already know what you want?</h2>
+        <SignInOptions />
         <ul className="sign-in-notes">
           <li>Utplava only gets your name and email. It never sees your password.</li>
-          <li>Built in ChatGPT or Claude? Paste the page it wrote and get a live link. No GitHub needed.</li>
-          <li>Built in Lovable or keep your code on GitHub? <a href="https://utplava.dev/guides/lovable/" target="_blank" rel="noreferrer">Continue with GitHub</a> and pick your app.</li>
+          <li>Using Claude or Grok? Connect Utplava once and just ask: "Put this online with Utplava." <a href="https://utplava.dev/mcp/" target="_blank" rel="noreferrer">How to connect</a></li>
         </ul>
       </section>
     </main>
@@ -94,6 +115,7 @@ export default async function Home({ searchParams }) {
         </div>
         <Link className="button" href={newAppHref}>New app</Link>
       </div>
+      <PendingPublish workspaceId={active.id} />
       {shell.apps.length ? (
         <AppList apps={shell.apps} workspaceId={active.id} />
       ) : (
