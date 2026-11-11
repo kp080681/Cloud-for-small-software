@@ -2,7 +2,7 @@ import { SignInOptions } from "../../sign-in-options.js";
 import { redirect } from "next/navigation";
 import { readCurrentSession } from "@/src/server/customer-shell.mjs";
 import { connectDatabase } from "@/src/server/db.mjs";
-import { resolveMcpClient } from "@/src/server/mcp-auth.mjs";
+import { checkPkceRequest, resolveMcpClient } from "@/src/server/mcp-auth.mjs";
 import { safeReturnTo } from "@/src/server/mcp-registration.mjs";
 import { recognisedClient } from "@/src/server/mcp-recognised-clients.mjs";
 import { funnelClientLabel, recordFunnelStep } from "@/src/server/mcp-funnel.mjs";
@@ -51,7 +51,11 @@ export default async function McpWelcomePage({ searchParams }) {
   const clientId = query.get("client_id");
   const redirectUri = query.get("redirect_uri");
   const returnTo = safeReturnTo(`/api/mcp/authorize?${query.toString()}`);
-  if (!clientId || !redirectUri || !query.get("code_challenge") || !returnTo) return <Problem />;
+  // code_challenge is checked below, once the client is known: confidential
+  // clients (033) may omit it. Until 2026-11-11 this page demanded it from
+  // everyone, so confidential clients such as Rayrun passed /api/mcp/authorize
+  // and then hit "This connection link isn't complete" here.
+  if (!clientId || !redirectUri || !returnTo) return <Problem />;
 
   // Already signed in (for example in another tab): carry straight on.
   if (await readCurrentSession()) redirect(returnTo);
@@ -61,6 +65,10 @@ export default async function McpWelcomePage({ searchParams }) {
   try {
     db = await connectDatabase();
     client = await resolveMcpClient(db, { clientId, redirectUri });
+    checkPkceRequest(client, {
+      codeChallenge: query.get("code_challenge"),
+      codeChallengeMethod: query.get("code_challenge_method") || "S256",
+    });
     const known = recognisedClient(redirectUri);
     await recordFunnelStep(db, {
       step: "welcome_viewed",
@@ -68,6 +76,7 @@ export default async function McpWelcomePage({ searchParams }) {
     });
   } catch {
     client = null;
+    await recordFunnelStep(db, { step: "authorize_rejected", client: "welcome page (incomplete link)" });
   } finally {
     if (db) await db.end();
   }
