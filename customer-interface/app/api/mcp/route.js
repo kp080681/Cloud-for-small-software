@@ -134,11 +134,12 @@ const handler = createMcpHandler(
       "deploy",
       {
         title: "Deploy",
-        // Puts a new version live; earlier versions are kept and can be
-        // restored, so it adds rather than destroys.
-        annotations: { title: "Deploy", readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true },
+        // Replaces what is live at the app's public address. Earlier versions
+        // stay restorable, but OpenAI's review (2026-11-12) counts replacing a
+        // live site as destructive, so clients confirm before calling it.
+        annotations: { title: "Deploy", readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: true },
         description:
-          "Deploys a GitHub repository (owner/name) to Utplava. The first deploy creates the app; later calls for the same repository redeploy it. Returns the app ID, the deployment status and, once live, the app's address.",
+          "Deploys a GitHub repository (owner/name) to Utplava. The first deploy creates the app; later calls for the same repository redeploy it, replacing the version that is live at the app's public address (earlier versions stay restorable from the Utplava dashboard). Confirm with the person before redeploying an app that is already live. Returns the app ID, the deployment status and, once live, the app's address.",
         inputSchema: z.object({
           repo: z
             .string()
@@ -162,7 +163,7 @@ const handler = createMcpHandler(
           "Puts an app online from its files, with no GitHub needed. Use this when the person has the app's files here in the chat (for example a single-page HTML app you wrote) rather than in a GitHub repository. " +
           "Send every file the app needs: an index.html at the top level for a website, or a package.json for a Vite or React project. Up to 50 files and 2 MB in total; web files only (HTML, CSS, JavaScript, TypeScript, JSON, SVG, images, fonts). " +
           "Never include secret keys or .env files: Utplava refuses the upload. Ask the person for keys later and save them with set_env. " +
-          "For a new app pass name; to update an app published this way, pass its appId and the complete new set of files (files left out are removed). Returns the app ID and deployment status; check get_status for the live address.",
+          "For a new app pass name; to update an app published this way, pass its appId and the complete new set of files (files left out are removed). An update replaces what is live at the app's public address; earlier versions stay restorable from the Utplava dashboard. Confirm with the person before updating a live app. Every upload is checked for secret keys and for pages that imitate other companies' sign-in pages before anything goes live. Returns the app ID and deployment status; check get_status for the live address.",
         inputSchema: z.object({
           name: z.string().min(2).max(40).optional().describe('A short name for a new app, e.g. "Bakery site". Omit when passing appId.'),
           appId: z.string().uuid().optional().describe("The app to update. Only apps published with publish_files can be updated this way."),
@@ -215,7 +216,7 @@ const handler = createMcpHandler(
         // Replaces an existing value for the key, so it counts as destructive.
         annotations: { title: "Set configuration", readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: false },
         description:
-          "Saves a configuration value for an app. Only keys that Utplava detected as needed in the app's own source code are accepted; any other key is refused.",
+          "Saves a configuration value (for example an API key the app needs) for one of the person's own apps. Only keys that Utplava detected as needed in the app's own source code are accepted; any other key is refused. The value is stored encrypted, is never returned by any tool, and replaces any value already saved under the same key. Only ask the person for a value they own and chose to provide; never copy one from elsewhere.",
         inputSchema: z.object({
           appId: z.string().uuid(),
           key: z
