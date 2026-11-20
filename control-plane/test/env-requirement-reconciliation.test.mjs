@@ -70,3 +70,37 @@ test("source reconciliation also never upgrades an existing row a human delibera
 
   assert.equal(reconciled.required, false);
 });
+
+test("DATABASE_URL never blocks an app whose database Utplava manages (the platform writes it at PROVISIONING)", () => {
+  const requirements = [
+    { envKey: "DATABASE_URL", source: "source-detection", required: true, public: false, configured: false },
+    { envKey: "SESSION_SECRET", source: "source-detection", required: true, public: false, configured: false },
+  ];
+
+  assert.deepEqual(missingRequiredEnvKeys(requirements, { databaseMode: "SSC_MANAGED" }), ["SESSION_SECRET"]);
+});
+
+test("DATABASE_URL still blocks when the app brings its own database or has none", () => {
+  const requirements = [
+    { envKey: "DATABASE_URL", source: "source-detection", required: true, public: false, configured: false },
+  ];
+
+  assert.deepEqual(missingRequiredEnvKeys(requirements, { databaseMode: "EXTERNAL" }), ["DATABASE_URL"]);
+  assert.deepEqual(missingRequiredEnvKeys(requirements, { databaseMode: "NONE" }), ["DATABASE_URL"]);
+  assert.deepEqual(missingRequiredEnvKeys(requirements), ["DATABASE_URL"]);
+});
+
+test("only DATABASE_URL is platform-managed; other keys on a managed-database app still block", () => {
+  const requirements = [
+    { envKey: "DATABASE_URL_UNPOOLED", source: "source-detection", required: true, public: false, configured: false },
+  ];
+
+  assert.deepEqual(missingRequiredEnvKeys(requirements, { databaseMode: "SSC_MANAGED" }), ["DATABASE_URL_UNPOOLED"]);
+});
+
+test("control-plane and customer-interface copies of the reconciliation rules stay identical", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const engine = await readFile(new URL("../src/env-requirement-reconciliation.mjs", import.meta.url), "utf8");
+  const dashboard = await readFile(new URL("../../customer-interface/src/shared/control-plane/env-requirement-reconciliation.mjs", import.meta.url), "utf8");
+  assert.equal(engine, dashboard);
+});

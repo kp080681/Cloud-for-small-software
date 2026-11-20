@@ -22,8 +22,10 @@ export const verifyEnvRequirements = task({
     return await withDb(async (db) => {
       const deploymentResult = await db.query(
         `SELECT d.id, d.workspace_id, d.app_id, d.status,
+                a.database_mode,
                 s.id AS snapshot_id, s.detected_count
            FROM deployments d
+           JOIN apps a ON a.id = d.app_id
            LEFT JOIN deployment_env_detection_snapshots s ON s.deployment_id = d.id
           WHERE d.id = $1`,
         [payload.deploymentId],
@@ -54,7 +56,7 @@ export const verifyEnvRequirements = task({
         configured: row.configured,
       }));
       const configuredCount = requirements.filter((item) => item.configured).length;
-      const missing = missingRequiredEnvKeys(requirements);
+      const missing = missingRequiredEnvKeys(requirements, { databaseMode: deployment.database_mode });
 
       await db.query("BEGIN");
       try {

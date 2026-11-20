@@ -23,8 +23,19 @@ export function reconcileExistingRequirement(existing, detection) {
   };
 }
 
-export function missingRequiredEnvKeys(requirements) {
+// DATABASE_URL on an app whose database Utplava manages is supplied by the
+// platform: the binding is written during PROVISIONING (managed-database
+// lifecycle), which runs after verification, and customers can't set the key
+// themselves. Counting it as missing here blocked every managed-database app
+// at ANALYZING forever, while the dashboard (customer-configuration.mjs)
+// already showed it as handled. Found deploying DealUp Books, 2026-11-16.
+export function isPlatformManagedEnvKey(envKey, { databaseMode } = {}) {
+  return envKey === "DATABASE_URL" && databaseMode === "SSC_MANAGED";
+}
+
+export function missingRequiredEnvKeys(requirements, { databaseMode } = {}) {
   return requirements
     .filter((item) => item.required && !item.configured)
+    .filter((item) => !isPlatformManagedEnvKey(item.envKey, { databaseMode }))
     .map((item) => item.envKey);
 }
