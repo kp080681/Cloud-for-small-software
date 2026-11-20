@@ -169,6 +169,70 @@ async function loadRequirements(db, { app, deploymentId }) {
   return sortRequirements([...requirementsByKey.values()]);
 }
 
+// A deployment stopped at ANALYZING with ENV_CONFIGURATION_REQUIRED used to
+// stay stopped for good: saving the missing settings never cleared the
+// code, the start path saw the earlier run and did nothing, and the resume
+// path refused anything with an error code. The dashboard then showed the
+// fallback "This repository isn't supported yet." Found deploying DealUp
+// Books (2026-11-16). Once nothing required is missing, clear the block and
+// record why, so the deployment can be continued. Runs inside the caller's
+// transaction; returns the deployment id it released, or null.
+async function clearResolvedEnvBlock(db, { app }) {
+  const latest = await db.query(
+    `SELECT id, status, error_code
+       FROM deployments
+      WHERE app_id = $1
+      ORDER BY created_at DESC
+      LIMIT 1
+      FOR UPDATE`,
+    [app.id],
+  );
+  const deployment = latest.rows[0];
+  if (!deployment || deployment.status !== "ANALYZING" || deployment.error_code !== "ENV_CONFIGURATION_REQUIRED") return null;
+  const requirements = await loadRequirements(db, { app, deploymentId: deployment.id });
+  const stillMissing = missingRequiredEnvKeys(
+    requirements
+      .filter((item) => !item.managed)
+      .map((item) => ({ envKey: item.envKey, required: item.required, configured: item.configured })),
+  );
+  if (stillMissing.length) return null;
+  const released = await db.query(
+    `UPDATE deployments
+        SET error_code = NULL,
+            error_message = NULL,
+            updated_at = now()
+      WHERE id = $1
+        AND status = 'ANALYZING'
+        AND error_code = 'ENV_CONFIGURATION_REQUIRED'
+      RETURNING id`,
+    [deployment.id],
+  );
+  if (released.rowCount !== 1) return null;
+  await db.query(
+    `INSERT INTO deployment_events
+       (deployment_id, from_status, to_status, event_type, message, metadata)
+     VALUES ($1,'ANALYZING','ANALYZING','ENV_REQUIREMENTS_RESOLVED',
+             'Required configuration saved; deployment can continue', $2::jsonb)`,
+    [deployment.id, JSON.stringify({ valuesPrinted: false })],
+  );
+  return deployment.id;
+}
+
+// For a deployment that was already stuck before the fix above existed:
+// every required setting is saved, but the block was never cleared.
+export async function releaseResolvedEnvBlock(db, { customerId, workspaceId, appId }) {
+  await db.query("BEGIN");
+  try {
+    const app = await loadAuthorizedApp(db, { customerId, workspaceId, appId, forUpdate: true });
+    const releasedDeploymentId = await clearResolvedEnvBlock(db, { app });
+    await db.query("COMMIT");
+    return releasedDeploymentId;
+  } catch (error) {
+    await db.query("ROLLBACK").catch(() => {});
+    throw error;
+  }
+}
+
 export async function getDeploymentReadiness(db, { customerId, workspaceId, appId }) {
   const app = await loadAuthorizedApp(db, { customerId, workspaceId, appId });
   const deployment = await loadLatestAnalyzedDeployment(db, { appId: app.id });
@@ -275,6 +339,7 @@ export async function saveCustomerAppSecret(
        RETURNING id, updated_at`,
       [app.workspace_id, app.id, safeEnvKey, stored.id, TARGET_ENVIRONMENT],
     );
+    const releasedDeploymentId = await clearResolvedEnvBlock(db, { app });
 
     await db.query("COMMIT");
     const configuration = await getDeploymentReadiness(db, { customerId, workspaceId, appId: app.id });
@@ -282,6 +347,7 @@ export async function saveCustomerAppSecret(
       envKey: safeEnvKey,
       configured: true,
       configuration,
+      releasedDeploymentId,
     };
   } catch (error) {
     await db.query("ROLLBACK").catch(() => {});

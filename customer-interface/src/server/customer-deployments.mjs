@@ -1,4 +1,4 @@
-import { getDeploymentReadiness } from "./customer-configuration.mjs";
+import { getDeploymentReadiness, releaseResolvedEnvBlock } from "./customer-configuration.mjs";
 import { getAuthorizedWorkspace } from "./customer-workspaces.mjs";
 import { enforceRateLimit } from "../shared/control-plane/rate-limit.mjs";
 import { enforceFailureCooldown } from "../shared/control-plane/deployment-failure-cooldown.mjs";
@@ -47,6 +47,8 @@ const eventTitles = Object.freeze({
   SECURITY_HEADERS_FAILED: "Browser safety settings couldn't be applied (the app still works)",
   BRANDED_DOMAIN_ATTACHED: "utplava.dev link ready",
   BRANDED_DOMAIN_PENDING: "utplava.dev link being set up",
+  ENV_REQUIREMENTS_BLOCKED: "Waiting for required settings",
+  ENV_REQUIREMENTS_RESOLVED: "Required settings saved",
   ENV_REQUIREMENTS_VERIFIED: "Configuration verified",
   DATABASE_READY: "Database ready",
   RUNTIME_RECONCILED: "Runtime ready",
@@ -183,7 +185,7 @@ function failureDiagnostic(deployment) {
   if (!deployment.error_code && deployment.status !== "FAILED") return null;
   const code = deployment.error_code ?? "DEPLOYMENT_FAILED";
   const diagnostics = {
-    ENV_CONFIGURATION_REQUIRED: ["Configuration required", "Review and save required configuration before deploying."],
+    ENV_CONFIGURATION_REQUIRED: ["Settings needed", "Fill in the settings marked Required and save them. The deployment continues on its own once they are all saved."],
     BUILD_FAILED: ["Build failed", "Review the deployment build details before redeploying."],
     BUILD_TIMEOUT: ["Build timed out", "The application build exceeded the configured limit."],
     HEALTH_CHECK_FAILED: ["Application did not become healthy", "Review runtime configuration or startup behavior before redeploying."],
@@ -972,6 +974,32 @@ export async function resumeCustomerDeployment(
   };
 }
 
+// Called right after a setting is saved (dashboard or MCP set_env). If that
+// save released a deployment blocked on missing settings, continue it now
+// instead of leaving it to the stale-resume timer. Never throws: the save
+// itself already succeeded, and the dashboard's normal resume path is
+// still there as a fallback.
+export async function continueReleasedDeployment(
+  db,
+  { customerId, workspaceId, appId, deploymentId, triggerOrchestrator = triggerDeploymentOrchestrator, env = process.env },
+) {
+  if (!deploymentId) return { continued: false, reason: "nothing-released" };
+  try {
+    const result = await resumeCustomerDeployment(db, {
+      customerId,
+      workspaceId,
+      appId,
+      deploymentId,
+      triggerOrchestrator,
+      staleAfterMs: 0,
+      env,
+    });
+    return { continued: Boolean(result.resume?.started), reason: result.resume?.reason ?? null };
+  } catch (error) {
+    return { continued: false, reason: error?.code || "continue-failed" };
+  }
+}
+
 export async function getCustomerDeploymentProgressWithResume(
   db,
   {
@@ -992,7 +1020,24 @@ export async function getCustomerDeploymentProgressWithResume(
     appId,
     staleAfterMs,
   });
-  const current = await loadAuthorizedDeployment(db, { customerId, workspaceId, appId, deploymentId });
+  let current = await loadAuthorizedDeployment(db, { customerId, workspaceId, appId, deploymentId });
+  // Deployments stuck on missing settings before saves started releasing
+  // them: if everything required is now saved, release and continue.
+  if (current.status === "ANALYZING" && current.error_code === "ENV_CONFIGURATION_REQUIRED") {
+    const released = await releaseResolvedEnvBlock(db, { customerId, workspaceId, appId });
+    if (released === deploymentId) {
+      return resumeCustomerDeployment(db, {
+        customerId,
+        workspaceId,
+        appId,
+        deploymentId,
+        triggerOrchestrator,
+        staleAfterMs: 0,
+        now,
+        env,
+      });
+    }
+  }
   const eligibility = resumeEligibility(current, { now, staleAfterMs: effectiveStaleAfterMs });
   if (eligibility.eligible) {
     return resumeCustomerDeployment(db, {

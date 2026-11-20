@@ -277,6 +277,24 @@ class FakeDb {
       return { rowCount: 0, rows: [] };
     }
 
+    if (text.startsWith("SELECT id, status, error_code FROM deployments WHERE app_id = $1")) {
+      const [appId] = params;
+      const deployment = this.deployments.filter((row) => row.app_id === appId).sort((a, b) => b.created_at - a.created_at)[0];
+      return { rowCount: deployment ? 1 : 0, rows: deployment ? [deployment] : [] };
+    }
+
+    if (text.startsWith("UPDATE deployments SET error_code = NULL")) {
+      const [deploymentId] = params;
+      const deployment = this.deployments.find(
+        (row) => row.id === deploymentId && row.status === "ANALYZING" && row.error_code === "ENV_CONFIGURATION_REQUIRED",
+      );
+      if (!deployment) return { rowCount: 0, rows: [] };
+      deployment.error_code = null;
+      deployment.error_message = null;
+      deployment.updated_at = new Date();
+      return { rowCount: 1, rows: [{ id: deployment.id }] };
+    }
+
     if (text.startsWith("UPDATE deployments SET orchestrator_run_id = NULL")) {
       const [deploymentId, marker] = params;
       const deployment = this.deployments.find((row) => row.id === deploymentId);
@@ -715,6 +733,7 @@ test("live failed and configuration-blocked deployments cannot resume", async ()
   const db = new FakeDb();
   makeDeploymentStale(db, "ANALYZING");
   db.deployments[0].error_code = "ENV_CONFIGURATION_REQUIRED";
+  db.requirements.push({ app_id: "app-a", env_key: "API_KEY", required: true, public: false, source: "user-confirmed" });
   const deployment = await getCustomerDeploymentProgressWithResume(db, {
     ...startArgs(),
     staleAfterMs: 1000,
@@ -724,6 +743,29 @@ test("live failed and configuration-blocked deployments cannot resume", async ()
     },
   });
   assert.equal(deployment.resume.reason, "deployment-has-error");
+});
+
+test("a deployment blocked on settings continues as soon as every required setting is saved", async () => {
+  const db = new FakeDb();
+  makeDeploymentStale(db, "ANALYZING");
+  db.deployments[0].error_code = "ENV_CONFIGURATION_REQUIRED";
+  db.deployments[0].updated_at = new Date();
+  db.requirements.push({ app_id: "app-a", env_key: "API_KEY", required: true, public: false, source: "user-confirmed" });
+  db.bindings.push({ app_id: "app-a", env_key: "API_KEY" });
+  let triggered = null;
+  const deployment = await getCustomerDeploymentProgressWithResume(db, {
+    ...startArgs(),
+    env: {},
+    triggerOrchestrator: async (args) => {
+      triggered = args;
+      return { id: "run-after-settings" };
+    },
+  });
+  assert.equal(db.deployments[0].error_code, null);
+  assert.equal(triggered?.deploymentId, "deployment-a");
+  assert.match(triggered.idempotencyKey, /^ui06:resume:deployment-a:/);
+  assert.equal(deployment.resume.started, true);
+  assert.equal(db.deployments[0].orchestrator_run_id, "run-after-settings");
 });
 
 test("deployment without immutable source identity cannot resume", async () => {

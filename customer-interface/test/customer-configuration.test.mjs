@@ -4,6 +4,7 @@ import {
   getDeploymentReadiness,
   listWorkspaceConfigurationStatuses,
   saveCustomerAppSecret,
+  releaseResolvedEnvBlock,
 } from "../src/server/customer-configuration.mjs";
 
 class FakeDb {
@@ -146,6 +147,31 @@ class FakeDb {
         binding.updated_at = new Date("2026-09-10T00:01:00.000Z");
       }
       return { rowCount: 1, rows: [binding] };
+    }
+
+    if (text.startsWith("SELECT id, status, error_code FROM deployments WHERE app_id = $1")) {
+      const [appId] = params;
+      const deployment = this.deployments
+        .filter((row) => row.app_id === appId)
+        .sort((a, b) => b.created_at - a.created_at)[0];
+      return { rowCount: deployment ? 1 : 0, rows: deployment ? [deployment] : [] };
+    }
+
+    if (text.startsWith("UPDATE deployments SET error_code = NULL")) {
+      const [deploymentId] = params;
+      const deployment = this.deployments.find(
+        (row) => row.id === deploymentId && row.status === "ANALYZING" && row.error_code === "ENV_CONFIGURATION_REQUIRED",
+      );
+      if (!deployment) return { rowCount: 0, rows: [] };
+      deployment.error_code = null;
+      deployment.error_message = null;
+      return { rowCount: 1, rows: [{ id: deployment.id }] };
+    }
+
+    if (text.startsWith("INSERT INTO deployment_events")) {
+      this.events ??= [];
+      this.events.push({ deploymentId: params[0], text, metadata: params[1] });
+      return { rowCount: 1, rows: [] };
     }
 
     if (text.startsWith("INSERT INTO workspace_rate_limit_counters")) {
@@ -418,4 +444,77 @@ test("configuration paths do not invoke provider deployment or provisioning tabl
   assert.equal(sql.includes("deployment_builds b"), false);
   assert.equal(sql.includes("app_runtimes"), false);
   assert.equal(sql.includes("deployment_health_checks"), false);
+});
+
+function blockOnMissingSettings(db) {
+  db.deployments[0].error_code = "ENV_CONFIGURATION_REQUIRED";
+  db.deployments[0].error_message = "Required runtime variables are not configured";
+}
+
+const saveArgs = (db, envKey) => ({
+  customerId: "identity-a",
+  workspaceId: "workspace-a",
+  appId: "app-a",
+  envKey,
+  plaintext: "value-for-" + envKey,
+  encryptSecret: db.fakeEncrypt.bind(db),
+});
+
+test("saving the last missing setting releases a deployment blocked on missing settings", async () => {
+  const db = new FakeDb();
+  addRequirement(db, { env_key: "API_KEY" });
+  addRequirement(db, { env_key: "SECOND_KEY" });
+  blockOnMissingSettings(db);
+
+  const first = await saveCustomerAppSecret(db, saveArgs(db, "API_KEY"));
+  assert.equal(first.releasedDeploymentId, null);
+  assert.equal(db.deployments[0].error_code, "ENV_CONFIGURATION_REQUIRED");
+  assert.equal(first.configuration.readiness, "BLOCKED");
+
+  const second = await saveCustomerAppSecret(db, saveArgs(db, "SECOND_KEY"));
+  assert.equal(second.releasedDeploymentId, "deployment-a");
+  assert.equal(db.deployments[0].error_code, null);
+  assert.equal(second.configuration.readiness, "READY_TO_DEPLOY");
+  assert.equal(db.events.length, 1);
+  assert.match(db.events[0].text, /ENV_REQUIREMENTS_RESOLVED/);
+  assert.equal(JSON.stringify(db.events).includes("value-for-"), false);
+});
+
+test("a Utplava-managed DATABASE_URL never keeps a settings block in place", async () => {
+  const db = new FakeDb();
+  db.apps[0].database_required = true;
+  db.apps[0].database_mode = "SSC_MANAGED";
+  addRequirement(db, { env_key: "DATABASE_URL" });
+  addRequirement(db, { env_key: "API_KEY" });
+  blockOnMissingSettings(db);
+
+  const saved = await saveCustomerAppSecret(db, saveArgs(db, "API_KEY"));
+  assert.equal(saved.releasedDeploymentId, "deployment-a");
+  assert.equal(db.deployments[0].error_code, null);
+});
+
+test("other deployment errors are never cleared by saving a setting", async () => {
+  const db = new FakeDb();
+  addRequirement(db, { env_key: "API_KEY" });
+  db.deployments[0].status = "FAILED";
+  db.deployments[0].error_code = "BUILD_FAILED";
+
+  const saved = await saveCustomerAppSecret(db, saveArgs(db, "API_KEY"));
+  assert.equal(saved.releasedDeploymentId, null);
+  assert.equal(db.deployments[0].error_code, "BUILD_FAILED");
+  assert.equal(db.events, undefined);
+});
+
+test("a deployment stuck before this fix is released once all settings are already saved", async () => {
+  const db = new FakeDb();
+  addRequirement(db, { env_key: "API_KEY" });
+  await saveCustomerAppSecret(db, saveArgs(db, "API_KEY"));
+  blockOnMissingSettings(db);
+
+  const released = await releaseResolvedEnvBlock(db, { customerId: "identity-a", workspaceId: "workspace-a", appId: "app-a" });
+  assert.equal(released, "deployment-a");
+  assert.equal(db.deployments[0].error_code, null);
+
+  const again = await releaseResolvedEnvBlock(db, { customerId: "identity-a", workspaceId: "workspace-a", appId: "app-a" });
+  assert.equal(again, null);
 });
