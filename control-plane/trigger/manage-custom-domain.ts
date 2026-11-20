@@ -338,21 +338,38 @@ export const manageCustomDomain = task({
       if (row.status === S.REMOVED) return { result: "ALREADY_REMOVED" };
       if (payload.action === "remove" || row.status === S.REMOVING) return { result: "REMOVED", ...(await remove(db, row)) };
       if (row.status === S.FAILED) return { result: "FAILED_NOOP" };
-      if (row.status === S.PENDING) return { result: "ATTACHED", ...(await attach(db, row)) };
-      return { result: "CHECKED", ...(await check(db, row)) };
+      const outcome = row.status === S.PENDING
+        ? { result: "ATTACHED", ...(await attach(db, row)) }
+        : { result: "CHECKED", ...(await check(db, row)) };
+      // A domain set up in the last day gets its own follow-up check in 10
+      // minutes, so the customer sees progress quickly without a platform-wide
+      // job waking the database every 10 minutes for everyone.
+      const stillSettingUp = [S.PENDING, S.NEEDS_DNS, S.SECURING].includes((outcome as any).status);
+      const recent = row.created_at && Date.now() - new Date(row.created_at).getTime() < 24 * 3600 * 1000;
+      if (stillSettingUp && recent) {
+        const slot = Math.floor(Date.now() / (10 * 60 * 1000));
+        await manageCustomDomain.trigger(
+          { domainId: row.id, action: "check" },
+          { delay: "10m", idempotencyKey: `custom-domain-followup:${row.id}:${slot}`, tags: [`custom-domain:${row.id}`, "custom-domain-followup"] },
+        );
+      }
+      return outcome;
     } finally {
       await db.end();
     }
   },
 });
 
-// Background re-checks so the customer doesn't have to keep pressing Check:
-// every 10 minutes for domains still being set up (hourly once they're more
-// than a day old), and every 6 hours for live domains, to notice one that
-// stopped working. Domains never finished within 14 days are released.
+// Background re-checks so the customer doesn't have to keep pressing Check.
+// Runs hourly: every query wakes the platform database, and Neon only lets it
+// sleep after 5 quiet minutes, so a 10-minute schedule kept it awake about 15
+// hours a day with nobody using it. Domains in their first day get faster
+// follow-ups from manageCustomDomain itself. Live domains are re-checked every
+// 6 hours, to notice one that stopped working. Domains never finished within
+// 14 days are released.
 export const recheckCustomDomains = schedules.task({
   id: "ssc-control-plane-recheck-custom-domains",
-  cron: "*/10 * * * *",
+  cron: "17 * * * *",
   run: async () => {
     if (!process.env.DATABASE_URL) throw new Error("Missing DATABASE_URL");
     const db = new Client({ connectionString: process.env.DATABASE_URL });
