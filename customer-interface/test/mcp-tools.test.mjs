@@ -235,6 +235,42 @@ test("setEnv passes through to saveCustomerAppSecret and maps its result", async
   assert.deepEqual(result, { configured: true, message: "OPENAI_API_KEY saved." });
 });
 
+test("setEnv continues a deployment the save released, and says so", async () => {
+  const db = new FakeDb();
+  let continuedWith = null;
+  const result = await setEnv(db, {
+    customerId: "identity-a",
+    workspaceId: "workspace-a",
+    appId: "app-1",
+    key: "OPENAI_API_KEY",
+    value: "sk-real",
+    saveSecret: async () => ({ envKey: "OPENAI_API_KEY", configured: true, releasedDeploymentId: "dep-1" }),
+    continueDeployment: async (_db, args) => {
+      continuedWith = args.deploymentId;
+      return { continued: true };
+    },
+  });
+  assert.equal(continuedWith, "dep-1");
+  assert.equal(result.configured, true);
+  assert.match(result.message, /paused deployment is continuing/);
+});
+
+test("setEnv does not try to continue anything when the save released nothing", async () => {
+  const db = new FakeDb();
+  const result = await setEnv(db, {
+    customerId: "identity-a",
+    workspaceId: "workspace-a",
+    appId: "app-1",
+    key: "OPENAI_API_KEY",
+    value: "sk-real",
+    saveSecret: async () => ({ envKey: "OPENAI_API_KEY", configured: true, releasedDeploymentId: null }),
+    continueDeployment: async () => {
+      throw new Error("should not be called");
+    },
+  });
+  assert.deepEqual(result, { configured: true, message: "OPENAI_API_KEY saved." });
+});
+
 test("listApps maps every field the schema promises, including a null status/url for a never-deployed app", async () => {
   const db = new FakeDb();
   const result = await listApps(db, {

@@ -103,3 +103,10 @@ test("retrySuccessMessage and redeploySuccessMessage stay plain language across 
   assert.doesNotMatch(redeploySuccessMessage({ redeploy: { created: true } }), jargonPattern);
   assert.doesNotMatch(redeploySuccessMessage({ redeploy: { reusedActive: true } }), jargonPattern);
 });
+
+test("a deployment waiting for settings never shows the 'not supported' fallback", async () => {
+  const { friendlyErrorMessage } = await import("../src/shared/deployment-ui-state.mjs");
+  const message = friendlyErrorMessage("ENV_CONFIGURATION_REQUIRED", "This repository isn't supported yet.");
+  assert.notEqual(message, "This repository isn't supported yet.");
+  assert.match(message, /settings/);
+});

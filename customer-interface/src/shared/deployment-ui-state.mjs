@@ -29,6 +29,7 @@ const FRIENDLY_ERROR_MESSAGES = {
   PACKAGE_JSON_NOT_FOUND: "Utplava can't run this project yet: there's no package.json or index.html at the top of the repository. If your app's files are inside a folder, move them to the top. If you've just added them, deploy again.",
   BUILD_SCRIPT_MISSING: "Utplava can't run this project yet: its package.json has a \"start\" script but no \"build\" script, and every deploy runs a build. Next.js and Vite apps already have one. For a plain Node.js server, this isn't supported yet.",
   UNSUPPORTED_PROJECT: "Utplava can't run this project yet: its package.json has no \"start\" or \"build\" script, so there's no way to tell how to run it. Add a start script for a server app or a build script for a website, then deploy again.",
+  ENV_CONFIGURATION_REQUIRED: "This app needs a few settings before it can go live. Fill in the ones marked Required below and save. The deployment continues on its own once they are all saved.",
   APP_SLUG_CONFLICT: "This application name is already used by another repository in the workspace.",
 };
 

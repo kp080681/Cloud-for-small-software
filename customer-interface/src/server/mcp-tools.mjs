@@ -3,7 +3,7 @@ import { serviceGuideFor } from "../shared/service-guides.mjs";
 import { friendlyErrorMessage } from "../shared/deployment-ui-state.mjs";
 import { analyzeSelectedRepository } from "./repository-analysis.mjs";
 import { listWorkspaceInstallationRepositories, selectWorkspaceRepository } from "./customer-github.mjs";
-import { startCustomerDeployment, getCustomerDeploymentProgressWithResume } from "./customer-deployments.mjs";
+import { startCustomerDeployment, getCustomerDeploymentProgressWithResume, continueReleasedDeployment } from "./customer-deployments.mjs";
 import { getDeploymentReadiness, saveCustomerAppSecret } from "./customer-configuration.mjs";
 import { publishFiles } from "./direct-publish.mjs";
 import { checkCustomDomain, connectCustomDomain, getAppCustomDomain } from "./customer-custom-domain.mjs";
@@ -318,11 +318,19 @@ export async function getLogs(
   };
 }
 
-export async function setEnv(db, { customerId, workspaceId, appId, key, value, saveSecret = saveCustomerAppSecret }) {
+export async function setEnv(
+  db,
+  { customerId, workspaceId, appId, key, value, saveSecret = saveCustomerAppSecret, continueDeployment = continueReleasedDeployment },
+) {
   const result = await saveSecret(db, { customerId, workspaceId, appId, envKey: key, plaintext: value });
+  const deployment = result.releasedDeploymentId
+    ? await continueDeployment(db, { customerId, workspaceId, appId, deploymentId: result.releasedDeploymentId })
+    : { continued: false };
   return {
     configured: Boolean(result.configured),
-    message: `${result.envKey} saved.`,
+    message: deployment.continued
+      ? `${result.envKey} saved. Every required setting is now in place, so the paused deployment is continuing. Check progress with get_status.`
+      : `${result.envKey} saved.`,
   };
 }
 
