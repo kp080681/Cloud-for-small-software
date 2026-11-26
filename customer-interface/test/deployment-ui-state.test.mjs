@@ -110,3 +110,10 @@ test("a deployment waiting for settings never shows the 'not supported' fallback
   assert.notEqual(message, "This repository isn't supported yet.");
   assert.match(message, /settings/);
 });
+
+test("friendlyErrorMessage explains repository size limits instead of a generic failure", () => {
+  assert.match(friendlyErrorMessage("SOURCE_TOO_LARGE"), /5 MB/);
+  assert.match(friendlyErrorMessage("SOURCE_FILE_LIMIT_EXCEEDED"), /5,000 files/);
+  assert.match(friendlyErrorMessage("SOURCE_FILE_TOO_LARGE"), /512 KB/);
+  assert.match(friendlyErrorMessage("SOURCE_PATH_TOO_LONG"), /240 characters/);
+});

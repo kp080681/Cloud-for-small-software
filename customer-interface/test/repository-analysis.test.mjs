@@ -3,6 +3,7 @@ import test from "node:test";
 import {
   analyzeSelectedRepository,
   listWorkspaceRepositoryAnalyses,
+  safeRepositoryAnalysisError,
 } from "../src/server/repository-analysis.mjs";
 
 class FakeDb {
@@ -711,4 +712,11 @@ test("repository analysis does not invoke provider deployment or provisioning pa
   assert.equal(sql.includes("deployment_builds"), false);
   assert.equal(sql.includes("deployment_provider_operations"), false);
   assert.equal(sql.includes("deployment_health_checks"), false);
+});
+
+test("safeRepositoryAnalysisError explains a repository over the JavaScript size limit", () => {
+  const body = safeRepositoryAnalysisError(Object.assign(new Error("x"), { code: "SOURCE_TOO_LARGE" }));
+  assert.equal(body.error, "SOURCE_TOO_LARGE");
+  assert.match(body.message, /5 MB/);
+  assert.doesNotMatch(body.message, /could not be completed safely/);
 });
