@@ -10,13 +10,14 @@ const SAFE_METHODS = new Set(["GET", "HEAD", "OPTIONS"]);
 // Routes that are called by other origins on purpose and never act on a
 // session cookie: GitHub webhooks (signed), the MCP endpoints (bearer tokens
 // and OAuth client registration), and the public app check used by the
-// utplava.dev website.
+// utplava.dev website, plus its visit counter (counts only, no cookies).
 const CROSS_ORIGIN_ALLOWED = [
   /^\/api\/github\/webhook\/?$/,
   /^\/api\/mcp\/?$/,
   /^\/api\/mcp\/token\/?$/,
   /^\/api\/mcp\/register\/?$/,
   /^\/api\/check(\/.*)?$/,
+  /^\/api\/visit\/?$/,
 ];
 
 function hostOf(value) {
