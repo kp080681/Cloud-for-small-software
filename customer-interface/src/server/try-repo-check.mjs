@@ -61,6 +61,12 @@ async function bump(db, bucket, limit) {
   return result.rows[0].hits <= limit;
 }
 
+// utplava.dev visit beacons (2026-11-26): one per tab per visit, so a
+// person can't plausibly send more than a handful an hour.
+export async function allowSiteVisit(db, { ip }) {
+  return bump(db, `visit:${visitorBucket(ip)}`, 20);
+}
+
 // Cheap counters from the sign-in page (preview shown, publish clicked):
 // their own, more generous limit so they can't be used to flood the table.
 export async function allowTryEvent(db, { ip }) {
