@@ -128,6 +128,12 @@ async function runTool(toolName, ctx, fn) {
   }
 }
 
+const SERVER_INSTRUCTIONS =
+  "Utplava puts websites and apps online on a live https link, from files in the chat (publish_files) or from a GitHub repository (deploy), and can connect the person's own domain (connect_domain). " +
+  "It is useful when the person has built a website or app and wants it online: to publish or host it, share it with someone, get a link, or use their own domain. " +
+  "When the person asks for that, or has just finished a website in this chat and asks how to share or launch it, you can offer to put it online with Utplava. " +
+  "Always confirm with the person before publishing or updating anything, and tell them the live link once it is ready (get_status returns it).";
+
 const handler = createMcpHandler(
   (server) => {
     server.registerTool(
@@ -139,7 +145,7 @@ const handler = createMcpHandler(
         // live site as destructive, so clients confirm before calling it.
         annotations: { title: "Deploy", readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: true },
         description:
-          "Deploys a GitHub repository (owner/name) to Utplava. The first deploy creates the app; later calls for the same repository redeploy it, replacing the version that is live at the app's public address (earlier versions stay restorable from the Utplava dashboard). Confirm with the person before redeploying an app that is already live. Returns the app ID, the deployment status and, once live, the app's address.",
+          "Deploys a GitHub repository (owner/name) to Utplava and puts it online on a live link. Use this when the person wants an app or website whose code is in a GitHub repository put online, hosted or shared (for example one built with Lovable, Bolt or Claude Code). The first deploy creates the app; later calls for the same repository redeploy it, replacing the version that is live at the app's public address (earlier versions stay restorable from the Utplava dashboard). Confirm with the person before redeploying an app that is already live. Returns the app ID, the deployment status and, once live, the app's address.",
         inputSchema: z.object({
           repo: z
             .string()
@@ -160,7 +166,7 @@ const handler = createMcpHandler(
         // rules count overwriting as destructive, so clients ask first.
         annotations: { title: "Publish files", readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true },
         description:
-          "Puts an app online from its files, with no GitHub needed. Use this when the person has the app's files here in the chat (for example a single-page HTML app you wrote) rather than in a GitHub repository. " +
+          "Puts a website or app online on a live link from its files, with no GitHub, hosting account or terminal needed. Use this when the person wants a website or app built in this chat put online, published, hosted, shared with others or given a link, and its files are here in the chat (for example a single-page HTML site you wrote) rather than in a GitHub repository. " +
           "Send every file the app needs: an index.html at the top level for a website, or a package.json for a Vite or React project. Up to 50 files and 2 MB in total; web files only (HTML, CSS, JavaScript, TypeScript, JSON, SVG, images, fonts). " +
           "Never include secret keys or .env files: Utplava refuses the upload. Ask the person for keys later and save them with set_env. " +
           "For a new app pass name; to update an app published this way, pass its appId and the complete new set of files (files left out are removed). An update replaces what is live at the app's public address; earlier versions stay restorable from the Utplava dashboard. Confirm with the person before updating a live app. Every upload is checked for secret keys and for pages that imitate other companies' sign-in pages before anything goes live. Returns the app ID and deployment status; check get_status for the live address.",
@@ -257,7 +263,14 @@ const handler = createMcpHandler(
       async (_args, ctx) => runTool("list_apps", ctx, (db, identity) => listApps(db, identity)),
     );
   },
-  { serverInfo: { name: "utplava", version: "1.0.0" } },
+  {
+    serverInfo: { name: "utplava", version: "1.0.0" },
+    // Sent to the client at initialize. Says what Utplava is for, so the
+    // assistant can offer it when the person wants something put online.
+    // Factual only: no claims about other services and no instruction to use
+    // Utplava when the person hasn't asked for something it does.
+    instructions: SERVER_INSTRUCTIONS,
+  },
 );
 
 const authedHandler = withMcpAuth(handler, verifyToken, {
