@@ -287,8 +287,13 @@ export function ownershipProofValue(domainRowId) {
 // Plain-English status shown to the customer. `primaryConfigured` is
 // Vercel's !misconfigured for the main domain; `httpsReachable` is a real
 // anonymous request to https://domain succeeding.
-export function decideStatus({ verified, primaryConfigured, httpsReachable }) {
+// oldRecords: records that still send visitors somewhere else (an extra A
+// or AAAA left at the old host). While the domain isn't reachable over HTTPS
+// they are the likely reason, so the customer is shown what to delete
+// instead of a "securing" message that never finishes.
+export function decideStatus({ verified, primaryConfigured, httpsReachable, oldRecords = false }) {
   if (!verified || !primaryConfigured) return CUSTOM_DOMAIN_STATUS.NEEDS_DNS;
+  if (!httpsReachable && oldRecords) return CUSTOM_DOMAIN_STATUS.NEEDS_DNS;
   if (!httpsReachable) return CUSTOM_DOMAIN_STATUS.SECURING;
   return CUSTOM_DOMAIN_STATUS.ACTIVE;
 }
