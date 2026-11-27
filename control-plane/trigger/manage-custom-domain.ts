@@ -263,14 +263,17 @@ async function check(db: pg.Client, row: any) {
     const configured = entry.config ? entry.config.misconfigured === false : false;
     if (entry.name === row.domain) primaryConfigured = configured;
     else wwwReady = configured;
-    if (configured) continue; // already reaching Vercel; nothing to change
     const { add, remove } = recordsForName({ name: entry.name, apexName, config: entry.config, current: entry.current });
-    records.push(...add.map((record) => ({ ...record, purpose: entry.name === row.domain ? "main" : "www" })));
+    // A name Vercel already accepts can still carry an old record (an AAAA
+    // left at the previous host sends IPv6 visitors, most mobile networks,
+    // to the old site), so leftovers are listed either way.
     conflicts.push(...remove);
+    if (configured) continue; // already reaching Vercel; nothing to add
+    records.push(...add.map((record) => ({ ...record, purpose: entry.name === row.domain ? "main" : "www" })));
   }
 
   const reachable = verified && primaryConfigured ? await httpsReachable(row.domain) : false;
-  const status = decideStatus({ verified, primaryConfigured, httpsReachable: reachable });
+  const status = decideStatus({ verified, primaryConfigured, httpsReachable: reachable, oldRecords: conflicts.length > 0 });
 
   // A domain that was live and now isn't must be seen failing twice in a row
   // (a DNS blip shouldn't flip the app's main link back).
@@ -314,7 +317,10 @@ async function remove(db: pg.Client, row: any) {
   if (row.provider === "vercel" && row.provider_project_id) {
     // www only if Utplava added it: if it was already taken by another
     // project, deleting it here would break that project.
-    const names = row.include_www ? [row.domain, `www.${row.domain}`] : [row.domain];
+    // www first: it redirects to the main domain, and Vercel refuses to
+    // delete a domain that another domain still redirects to, which left
+    // removals stuck on "Removing".
+    const names = row.include_www ? [`www.${row.domain}`, row.domain] : [row.domain];
     for (const name of names) await removeProjectDomain(row.provider_project_id, name);
   }
   await db.query(

@@ -110,6 +110,9 @@ test("status follows ownership, DNS, then a real HTTPS request", () => {
   assert.equal(decideStatus({ verified: true, primaryConfigured: false, httpsReachable: false }), S.NEEDS_DNS);
   assert.equal(decideStatus({ verified: true, primaryConfigured: true, httpsReachable: false }), S.SECURING);
   assert.equal(decideStatus({ verified: true, primaryConfigured: true, httpsReachable: true }), S.ACTIVE);
+  // Old record left at the previous host: show what to delete, not "securing".
+  assert.equal(decideStatus({ verified: true, primaryConfigured: true, httpsReachable: false, oldRecords: true }), S.NEEDS_DNS);
+  assert.equal(decideStatus({ verified: true, primaryConfigured: true, httpsReachable: true, oldRecords: true }), S.ACTIVE);
 });
 
 test("status messages are plain and name the provider", () => {
